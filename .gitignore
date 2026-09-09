@@ -1,0 +1,14 @@
+node_modules/
+dist/
+out/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+apps/desktop/.vite/
+apps/desktop/release/
+services/forge-engine/.venv/
+services/forge-engine/__pycache__/
+services/forge-engine/**/*.pyc
