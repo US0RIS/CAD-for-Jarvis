@@ -15,8 +15,10 @@ test('vertical slice stays interactive and contained end to end', async ({ page 
   await expect(page.getByTestId('explode-percent')).toHaveText('70%');
   await slider.fill('0');
 
-  // Branch cards are real controls rather than decorative UI.
-  const piBranch = page.getByRole('button', { name: /pi-control-v2/i });
+  // Branch cards are real controls rather than decorative UI. Use text content rather
+  // than the computed accessible name because branch metadata can change the latter.
+  const piBranch = page.locator('.branch-card').filter({ hasText: 'pi-control-v2' }).first();
+  await expect(piBranch).toBeVisible();
   await piBranch.click();
   await expect(piBranch).toHaveAttribute('aria-pressed', 'true');
 
