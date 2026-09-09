@@ -107,6 +107,9 @@ export const fetchComponents = (query = '') => engineFetch<{ items: ComponentPay
 export const fetchWorkspace = (id: string) => engineFetch<WorkspacePayload>(`/v2/code/workspaces/${encodeURIComponent(id)}`);
 export const fetchCodeFile = (workspaceId: string, path: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`);
 export const saveCodeFile = (workspaceId: string, path: string, content: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`, { method: 'PUT', body: JSON.stringify({ content }) });
+export const fetchJob = (id: string) => engineFetch<JobPayload>(`/v2/jobs/${encodeURIComponent(id)}`);
+export const activateBranch = (name: string) => engineFetch<ProjectPayload>(`/v2/branches/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+export const addComponent = (id: string) => engineFetch<{ component: ComponentPayload; project: ProjectPayload }>(`/v2/components/${encodeURIComponent(id)}/add`, { method: 'POST' });
 
 export function createJob(input: { kind: 'agent' | 'simulation' | 'campaign' | 'component-search' | 'deploy'; text?: string; branch?: string; selected_object_id?: string | null; apply_edits?: boolean; payload?: Record<string, unknown> }) {
   return engineFetch<JobPayload>('/v2/jobs', { method: 'POST', body: JSON.stringify(input) });
