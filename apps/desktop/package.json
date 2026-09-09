@@ -1,18 +1,19 @@
 {
   "name": "@forgecad/desktop",
   "private": true,
-  "version": "2.0.1",
+  "version": "2.0.2",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "dist:win": "pnpm build && electron-builder --win nsis --x64",
+    "dist:mac": "pnpm build && electron-builder --mac dmg",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint .",
     "e2e": "playwright test",
-    "test:web": "cross-env FORGECAD_WEB_ONLY=1 VITE_FORGECAD_ENGINE_URL=http://127.0.0.1:8765 VITE_FORGECAD_ENGINE_TOKEN=test-session VITE_FORGECAD_MODEL=qwen3:8b vite --host 127.0.0.1 --port 4173"
+    "test:web": "cross-env FORGECAD_WEB_ONLY=1 VITE_FORGECAD_ENGINE_URL=http://127.0.0.1:8765 VITE_FORGECAD_ENGINE_TOKEN=test-session VITE_FORGECAD_MODEL=qwen3.8:27b vite --host 127.0.0.1 --port 4173"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.87.1",
@@ -55,8 +56,9 @@
     ],
     "extraResources": [
       {
-        "from": "../../services/forge-engine/dist/forge-engine.exe",
-        "to": "forge-engine/forge-engine.exe"
+        "from": "../../services/forge-engine/dist",
+        "to": "forge-engine",
+        "filter": ["**/*"]
       }
     ],
     "win": {
@@ -75,6 +77,12 @@
       "createStartMenuShortcut": true,
       "shortcutName": "ForgeCAD",
       "runAfterFinish": true
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "artifactName": "ForgeCAD-${version}-${arch}.${ext}"
     }
   }
 }
