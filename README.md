@@ -6,7 +6,7 @@ This repository is a clean-sheet rebuild. The previous ForgeCAD prototype is not
 
 ## Product contract
 
-The target interface is not approximate. `docs/reference/forgecad-target-ui.png` is the canonical visual reference for desktop composition, density, hierarchy, and interaction placement. The implementation should converge toward that reference rather than reinterpret it into a generic CAD UI.
+The target interface is not approximate. The canonical visual reference is the 1586 × 992 desktop screenshot supplied for this rebuild and documented in [docs/reference/README.md](docs/reference/README.md). The implementation should converge toward that reference rather than reinterpret it into a generic CAD UI.
 
 The product should feel like working on a real physical object with an expert engineer beside you:
 
@@ -48,4 +48,4 @@ ForgeCAD is not considered launch-ready because HTML rendered. A desktop release
 
 ## Repository status
 
-This repository currently contains the v2 product specification and frontend architecture that define the clean-sheet implementation. The next commits build the shell and vertical slice directly against those contracts.
+The v2 product specification, frontend architecture, interaction contracts, Electron/React shell, shared TypeScript contracts, initial Three.js scene controller, and Forge Engine service scaffold are now established. The implementation proceeds as a tested vertical slice directly against those contracts.
