@@ -1,0 +1,99 @@
+name: ForgeCAD v2 vertical slice
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-primary:
+    name: Windows 11 primary
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - name: Install Forge Engine
+        shell: pwsh
+        run: |
+          python -m venv services/forge-engine/.venv
+          services/forge-engine/.venv/Scripts/python.exe -m pip install --upgrade pip
+          services/forge-engine/.venv/Scripts/python.exe -m pip install -e services/forge-engine
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile=false
+      - name: Typecheck and build Electron renderer
+        run: |
+          pnpm --filter @forgecad/desktop typecheck
+          pnpm --filter @forgecad/desktop build
+      - name: Install Chromium acceptance runtime
+        run: pnpm --filter @forgecad/desktop exec playwright install chromium
+      - name: Start deterministic Forge Engine test service
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE/services/forge-engine"
+          $env:FORGECAD_SESSION_TOKEN = 'test-session'
+          $env:FORGECAD_OLLAMA_MODEL = 'qwen3.8:27b'
+          $env:FORGECAD_DEMO_AGENT = '1'
+          $p = Start-Process -FilePath "$env:GITHUB_WORKSPACE/services/forge-engine/.venv/Scripts/python.exe" -ArgumentList '-m','uvicorn','forge_engine.main:app','--host','127.0.0.1','--port','8765','--log-level','warning' -WorkingDirectory "$env:GITHUB_WORKSPACE/services/forge-engine" -PassThru
+          $p.Id | Set-Content "$env:RUNNER_TEMP/forge-engine.pid"
+          $deadline = (Get-Date).AddSeconds(20)
+          do {
+            try { $r = Invoke-RestMethod http://127.0.0.1:8765/v2/health; if ($r.ok) { break } } catch {}
+            Start-Sleep -Milliseconds 250
+          } while ((Get-Date) -lt $deadline)
+          if (-not $r.ok) { throw 'Forge Engine did not become healthy' }
+      - name: Run browser vertical-slice acceptance
+        run: pnpm --filter @forgecad/desktop e2e
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-playwright-report
+          path: apps/desktop/playwright-report
+          if-no-files-found: ignore
+
+  macos-secondary:
+    name: macOS secondary smoke
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - name: Install Forge Engine
+        run: |
+          python -m venv services/forge-engine/.venv
+          services/forge-engine/.venv/bin/python -m pip install --upgrade pip
+          services/forge-engine/.venv/bin/python -m pip install -e services/forge-engine
+      - name: Install and compile shared desktop
+        run: |
+          pnpm install --frozen-lockfile=false
+          pnpm --filter @forgecad/desktop typecheck
+          pnpm --filter @forgecad/desktop build
+      - name: Smoke Forge Engine with macOS model profile
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_OLLAMA_MODEL: qwen3:8b
+        run: |
+          services/forge-engine/.venv/bin/python -c "from forge_engine.main import app, CONFIGURED_MODEL; assert app and CONFIGURED_MODEL == 'qwen3:8b'; print('macOS secondary smoke: PASS')"
