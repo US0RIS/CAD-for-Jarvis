@@ -1,0 +1,111 @@
+name: ForgeCAD macOS Installers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - 'services/forge-engine/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/macos-installer.yml'
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    name: Build macOS ${{ matrix.arch }} DMG
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build standalone Forge Engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine pyinstaller
+          python -m PyInstaller --noconfirm --clean --onefile --name forge-engine \
+            --distpath services/forge-engine/dist \
+            --workpath services/forge-engine/build/pyinstaller \
+            --specpath services/forge-engine/build \
+            services/forge-engine/forge_engine/desktop_entry.py
+          chmod +x services/forge-engine/dist/forge-engine
+          file services/forge-engine/dist/forge-engine
+
+      - name: Smoke bundled Forge Engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          export FORGECAD_PORT=8878
+          export FORGECAD_SESSION_TOKEN=installer-smoke
+          export FORGECAD_OLLAMA_MODEL=qwen3.8:27b
+          services/forge-engine/dist/forge-engine > "$RUNNER_TEMP/forge-engine.log" 2>&1 &
+          ENGINE_PID=$!
+          trap 'kill "$ENGINE_PID" 2>/dev/null || true' EXIT
+          for i in {1..80}; do
+            if curl --fail --silent http://127.0.0.1:8878/v2/health > "$RUNNER_TEMP/health.json"; then
+              cat "$RUNNER_TEMP/health.json"
+              exit 0
+            fi
+            sleep 0.25
+          done
+          cat "$RUNNER_TEMP/forge-engine.log" || true
+          exit 1
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Typecheck desktop
+        run: pnpm --filter @forgecad/desktop typecheck
+
+      - name: Build native DMG
+        run: |
+          pnpm --filter @forgecad/desktop build
+          pnpm --filter @forgecad/desktop exec electron-builder --mac dmg --${{ matrix.arch }}
+
+      - name: Verify DMG and bundled engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="apps/desktop/release/ForgeCAD-2.0.2-${{ matrix.arch }}.dmg"
+          test -f "$DMG"
+          MOUNT="$RUNNER_TEMP/forgecad-mount"
+          mkdir -p "$MOUNT"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true' EXIT
+          test -d "$MOUNT/ForgeCAD.app"
+          test -x "$MOUNT/ForgeCAD.app/Contents/Resources/forge-engine/forge-engine"
+          "$MOUNT/ForgeCAD.app/Contents/Resources/forge-engine/forge-engine" --help >/dev/null 2>&1 || true
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+          shasum -a 256 "$DMG"
+
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeCAD-macOS-${{ matrix.arch }}-Installer
+          path: apps/desktop/release/ForgeCAD-2.0.2-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+          retention-days: 30
