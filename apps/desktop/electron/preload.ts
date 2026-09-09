@@ -1,4 +1,10 @@
-import { contextBridge } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
+
+export interface EngineConnection {
+  baseUrl: string;
+  sessionToken: string;
+  configuredModel: string;
+}
 
 export interface ForgeDesktopBridge {
   platform: NodeJS.Platform;
@@ -6,6 +12,7 @@ export interface ForgeDesktopBridge {
     electron: string;
     chrome: string;
   };
+  getEngineConnection(): Promise<EngineConnection>;
 }
 
 const bridge: ForgeDesktopBridge = Object.freeze({
@@ -14,6 +21,7 @@ const bridge: ForgeDesktopBridge = Object.freeze({
     electron: process.versions.electron,
     chrome: process.versions.chrome,
   },
+  getEngineConnection: () => ipcRenderer.invoke('forgecad:connection') as Promise<EngineConnection>,
 });
 
 contextBridge.exposeInMainWorld('forgeDesktop', bridge);
