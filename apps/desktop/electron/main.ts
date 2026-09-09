@@ -10,11 +10,10 @@ const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const SERVICE_ROOT = process.env.FORGECAD_ENGINE_ROOT ?? (app.isPackaged
   ? path.join(process.resourcesPath, 'forge-engine')
   : path.resolve(APP_ROOT, '../../services/forge-engine'));
-const PACKAGED_ENGINE = app.isPackaged && process.platform === 'win32'
-  ? path.join(process.resourcesPath, 'forge-engine', 'forge-engine.exe')
+const PACKAGED_ENGINE = app.isPackaged
+  ? path.join(process.resourcesPath, 'forge-engine', process.platform === 'win32' ? 'forge-engine.exe' : 'forge-engine')
   : undefined;
-const PLATFORM_DEFAULT_MODEL = process.platform === 'darwin' ? 'qwen3:8b' : 'qwen3.8:27b';
-const CONFIGURED_MODEL = process.env.FORGECAD_OLLAMA_MODEL ?? PLATFORM_DEFAULT_MODEL;
+const CONFIGURED_MODEL = process.env.FORGECAD_OLLAMA_MODEL ?? 'qwen3.8:27b';
 
 const engine = new EngineSupervisor({
   serviceRoot: SERVICE_ROOT,
