@@ -1,15 +1,24 @@
-import { app, BrowserWindow, Menu } from 'electron';
+import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { EngineSupervisor } from './engineSupervisor';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.join(__dirname, '..');
 const RENDERER_DIST = path.join(APP_ROOT, 'dist');
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+const SERVICE_ROOT = process.env.FORGECAD_ENGINE_ROOT ?? path.resolve(process.cwd(), '../../services/forge-engine');
+const CONFIGURED_MODEL = process.env.FORGECAD_OLLAMA_MODEL ?? (process.platform === 'darwin' ? 'qwen3:8b' : 'qwen3:8b');
 
+const engine = new EngineSupervisor({ serviceRoot: SERVICE_ROOT, configuredModel: CONFIGURED_MODEL });
 let mainWindow: BrowserWindow | null = null;
 
-function createMainWindow() {
+async function createMainWindow() {
+  const connection = await engine.start();
+
+  ipcMain.removeHandler('forgecad:connection');
+  ipcMain.handle('forgecad:connection', () => connection);
+
   mainWindow = new BrowserWindow({
     width: 1586,
     height: 992,
@@ -29,9 +38,9 @@ function createMainWindow() {
   mainWindow.once('ready-to-show', () => mainWindow?.show());
 
   if (VITE_DEV_SERVER_URL) {
-    void mainWindow.loadURL(VITE_DEV_SERVER_URL);
+    await mainWindow.loadURL(VITE_DEV_SERVER_URL);
   } else {
-    void mainWindow.loadFile(path.join(RENDERER_DIST, 'index.html'));
+    await mainWindow.loadFile(path.join(RENDERER_DIST, 'index.html'));
   }
 }
 
@@ -50,14 +59,29 @@ function createMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createMenu();
-  createMainWindow();
+  try {
+    await createMainWindow();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    await dialog.showMessageBox({
+      type: 'error',
+      title: 'ForgeCAD could not start',
+      message: 'Forge Engine failed its startup gate.',
+      detail,
+      buttons: ['Quit'],
+    });
+    app.quit();
+    return;
+  }
+
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+    if (BrowserWindow.getAllWindows().length === 0) void createMainWindow();
   });
 });
 
+app.on('before-quit', () => engine.stop());
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
