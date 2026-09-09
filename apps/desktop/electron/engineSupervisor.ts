@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -20,14 +20,12 @@ async function freePort(): Promise<number> {
 }
 
 function managedPython(serviceRoot: string): string | null {
-  const candidate = process.platform === 'win32'
-    ? path.join(serviceRoot, '.venv', 'Scripts', 'python.exe')
-    : path.join(serviceRoot, '.venv', 'bin', 'python');
+  const candidate = process.platform === 'win32' ? path.join(serviceRoot, '.venv', 'Scripts', 'python.exe') : path.join(serviceRoot, '.venv', 'bin', 'python');
   return existsSync(candidate) ? candidate : null;
 }
 
 export class EngineSupervisor {
-  private process: ChildProcessWithoutNullStreams | null = null;
+  private process: ChildProcess | null = null;
   private connection: EngineConnection | null = null;
   private readonly logs: string[] = [];
   constructor(private readonly options: EngineSupervisorOptions) {}
@@ -42,17 +40,19 @@ export class EngineSupervisor {
     const python = this.options.pythonExecutable ?? process.env.FORGECAD_PYTHON ?? managedPython(serviceRoot) ?? (process.platform === 'win32' ? 'python' : 'python3');
 
     this.logs.length = 0;
-    this.process = spawn(python, ['-m','uvicorn','forge_engine.main:app','--host','127.0.0.1','--port',String(port),'--log-level','warning'], {
+    const child = spawn(python, ['-m','uvicorn','forge_engine.main:app','--host','127.0.0.1','--port',String(port),'--log-level','warning'], {
       cwd: serviceRoot,
       env: { ...process.env, PYTHONPATH: serviceRoot, FORGECAD_PORT: String(port), FORGECAD_SESSION_TOKEN: sessionToken, FORGECAD_OLLAMA_MODEL: this.options.configuredModel },
       stdio: ['ignore','pipe','pipe'], windowsHide: true,
     });
+    this.process = child;
     const record=(prefix:string,chunk:Buffer)=>{for(const line of chunk.toString('utf8').split(/\r?\n/))if(line.trim())this.logs.push(`${prefix}${line}`);if(this.logs.length>500)this.logs.splice(0,this.logs.length-500);};
-    this.process.stdout.on('data',(chunk:Buffer)=>record('',chunk)); this.process.stderr.on('data',(chunk:Buffer)=>record('[stderr] ',chunk));
+    child.stdout?.on('data',(chunk:Buffer)=>record('',chunk));
+    child.stderr?.on('data',(chunk:Buffer)=>record('[stderr] ',chunk));
 
     const baseUrl=`http://127.0.0.1:${port}`; const deadline=Date.now()+30_000; let lastError:unknown;
     while(Date.now()<deadline){
-      if(this.process.exitCode!==null)throw new Error(`Forge Engine exited with status ${this.process.exitCode}.\n${this.logTail.join('\n')}`);
+      if(child.exitCode!==null)throw new Error(`Forge Engine exited with status ${child.exitCode}.\n${this.logTail.join('\n')}`);
       try{const response=await fetch(`${baseUrl}/v2/health`,{signal:AbortSignal.timeout(1000)});if(response.ok){const payload=await response.json() as {api_version?:string};if(payload.api_version!=='2')throw new Error(`Unsupported Forge Engine API ${payload.api_version??'unknown'}`);this.connection={baseUrl,sessionToken,configuredModel:this.options.configuredModel};return this.connection;}lastError=new Error(`Health returned HTTP ${response.status}`);}catch(error){lastError=error;}
       await new Promise(resolve=>setTimeout(resolve,150));
     }
