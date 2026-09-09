@@ -97,7 +97,7 @@ jobs:
           trap 'hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true' EXIT
           test -d "$MOUNT/ForgeCAD.app"
           test -x "$MOUNT/ForgeCAD.app/Contents/Resources/forge-engine/forge-engine"
-          "$MOUNT/ForgeCAD.app/Contents/Resources/forge-engine/forge-engine" --help >/dev/null 2>&1 || true
+          file "$MOUNT/ForgeCAD.app/Contents/Resources/forge-engine/forge-engine"
           hdiutil detach "$MOUNT"
           trap - EXIT
           shasum -a 256 "$DMG"
