@@ -1,0 +1,100 @@
+name: ForgeCAD Windows Installer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - 'services/forge-engine/**'
+      - '.github/workflows/windows-installer.yml'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+  workflow_dispatch:
+
+jobs:
+  installer:
+    name: Build ForgeCAD-Setup.exe
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Build standalone Forge Engine
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine pyinstaller
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --name forge-engine `
+            --distpath services/forge-engine/dist `
+            --workpath services/forge-engine/build/pyinstaller `
+            --specpath services/forge-engine/build `
+            services/forge-engine/forge_engine/desktop_entry.py
+          if (-not (Test-Path 'services/forge-engine/dist/forge-engine.exe')) { throw 'Forge Engine executable was not produced.' }
+
+      - name: Smoke bundled Forge Engine
+        shell: pwsh
+        run: |
+          $env:FORGECAD_PORT = '8877'
+          $env:FORGECAD_SESSION_TOKEN = 'installer-smoke'
+          $env:FORGECAD_OLLAMA_MODEL = 'qwen3.8:27b'
+          $p = Start-Process -FilePath "$env:GITHUB_WORKSPACE/services/forge-engine/dist/forge-engine.exe" -PassThru -WindowStyle Hidden
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            $ok = $false
+            do {
+              try {
+                $r = Invoke-RestMethod http://127.0.0.1:8877/v2/health -TimeoutSec 2
+                if ($r.ok -and $r.api_version -eq '2') { $ok = $true; break }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            if (-not $ok) { throw 'Bundled Forge Engine failed health smoke test.' }
+          } finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Typecheck desktop
+        run: pnpm --filter @forgecad/desktop typecheck
+
+      - name: Build NSIS installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: pnpm --filter @forgecad/desktop dist:win
+
+      - name: Verify installer exists
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'ForgeCAD installer was not produced.' }
+          Write-Host "Installer: $($installer.FullName)"
+          Write-Host "Size: $([math]::Round($installer.Length / 1MB, 1)) MB"
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeCAD-Windows-Installer
+          path: apps/desktop/release/ForgeCAD-Setup-*.exe
+          if-no-files-found: error
+          compression-level: 0
