@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
+from pathlib import Path
+import sys
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -39,6 +42,21 @@ class CodeWriteRequest(BaseModel):
 def require_session(x_forgecad_session: str | None = Header(default=None)) -> None:
     if SESSION_TOKEN and x_forgecad_session != SESSION_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid ForgeCAD desktop session")
+
+
+def _cache_root() -> Path:
+    if sys.platform == "win32":
+        root = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "ForgeCAD" / "cache"
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library" / "Caches" / "ForgeCAD"
+    else:
+        root = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "forgecad"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+IMAGE_CACHE = _cache_root() / "component-images"
+IMAGE_CACHE.mkdir(parents=True, exist_ok=True)
 
 
 async def ollama_status() -> tuple[OllamaState, str | None]:
@@ -83,9 +101,91 @@ async def scene() -> dict[str, Any]:
     return PROJECT.scene_manifest()
 
 
+def _component_payload(component: dict[str, Any], request: Request) -> dict[str, Any]:
+    result = {k: v for k, v in component.items() if k != "image"}
+    image = component.get("image")
+    if image:
+        result["image"] = {
+            "kind": image.get("kind", "reference"),
+            "source": image.get("source", "reference image"),
+            "uri": f"{str(request.base_url).rstrip('/')}/v2/component-images/{component['id']}",
+        }
+    return result
+
+
 @app.get("/v2/components", dependencies=[Depends(require_session)])
-async def components(q: str = "") -> dict[str, Any]:
-    return {"items": PROJECT.search_components(q), "query": q}
+async def components(request: Request, q: str = "") -> dict[str, Any]:
+    return {"items": [_component_payload(item, request) for item in PROJECT.search_components(q)], "query": q}
+
+
+def _fallback_svg(component: dict[str, Any]) -> bytes:
+    label = html.escape(str(component.get("model", "Component")))
+    category = html.escape(str(component.get("category", "part")).upper())
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">'
+        '<rect width="640" height="420" rx="28" fill="#f4f6f7"/>'
+        '<rect x="38" y="38" width="564" height="344" rx="22" fill="#e8edef" stroke="#c7d0d4" stroke-width="4"/>'
+        f'<text x="320" y="190" text-anchor="middle" font-family="Arial,sans-serif" font-size="28" font-weight="700" fill="#26343b">{label}</text>'
+        f'<text x="320" y="235" text-anchor="middle" font-family="Arial,sans-serif" font-size="18" fill="#60717a">{category} · image unavailable</text>'
+        '</svg>'
+    ).encode("utf-8")
+
+
+@app.get("/v2/component-images/{component_id}")
+async def component_image(component_id: str) -> Response:
+    try:
+        component = PROJECT.component(component_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(status_code=404, detail="Component not found") from exc
+
+    image = component.get("image") or {}
+    sources = [str(value) for value in image.get("sources", []) if value]
+    cache_file = IMAGE_CACHE / f"{component_id}.bin"
+    meta_file = IMAGE_CACHE / f"{component_id}.json"
+
+    if cache_file.exists() and meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            return Response(cache_file.read_bytes(), media_type=str(meta.get("content_type") or "image/jpeg"), headers={"Cache-Control": "public, max-age=86400"})
+        except Exception:
+            pass
+
+    headers = {"User-Agent": "ForgeCAD/2 component-image-cache (+local desktop app)"}
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=headers) as client:
+        for source in sources:
+            try:
+                response = await client.get(source)
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if not content_type.startswith("image/") or len(response.content) < 256:
+                    continue
+                cache_file.write_bytes(response.content)
+                meta_file.write_text(json.dumps({"content_type": content_type, "source": str(response.url)}), encoding="utf-8")
+                return Response(response.content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
+            except Exception:
+                continue
+
+    return Response(_fallback_svg(component), media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/v2/components/{component_id}/add", dependencies=[Depends(require_session)])
+async def add_component(component_id: str, request: Request) -> dict[str, Any]:
+    try:
+        component = PROJECT.add_component(component_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(status_code=404, detail="Component not found") from exc
+    await broadcast({"type": "project.updated", "project": PROJECT.snapshot()})
+    return {"component": _component_payload(component, request), "project": PROJECT.snapshot()}
+
+
+@app.post("/v2/branches/{branch_name}/activate", dependencies=[Depends(require_session)])
+async def activate_branch(branch_name: str) -> dict[str, Any]:
+    try:
+        snapshot = PROJECT.activate_branch(branch_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Branch not found") from exc
+    await broadcast({"type": "project.updated", "project": snapshot})
+    return snapshot
 
 
 @app.get("/v2/code/workspaces/{workspace_id}", dependencies=[Depends(require_session)])
@@ -137,20 +237,24 @@ async def update_job(job: EngineeringJob, *, state: JobState | None = None, prog
 
 async def qwen_reply(text: str, job: EngineeringJob) -> str:
     system = (
-        "You are ForgeCAD's local engineering copilot. Be concise and engineering-specific. "
-        "The deterministic Forge Engine, not you, performs CAD mutations. Explain the intended change, "
-        "important physical consequences, and what should be verified next."
+        "You are ForgeCAD's local engineering copilot inside a desktop CAD application. "
+        "The deterministic Forge Engine, not you, performs CAD mutations. Respond for a narrow chat rail, not a report. "
+        "Use at most 220 words. Start with a one-sentence answer, then at most 4 short bullets. "
+        "Do not emit markdown tables, long derivations, or multi-level headings unless the user explicitly asks for them. "
+        "Name only the most important physical consequence and the single best verification step. "
+        "If the request is ambiguous, make the smallest reasonable assumption in one short sentence rather than writing a scope essay."
     )
     context = PROJECT.snapshot()
     payload = {
         "model": CONFIGURED_MODEL,
         "stream": True,
+        "think": False,
         "keep_alive": "10m",
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": f"Current project: {json.dumps(context, separators=(',', ':'))}\n\nRequest: {text}"},
         ],
-        "options": {"temperature": 0.15, "num_ctx": 8192},
+        "options": {"temperature": 0.12, "num_ctx": 8192, "num_predict": 420},
     }
     answer: list[str] = []
     timeout = httpx.Timeout(180.0, connect=3.0)
@@ -178,10 +282,10 @@ async def run_agent_job(job: EngineeringJob, request: CreateJobRequest) -> None:
         if ollama != OllamaState.READY and not DEMO_AGENT:
             raise RuntimeError(f"Configured model {CONFIGURED_MODEL!r} is not available in Ollama")
 
-        await update_job(job, state=JobState.PLANNING, progress=0.24, message="Engineering request is being planned")
+        await update_job(job, state=JobState.PLANNING, progress=0.24, message="Planning the engineering change")
         if DEMO_AGENT and ollama != OllamaState.READY:
             await asyncio.sleep(0.15)
-            answer = "Created a safe experimental branch, applied the requested actuator change, and kept the known-good baseline protected. Re-run thermal and vibration checks before treating the variant as working."
+            answer = "Created a safe experimental branch and kept the known-good baseline protected.\n\n- Applied the requested actuator change.\n- Preserved the Raspberry Pi code workspace with the design.\n- Re-run thermal and vibration checks before marking this branch as working."
             job.assistant_text = answer
             await broadcast({"type": "job.token", "job_id": job.id, "token": answer})
         else:
