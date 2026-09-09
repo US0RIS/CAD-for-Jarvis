@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -38,7 +38,7 @@ class JobState(StrEnum):
 
 class RuntimeStatus(BaseModel):
     engine: RuntimeState = RuntimeState.READY
-    scene: RuntimeState = RuntimeState.STARTING
+    scene: RuntimeState = RuntimeState.READY
     ollama: OllamaState = OllamaState.CHECKING
     configured_model: str
     resolved_model: str | None = None
@@ -50,7 +50,8 @@ class CreateJobRequest(BaseModel):
     text: str | None = None
     branch: str | None = None
     selected_object_id: str | None = None
-    payload: dict = Field(default_factory=dict)
+    apply_edits: bool = True
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class EngineeringJob(BaseModel):
@@ -62,3 +63,6 @@ class EngineeringJob(BaseModel):
     message: str | None = None
     branch: str | None = None
     selected_object_id: str | None = None
+    assistant_text: str = ""
+    result: dict[str, Any] = Field(default_factory=dict)
+    error: dict[str, Any] | None = None
