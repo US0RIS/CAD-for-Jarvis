@@ -5,13 +5,15 @@
   "description": "AI-native local-first physical engineering workstation",
   "packageManager": "pnpm@10.15.1",
   "scripts": {
+    "bootstrap:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-windows.ps1",
+    "bootstrap:macos": "bash scripts/bootstrap-macos.sh",
+    "dev:windows": "pnpm bootstrap:windows && pnpm dev",
+    "dev:macos": "pnpm bootstrap:macos && pnpm dev",
     "dev": "pnpm --filter @forgecad/desktop dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint"
   },
-  "engines": {
-    "node": ">=22"
-  }
+  "engines": { "node": ">=22" }
 }
