@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "dist:win": "pnpm build && electron-builder --win nsis --x64",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint .",
@@ -32,9 +33,46 @@
     "@vitejs/plugin-react": "^5.0.2",
     "cross-env": "^10.0.0",
     "electron": "^38.0.0",
+    "electron-builder": "^26.0.12",
     "typescript": "^5.9.2",
     "vite": "^7.1.4",
     "vite-plugin-electron": "^0.29.0",
     "vitest": "^3.2.4"
+  },
+  "build": {
+    "appId": "com.forgecad.studio",
+    "productName": "ForgeCAD",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../services/forge-engine/dist/forge-engine.exe",
+        "to": "forge-engine/forge-engine.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "ForgeCAD-Setup-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "ForgeCAD",
+      "runAfterFinish": true
+    }
   }
 }
