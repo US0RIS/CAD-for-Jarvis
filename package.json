@@ -1,0 +1,17 @@
+{
+  "name": "forgecad",
+  "private": true,
+  "version": "2.0.0-dev",
+  "description": "AI-native local-first physical engineering workstation",
+  "packageManager": "pnpm@10.15.1",
+  "scripts": {
+    "dev": "pnpm --filter @forgecad/desktop dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
