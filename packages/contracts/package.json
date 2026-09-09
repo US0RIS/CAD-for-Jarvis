@@ -1,0 +1,18 @@
+{
+  "name": "@forgecad/contracts",
+  "private": true,
+  "version": "2.0.0-dev",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit",
+    "test": "echo contracts: no tests yet",
+    "lint": "echo contracts: lint pending"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}
