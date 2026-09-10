@@ -24,9 +24,15 @@ export default defineConfig({
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
   use: {
     baseURL: 'http://127.0.0.1:4173',
-    trace: 'retain-on-failure',
+    // 'retain-on-failure' still *records* continuously on every attempt (only the save is
+    // conditional), which means constant CDP screenshot/frame capture against a live WebGL
+    // canvas for the entire first attempt too. Under the software GL rasterizer this
+    // Windows runner falls back to, that capture overhead compounds with the render loop's
+    // own cost. Deferring recording to the retry keeps diagnostics for whichever attempt
+    // actually ends up failing, without taxing every normal first attempt.
+    trace: 'on-first-retry',
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    video: 'on-first-retry',
   },
   webServer: {
     command: 'pnpm test:web',

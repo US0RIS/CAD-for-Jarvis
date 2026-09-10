@@ -44,10 +44,17 @@ test('vertical slice stays interactive and contained end to end', async ({ page 
 
   // Branch cards are real controls rather than decorative UI. Use text content rather
   // than the computed accessible name because branch metadata can change the latter.
+  //
+  // The default 12s expect-timeout used to be plenty here since /v2/project is static,
+  // hard-coded data - but real Windows CI timing evidence (diagnostic runs 34463128981
+  // and earlier) shows the fetch itself only resolves ~2-10s into that window, and the
+  // resulting React commit can land later still under real Windows CI load (general
+  // slowness across the whole run, not one isolated stall). Give this the same explicit
+  // headroom the file already uses below for other data-dependent assertions.
   const piBranch = page.locator('.branch-card').filter({ hasText: 'pi-control-v2' }).first();
-  await expect(piBranch).toBeVisible();
+  await expect(piBranch).toBeVisible({ timeout: 20_000 });
   await piBranch.click();
-  await expect(piBranch).toHaveAttribute('aria-pressed', 'true');
+  await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 20_000 });
 
   await page.getByTestId('tab-notebook').click();
   await expect(page.locator('.dock-content')).toContainText('NOTEBOOK');
