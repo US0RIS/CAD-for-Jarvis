@@ -11,6 +11,9 @@ test('vertical slice stays interactive and contained end to end', async ({ page 
   page.on('pageerror', (err) => console.log('[browser pageerror]', err.stack ?? String(err)));
   page.on('requestfailed', (req) => console.log('[browser requestfailed]', req.url(), req.failure()?.errorText));
   page.on('response', (res) => {
+    if (res.url().endsWith('/v2/project')) {
+      res.text().then((body) => console.log('[project body]', body.slice(0, 4000))).catch((err) => console.log('[project body read failed]', String(err)));
+    }
     if (res.url().includes('/v2/') || res.url().includes(':8765')) {
       console.log('[browser response]', res.status(), res.url());
     }
@@ -29,6 +32,15 @@ test('vertical slice stays interactive and contained end to end', async ({ page 
   await slider.fill('70');
   await expect(page.getByTestId('explode-percent')).toHaveText('70%');
   await slider.fill('0');
+
+  // Dump the actual DOM state right before the assertion that keeps failing on CI, so a
+  // failure shows exactly what was (or wasn't) there instead of just "not found".
+  const domSnapshot = await page.evaluate(() => ({
+    branchCardCount: document.querySelectorAll('.branch-card').length,
+    branchCardTexts: [...document.querySelectorAll('.branch-card')].map((el) => el.textContent),
+    lineageFlowHtml: document.querySelector('.lineage-flow')?.outerHTML?.slice(0, 1500) ?? '<lineage-flow not found>',
+  }));
+  console.log('[dom snapshot before branch-card check]', JSON.stringify(domSnapshot));
 
   // Branch cards are real controls rather than decorative UI. Use text content rather
   // than the computed accessible name because branch metadata can change the latter.
