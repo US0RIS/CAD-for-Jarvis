@@ -3,18 +3,21 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   // Windows CI runners (windows-2025, software-rendered WebGL, on-demand Vite
-  // transpilation under React StrictMode double-mount) consistently need ~35-43s
-  // just to reach the branch-lineage assertions in vertical-slice.spec.ts before
-  // any of the slower, already-generously-timed steps further down (component
-  // image loads, the LLM-driven branch-rename flow) even start. The previous
-  // 45_000ms budget left those later steps with only a few seconds of slack,
-  // so the run was reliably killed mid-test — most often while waiting on the
-  // pi-control-v2 branch card, simply because that's whatever assertion was in
-  // flight when the clock ran out. Locally (Linux, native rendering) the whole
-  // flow completes in well under 45s, which is why this only ever showed up on
-  // the Windows runner. Raise the ceiling so the realistic end-to-end duration
-  // fits with real headroom instead of racing the clock on every run.
-  timeout: 120_000,
+  // transpilation under React StrictMode double-mount) need far longer than the
+  // original 45_000ms budget to get through vertical-slice.spec.ts. Confirmed
+  // against two real CI attempts of this exact fix (run 34454913072): a cold
+  // attempt (fresh Vite dev-server, nothing transpiled yet) ran the *entire*
+  // 120_000ms budget without even reaching the pi-control-v2 branch-card
+  // assertion, while the retry (Vite's on-demand transpile cache already warm
+  // from attempt #1, same webServer process) got much further — it found and
+  // clicked that branch card, past every earlier assertion — before again
+  // running out of the same 120s budget waiting on the resulting state update.
+  // So 120s under-covers even a warm run once you add the remaining, already
+  // individually-timed steps (image loads, the LLM-driven branch-rename flow).
+  // Locally (Linux, native rendering) the whole flow completes in ~1 minute,
+  // which is why this only ever surfaces on the Windows runner. Give a cold
+  // Windows run real headroom rather than inching the ceiling up per failure.
+  timeout: 240_000,
   expect: { timeout: 12_000 },
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
