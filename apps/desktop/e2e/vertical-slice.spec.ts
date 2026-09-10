@@ -44,7 +44,10 @@ test('vertical slice stays interactive and contained end to end', async ({ page 
   await page.locator('.composer textarea').fill(request);
   await page.getByTestId('send-button').click();
   await expect(page.getByTestId('conversation')).toContainText(request);
-  await expect(page.getByText('solenoid-swap-2', { exact: true })).toBeVisible({ timeout: 20_000 });
+  // Scope to the lineage strip, not a bare page-wide text match: once this branch
+  // becomes active, its name also appears in the toolbar's branch-select button,
+  // which would otherwise make this locator ambiguous (strict-mode violation).
+  await expect(page.locator('.branch-card').filter({ hasText: 'solenoid-swap-2' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('conversation')).toContainText('safe experimental branch', { timeout: 20_000 });
 
   // Long/streamed chat can scroll internally, but it must never displace the composer off-screen.
