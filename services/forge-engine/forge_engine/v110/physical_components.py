@@ -150,3 +150,27 @@ def reality_check(project,object_lookup:Callable[[str],dict[str,Any]]|None=None)
     for o in objs:
         if o.get("component_ref") not in bom_refs:risks.append({"severity":"warning","code":"bom_missing_component","object_id":o.get("id"),"message":f"{o.get('name')} is not represented in the BOM."})
     return {"ok":not any(r["severity"]=="error" for r in risks),"risks":risks,"counts":{s:sum(r["severity"]==s for r in risks) for s in ["error","warning","info"]},"components":len(objs),"connections":len(connections)}
+
+
+# ForgeCAD high-fidelity purchased-component override
+# Manufacturer STEP or a part-specific detailed model is attempted before the
+# broad legacy envelope catalog. Generic geometry remains available only for
+# catalog entries that do not yet have a high-fidelity implementation.
+from . import realistic_components as _realistic_components
+_legacy_component_parts = component_parts
+
+def component_parts(obj):
+    component = component_definition(obj)
+    realistic = _realistic_components.component_parts(obj, component, allow_download=False) if component else None
+    return realistic if realistic else _legacy_component_parts(obj)
+
+def component_geometry_status(obj):
+    component = component_definition(obj) or {}
+    status = _realistic_components.geometry_status(obj, component)
+    if status.get("resolved"):
+        return status
+    return {
+        **status,
+        "geometry_source": str((component.get("geometry") or {}).get("trust") or "legacy_fallback"),
+        "geometry_fidelity": str((component.get("geometry") or {}).get("fidelity") or "none"),
+    }

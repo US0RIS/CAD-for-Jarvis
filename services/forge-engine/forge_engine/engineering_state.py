@@ -198,6 +198,7 @@ class EngineeringProject:
             pos = (obj.get("transform") or {}).get("position", [0, 0, 0])
             length = max(sum(float(v) ** 2 for v in pos) ** 0.5, 1.0)
             explode = [float(v) / length for v in pos]
+            geometry_status = physical_components.component_geometry_status(obj) if obj.get("kind") == "component" else {"geometry_source": "forgecad_brep", "geometry_fidelity": "exact_brep", "fallback": False}
             meshes.append({
                 "id": str(obj["id"]), "name": str(obj.get("name") or obj["id"]),
                 "semantic_role": str((obj.get("semantic") or {}).get("role") or obj.get("kind") or "part"),
@@ -205,6 +206,9 @@ class EngineeringProject:
                 "explode_vector": explode,
                 "base_transform": deepcopy(obj.get("transform") or {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]}),
                 "programmable_workspace_id": str(obj["id"]) if isinstance(obj.get("code"), dict) else None,
+                "geometry_source": geometry_status.get("geometry_source"),
+                "geometry_fidelity": geometry_status.get("geometry_fidelity"),
+                "geometry_fallback": bool(geometry_status.get("fallback")),
             })
         return {"revision": str(len(core.PROJECT.get("ledger", [])) + 1), "branch": core.ACTIVE_DESIGN, "parts": meshes, "authoritative": True}
 

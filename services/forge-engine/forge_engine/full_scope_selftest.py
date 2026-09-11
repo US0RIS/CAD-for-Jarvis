@@ -12,7 +12,7 @@ import cadquery as cq
 
 def main() -> None:
     from .engineering_state import PROJECT
-    from .v110 import acceptance_design, component_registry, project_bundle, software, system_validation
+    from .v110 import acceptance_design, component_registry, physical_components, project_bundle, realistic_components, software, system_validation
 
     stats = component_registry.registry_stats()
     assert stats["total"] >= 238, stats
@@ -43,6 +43,15 @@ def main() -> None:
     assert scene["authoritative"] is True
     assert len(scene["parts"]) >= 6
     assert all(part["mesh"]["positions"] and part["mesh"]["triangles"] for part in scene["parts"])
+    acceptance_geometry = {}
+    for obj in __import__("forge_engine.v110.core", fromlist=["PROJECT"]).PROJECT.get("objects", []):
+        component_id = obj.get("component_ref")
+        if component_id in realistic_components.ACCEPTANCE_COMPONENTS:
+            status = physical_components.component_geometry_status(obj)
+            acceptance_geometry[component_id] = status
+            assert component_registry.GEOMETRY_RANK.get(status.get("geometry_fidelity", "none"), 0) >= component_registry.GEOMETRY_RANK["detailed_parametric"], status
+            assert status.get("geometry_source") not in {"legacy_fallback", "legacy_estimate"}, status
+    assert set(acceptance_geometry) == set(realistic_components.ACCEPTANCE_COMPONENTS), acceptance_geometry
 
     validation = PROJECT.validation()
     assert "risks" in validation and "metrics" in validation
@@ -102,6 +111,7 @@ def main() -> None:
         "protected_baseline_unchanged": True,
         "responsive_snapshot_verified": True,
         "snapshot_seconds": round(summary_seconds, 3),
+        "acceptance_geometry": acceptance_geometry,
     }, indent=2))
 
 
