@@ -1,23 +1,6 @@
 import { expect, test } from '@playwright/test';
 
 test('vertical slice stays interactive and contained end to end', async ({ page }) => {
-  // Diagnostics: this spec has a history of hard-to-diagnose Windows CI failures, and the
-  // Playwright HTML report/trace artifact is unreachable from some environments (blocked
-  // egress to the blob storage GitHub Actions serves it from). Surface what actually
-  // happens on the wire and in the page directly into the CI text log instead - cheap,
-  // harmless on a passing run, and the only way to get real signal when it isn't.
-  page.on('console', (msg) => console.log(`[browser console:${msg.type()}]`, msg.text()));
-  page.on('pageerror', (err) => console.log('[browser pageerror]', err.stack ?? String(err)));
-  page.on('requestfailed', (req) => console.log('[browser requestfailed]', req.url(), req.failure()?.errorText));
-  page.on('response', (res) => {
-    if (res.url().endsWith('/v2/project')) {
-      res.text().then((body) => console.log('[project body]', body.slice(0, 4000))).catch((err) => console.log('[project body read failed]', String(err)));
-    }
-    if (res.url().includes('/v2/') || res.url().includes(':8765')) {
-      console.log('[browser response]', res.status(), res.url());
-    }
-  });
-
   await page.goto('/');
 
   await expect(page.getByText('ForgeCAD').first()).toBeVisible();
@@ -34,25 +17,8 @@ test('vertical slice stays interactive and contained end to end', async ({ page 
 
   // Branch cards are real controls rather than decorative UI. Use text content rather
   // than the computed accessible name because branch metadata can change the latter.
-  //
-  // This assertion has failed on Windows CI even with /v2/project confirmed resolving
-  // correctly within a few seconds and a full 20s margin, which rules out a pure timing
-  // explanation. Dump the actual DOM state on failure - not before, since a snapshot taken
-  // before the wait starts just shows the same "too early" false negative - so a failure
-  // shows exactly what was (or wasn't) in the tree at the moment of timeout.
   const piBranch = page.locator('.branch-card').filter({ hasText: 'pi-control-v2' }).first();
-  try {
-    await expect(piBranch).toBeVisible({ timeout: 20_000 });
-  } catch (err) {
-    const domSnapshot = await page.evaluate(() => ({
-      branchCardCount: document.querySelectorAll('.branch-card').length,
-      branchCardTexts: [...document.querySelectorAll('.branch-card')].map((el) => el.textContent),
-      lineageFlowHtml: document.querySelector('.lineage-flow')?.outerHTML?.slice(0, 1500) ?? '<lineage-flow not found>',
-      bodyTextSnippet: document.body.textContent?.slice(0, 500) ?? '<no body text>',
-    }));
-    console.log('[dom snapshot at branch-card failure]', JSON.stringify(domSnapshot));
-    throw err;
-  }
+  await expect(piBranch).toBeVisible({ timeout: 20_000 });
   await piBranch.click();
   await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 20_000 });
 

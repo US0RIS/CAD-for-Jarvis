@@ -30,14 +30,6 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    # The Electron renderer (and the Playwright e2e harness, which drives the
-    # same app in a plain browser tab) talks to this engine across a port
-    # boundary on 127.0.0.1. Newer Chromium enforces Private Network Access
-    # for that: it sends an `Access-Control-Request-Private-Network` preflight
-    # and silently drops every request unless the server opts in here. Without
-    # this, fetches to /v2/* never complete in a PNA-enforcing browser - not
-    # slow, just permanently blocked.
-    allow_private_network=True,
 )
 _jobs: dict[str, EngineeringJob] = {}
 _event_clients: set[WebSocket] = set()

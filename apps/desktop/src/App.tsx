@@ -155,26 +155,16 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    // TEMPORARY: instrumenting a hard-to-reproduce Windows CI failure where the branch
-    // lineage never renders even though /v2/project is confirmed to resolve with correct
-    // data. This will show directly whether setProject is even reached, how many times this
-    // effect instance runs (React StrictMode double-invokes in dev), and whether the
-    // 'cancelled' guard is discarding the result that should have won.
-    console.log('[app] load() starting, cancelled at start =', cancelled);
     const load = async () => {
-      try {
-        const [nextRuntime, nextProject, nextComponents] = await Promise.all([fetchRuntime(), fetchProject(), fetchComponents('')]);
-        console.log('[app] load() fetch resolved, cancelled =', cancelled, 'branches =', nextProject.branches.map((b) => b.name));
-        if (cancelled) return;
-        setRuntime(nextRuntime);
-        setProject(nextProject);
-        setComponents(nextComponents.items);
-        setStartupError(null);
-        console.log('[app] setProject called with', nextProject.branches.length, 'branches');
-      } catch (error) {
-        console.log('[app] load() threw', error instanceof Error ? error.message : String(error));
-        if (!cancelled) setStartupError(error instanceof Error ? error.message : String(error));
-      }
+      const tasks = [
+        fetchRuntime().then((nextRuntime) => { if (!cancelled) setRuntime(nextRuntime); }),
+        fetchProject().then((nextProject) => { if (!cancelled) setProject(nextProject); }),
+        fetchComponents('').then((nextComponents) => { if (!cancelled) setComponents(nextComponents.items); }),
+      ];
+      const results = await Promise.allSettled(tasks);
+      if (cancelled) return;
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      setStartupError(failure ? (failure.reason instanceof Error ? failure.reason.message : String(failure.reason)) : null);
     };
     void load();
     const runtimeTimer = window.setInterval(() => {
@@ -186,7 +176,7 @@ export default function App() {
       else if (event.type === 'job.token') setStreamText((value) => value + event.token);
       else if (event.type === 'project.updated') setProject(event.project);
     }).then((cleanup) => { stop = cleanup; }).catch(() => undefined);
-    return () => { console.log('[app] load() effect cleanup ran, setting cancelled = true'); cancelled = true; window.clearInterval(runtimeTimer); stop?.(); };
+    return () => { cancelled = true; window.clearInterval(runtimeTimer); stop?.(); };
   }, [acceptJobSnapshot]);
 
   useEffect(() => {
