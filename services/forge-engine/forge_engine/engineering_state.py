@@ -6,11 +6,13 @@ from typing import Any
 
 from .v110 import acceptance_design
 from .v110 import analysis
+from .v110 import assembly_validation
 from .v110 import component_importers
 from .v110 import component_registry as registry
 from .v110 import core
 from .v110 import project_bundle
 from .v110 import software
+from .v110 import system_validation
 
 
 _STATUS_MAP = {
@@ -267,7 +269,14 @@ class EngineeringProject:
         return {"operation": result, "project": self.snapshot()}
 
     def validation(self) -> dict[str, Any]:
-        result = core.reality_check()
+        system = system_validation.validate_system(core.PROJECT)
+        try:
+            assembly = assembly_validation.validate_assembly(core.PROJECT, core.build_shape, min_clearance_mm=1.0)
+        except Exception as exc:
+            assembly = {"ok": False, "counts": {"error": 0, "warning": 1, "info": 0}, "risks": [{"severity": "warning", "code": "assembly_check_unavailable", "message": str(exc)}]}
+        risks = list(system.get("risks", [])) + list(assembly.get("risks", []))
+        counts = {level: sum(1 for risk in risks if risk.get("severity") == level) for level in ("error", "warning", "info")}
+        result = {**system, "ok": counts["error"] == 0, "counts": counts, "risks": risks, "assembly": assembly}
         result["requirements"] = core.requirement_checks()
         result["metrics"] = core.project_metrics()
         return result

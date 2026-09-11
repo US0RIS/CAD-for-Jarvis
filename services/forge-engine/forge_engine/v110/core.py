@@ -377,7 +377,7 @@ def _component_instance_args(component_id: str, name: str|None=None, transform: 
 def reality_check() -> dict[str,Any]:
     system=system_validation.validate_system(PROJECT)
     try:
-        import assembly_validation
+        from . import assembly_validation
         assembly=assembly_validation.validate_assembly(PROJECT,build_shape,min_clearance_mm=1.0)
     except Exception as e:
         assembly={"ok":True,"counts":{"error":0,"warning":1,"info":0},"risks":[{"severity":"warning","code":"assembly_check_unavailable","message":str(e)}],"collisions":[],"low_clearances":[]}

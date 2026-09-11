@@ -102,7 +102,7 @@ def build_project()->dict[str,Any]:
 def acceptance_report(project:dict[str,Any],shape_builder=None)->dict[str,Any]:
     system=system_validation.validate_system(project);report={"system":system,"mounting_unresolved":next((n.get("mounting_unresolved",[]) for n in project.get("notebook",[]) if n.get("id")=="mounting-resolution"),[])}
     if shape_builder is not None:
-        import assembly_validation
+        from . import assembly_validation
         report["assembly"]=assembly_validation.validate_assembly(project,shape_builder,min_clearance_mm=1.0)
     report["ok"]=system.get("ok",False) and report.get("assembly",{"ok":True}).get("ok",True)
     return report
@@ -110,7 +110,7 @@ def acceptance_report(project:dict[str,Any],shape_builder=None)->dict[str,Any]:
 
 def install_into_core()->dict[str,Any]:
     """Replace the active workspace with a clean acceptance project/template."""
-    import core
+    from . import core
     project=core.upgrade_project(build_project())
     with core.LOCK:
         core.PROJECT.clear();core.PROJECT.update(project);core.BRANCHES.clear();core.DESIGNS.clear();core.ACTIVE_DESIGN="main"

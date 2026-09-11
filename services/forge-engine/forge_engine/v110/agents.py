@@ -24,9 +24,9 @@ def _json_from(text:str):
     if a>=0 and b>a:return json.loads(text[a:b+1])
     raise ValueError("Agent did not return valid JSON")
 def plan_commands(text:str,model:str|None=None,project:dict[str,Any]|None=None):
-    import core
+    from . import core
     m=model or DEFAULT_MODEL; p=project or core.PROJECT
-    import component_registry
+    from . import component_registry
     summary={"name":p.get("name"),"objects":[{"id":o.get("id"),"name":o.get("name"),"kind":o.get("kind"),"params":o.get("params"),"material":o.get("material"),"component_ref":o.get("component_ref"),"interfaces":[i.get("id") for i in o.get("interfaces",[])]} for o in p.get("objects",[])],"requirements":p.get("requirements",[])[:20],"connections":p.get("connections",[])[:30]}
     candidates=[];low=text.lower();category_map={"stepper":"stepper_motor","motor":"stepper_motor","servo":"servo","solenoid":"solenoid","bearing":"bearing","fan":"fan","raspberry pi":"compute","arduino":"microcontroller","microcontroller":"microcontroller","sensor":"sensor","battery":"battery","fastener":"fastener","screw":"fastener","linear rail":"linear_motion","buck":"power"}
     seen=set()
@@ -43,12 +43,12 @@ def plan_commands(text:str,model:str|None=None,project:dict[str,Any]|None=None):
         if c.get("op") not in OPS:raise ValueError(f"Agent proposed unsupported operation: {c.get('op')}")
     return out
 def review(text:str,model:str|None=None,role:str="verifier"):
-    import core
+    from . import core
     m=model or DEFAULT_MODEL; system=f"You are ForgeCAD's independent {role}. Review engineering assumptions, loads, constraints, materials, manufacturability and validation gaps. Be concise and distinguish known facts from screening estimates."
     resp=_request("/api/chat",{"model":m,"stream":False,"messages":[{"role":"system","content":system},{"role":"user","content":text+"\n\nProject metrics: "+json.dumps(core.project_metrics())}]},120)
     return {"role":role,"model":m,"text":resp.get("message",{}).get("content",resp.get("response",""))}
 def chat(text:str,model:str|None=None):
-    import core
+    from . import core
     m=model or DEFAULT_MODEL; system="You are ForgeCAD, an engineering copilot. Answer about the current design. When the user requests a change, describe the intended operation and recommend using Apply if execution is desired. Never overstate screening solver fidelity."
     resp=_request("/api/chat",{"model":m,"stream":False,"messages":[{"role":"system","content":system},{"role":"user","content":text+"\n\nCurrent design: "+json.dumps({"name":core.PROJECT.get('name'),"metrics":core.project_metrics(),"objects":[o.get('name') for o in core.PROJECT.get('objects',[])]})}]},120)
     return {"model":m,"text":resp.get("message",{}).get("content",resp.get("response",""))}
