@@ -9,13 +9,14 @@ import sys
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import __version__
+from .engineering_state import PROJECT
 from .models import CreateJobRequest, EngineeringJob, JobState, OllamaState, RuntimeState, RuntimeStatus
-from .vertical_slice import PROJECT
+from .v110 import jarvis_bridge
 
 API_VERSION = "2"
 SESSION_TOKEN = os.environ.get("FORGECAD_SESSION_TOKEN", "")
@@ -39,9 +40,34 @@ class CodeWriteRequest(BaseModel):
     content: str
 
 
-def require_session(x_forgecad_session: str | None = Header(default=None)) -> None:
-    if SESSION_TOKEN and x_forgecad_session != SESSION_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid ForgeCAD desktop session")
+class OperationRequest(BaseModel):
+    op: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+
+
+class BranchCreateRequest(BaseModel):
+    name: str
+    reason: str = ""
+
+
+class BranchStatusRequest(BaseModel):
+    status: str
+    note: str = ""
+    physical_verified: bool = False
+
+
+def require_session(
+    x_forgecad_session: str | None = Header(default=None),
+    x_jarvis_token: str | None = Header(default=None),
+) -> None:
+    if SESSION_TOKEN and x_forgecad_session == SESSION_TOKEN:
+        return
+    if x_jarvis_token and jarvis_bridge.verify_token(x_jarvis_token):
+        return
+    if not SESSION_TOKEN and not x_jarvis_token:
+        return
+    raise HTTPException(status_code=401, detail="Invalid ForgeCAD/Jarvis session")
 
 
 def _cache_root() -> Path:
@@ -59,6 +85,20 @@ IMAGE_CACHE = _cache_root() / "component-images"
 IMAGE_CACHE.mkdir(parents=True, exist_ok=True)
 
 
+@app.on_event("startup")
+async def publish_jarvis_bridge() -> None:
+    port = int(os.environ.get("FORGECAD_PORT", "8765"))
+    try:
+        jarvis_bridge.write_discovery(f"http://127.0.0.1:{port}")
+    except Exception:
+        pass
+
+
+@app.on_event("shutdown")
+async def clear_jarvis_bridge() -> None:
+    jarvis_bridge.clear_discovery()
+
+
 async def ollama_status() -> tuple[OllamaState, str | None]:
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
@@ -67,15 +107,20 @@ async def ollama_status() -> tuple[OllamaState, str | None]:
             names = [str(model.get("name", "")) for model in response.json().get("models", [])]
     except Exception:
         return OllamaState.OFFLINE, None
-
-    if CONFIGURED_MODEL in names:
+    if CONFIGURED_MODEL in names or any(name.split(":", 1)[0] == CONFIGURED_MODEL.split(":", 1)[0] for name in names):
         return OllamaState.READY, CONFIGURED_MODEL
     return OllamaState.FAILED, None
 
 
 @app.get("/v2/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "api_version": API_VERSION, "engine_version": __version__, "platform_priority": "windows"}
+    return {
+        "ok": True,
+        "api_version": API_VERSION,
+        "engine_version": __version__,
+        "engineering_layer": "v1.1-full-scope",
+        "platform_priority": "windows",
+    }
 
 
 @app.get("/v2/runtime", dependencies=[Depends(require_session)])
@@ -98,35 +143,34 @@ async def project() -> dict[str, Any]:
 
 @app.get("/v2/scene", dependencies=[Depends(require_session)])
 async def scene() -> dict[str, Any]:
-    return PROJECT.scene_manifest()
+    return await asyncio.to_thread(PROJECT.scene_manifest)
 
 
-def _component_payload(component: dict[str, Any], request: Request) -> dict[str, Any]:
-    result = {k: v for k, v in component.items() if k != "image"}
-    image = component.get("image")
-    if image:
-        result["image"] = {
-            "kind": image.get("kind", "reference"),
-            "source": image.get("source", "reference image"),
-            "uri": f"{str(request.base_url).rstrip('/')}/v2/component-images/{component['id']}",
-        }
-    return result
+@app.get("/v2/component-registry/stats", dependencies=[Depends(require_session)])
+async def component_registry_stats() -> dict[str, Any]:
+    return PROJECT.registry_stats()
 
 
 @app.get("/v2/components", dependencies=[Depends(require_session)])
-async def components(request: Request, q: str = "") -> dict[str, Any]:
-    return {"items": [_component_payload(item, request) for item in PROJECT.search_components(q)], "query": q}
+async def components(q: str = "", category: str | None = None, voltage_v: float | None = None) -> dict[str, Any]:
+    constraints: dict[str, Any] = {}
+    if voltage_v is not None:
+        constraints["voltage_v"] = voltage_v
+    items = PROJECT.search_components(q, category=category, constraints=constraints, limit=30)
+    return {"items": items, "query": q, "stats": PROJECT.registry_stats()}
 
 
 def _fallback_svg(component: dict[str, Any]) -> bytes:
     label = html.escape(str(component.get("model", "Component")))
+    manufacturer = html.escape(str(component.get("manufacturer", "")))
     category = html.escape(str(component.get("category", "part")).upper())
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">'
         '<rect width="640" height="420" rx="28" fill="#f4f6f7"/>'
         '<rect x="38" y="38" width="564" height="344" rx="22" fill="#e8edef" stroke="#c7d0d4" stroke-width="4"/>'
-        f'<text x="320" y="190" text-anchor="middle" font-family="Arial,sans-serif" font-size="28" font-weight="700" fill="#26343b">{label}</text>'
-        f'<text x="320" y="235" text-anchor="middle" font-family="Arial,sans-serif" font-size="18" fill="#60717a">{category} · image unavailable</text>'
+        f'<text x="320" y="178" text-anchor="middle" font-family="Arial,sans-serif" font-size="27" font-weight="700" fill="#26343b">{label}</text>'
+        f'<text x="320" y="218" text-anchor="middle" font-family="Arial,sans-serif" font-size="18" fill="#60717a">{manufacturer}</text>'
+        f'<text x="320" y="258" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" fill="#60717a">{category} · ENGINEERING CATALOG</text>'
         '</svg>'
     ).encode("utf-8")
 
@@ -135,47 +179,22 @@ def _fallback_svg(component: dict[str, Any]) -> bytes:
 async def component_image(component_id: str) -> Response:
     try:
         component = PROJECT.component(component_id)
-    except (KeyError, StopIteration) as exc:
+    except KeyError as exc:
         raise HTTPException(status_code=404, detail="Component not found") from exc
-
-    image = component.get("image") or {}
-    sources = [str(value) for value in image.get("sources", []) if value]
-    cache_file = IMAGE_CACHE / f"{component_id}.bin"
-    meta_file = IMAGE_CACHE / f"{component_id}.json"
-
-    if cache_file.exists() and meta_file.exists():
-        try:
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-            return Response(cache_file.read_bytes(), media_type=str(meta.get("content_type") or "image/jpeg"), headers={"Cache-Control": "public, max-age=86400"})
-        except Exception:
-            pass
-
-    headers = {"User-Agent": "ForgeCAD/2 component-image-cache (+local desktop app)"}
-    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=headers) as client:
-        for source in sources:
-            try:
-                response = await client.get(source)
-                response.raise_for_status()
-                content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-                if not content_type.startswith("image/") or len(response.content) < 256:
-                    continue
-                cache_file.write_bytes(response.content)
-                meta_file.write_text(json.dumps({"content_type": content_type, "source": str(response.url)}), encoding="utf-8")
-                return Response(response.content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
-            except Exception:
-                continue
-
-    return Response(_fallback_svg(component), media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
+    # The registry is intentionally offline-first.  The fallback is generated from the
+    # authoritative component identity rather than hotlinking arbitrary supplier media.
+    return Response(_fallback_svg(component), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.post("/v2/components/{component_id}/add", dependencies=[Depends(require_session)])
-async def add_component(component_id: str, request: Request) -> dict[str, Any]:
+async def add_component(component_id: str) -> dict[str, Any]:
     try:
         component = PROJECT.add_component(component_id)
-    except (KeyError, StopIteration) as exc:
+    except KeyError as exc:
         raise HTTPException(status_code=404, detail="Component not found") from exc
-    await broadcast({"type": "project.updated", "project": PROJECT.snapshot()})
-    return {"component": _component_payload(component, request), "project": PROJECT.snapshot()}
+    snapshot = PROJECT.snapshot()
+    await broadcast({"type": "project.updated", "project": snapshot})
+    return {"component": component, "project": snapshot}
 
 
 @app.post("/v2/branches/{branch_name}/activate", dependencies=[Depends(require_session)])
@@ -186,6 +205,48 @@ async def activate_branch(branch_name: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Branch not found") from exc
     await broadcast({"type": "project.updated", "project": snapshot})
     return snapshot
+
+
+@app.post("/v2/branches", dependencies=[Depends(require_session)])
+async def create_branch(request: BranchCreateRequest) -> dict[str, Any]:
+    snapshot = PROJECT.create_branch(request.name, request.reason)
+    await broadcast({"type": "project.updated", "project": snapshot})
+    return snapshot
+
+
+@app.get("/v2/branches/{branch_name}/compare", dependencies=[Depends(require_session)])
+async def compare_branch(branch_name: str) -> dict[str, Any]:
+    try:
+        return PROJECT.compare_branch(branch_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Branch not found") from exc
+
+
+@app.put("/v2/branches/{branch_name}/status", dependencies=[Depends(require_session)])
+async def branch_status(branch_name: str, request: BranchStatusRequest) -> dict[str, Any]:
+    try:
+        result = PROJECT.set_branch_status(branch_name, request.status, request.note, request.physical_verified)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Branch not found") from exc
+    snapshot = PROJECT.snapshot()
+    await broadcast({"type": "project.updated", "project": snapshot})
+    return {"branch": result, "project": snapshot}
+
+
+@app.post("/v2/history/undo", dependencies=[Depends(require_session)])
+async def undo() -> dict[str, Any]:
+    ok = PROJECT.undo()
+    snapshot = PROJECT.snapshot()
+    await broadcast({"type": "project.updated", "project": snapshot})
+    return {"ok": ok, "project": snapshot}
+
+
+@app.post("/v2/history/redo", dependencies=[Depends(require_session)])
+async def redo() -> dict[str, Any]:
+    ok = PROJECT.redo()
+    snapshot = PROJECT.snapshot()
+    await broadcast({"type": "project.updated", "project": snapshot})
+    return {"ok": ok, "project": snapshot}
 
 
 @app.get("/v2/code/workspaces/{workspace_id}", dependencies=[Depends(require_session)])
@@ -207,11 +268,99 @@ async def read_file(workspace_id: str, file_path: str) -> dict[str, str]:
 @app.put("/v2/code/workspaces/{workspace_id}/files/{file_path:path}", dependencies=[Depends(require_session)])
 async def write_file(workspace_id: str, file_path: str, request: CodeWriteRequest) -> dict[str, str]:
     try:
-        return PROJECT.write_file(workspace_id, file_path, request.content)
+        result = PROJECT.write_file(workspace_id, file_path, request.content)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await broadcast({"type": "project.updated", "project": PROJECT.snapshot()})
+    return result
+
+
+@app.post("/v2/operations", dependencies=[Depends(require_session)])
+async def execute_operation(request: OperationRequest) -> dict[str, Any]:
+    try:
+        result = PROJECT.execute(request.op, request.args, actor="human", reason=request.reason)
+    except (KeyError, ValueError, StopIteration) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await broadcast({"type": "project.updated", "project": result["project"]})
+    return result
+
+
+@app.get("/v2/validation", dependencies=[Depends(require_session)])
+async def validation() -> dict[str, Any]:
+    return await asyncio.to_thread(PROJECT.validation)
+
+
+@app.get("/v2/project/export", dependencies=[Depends(require_session)])
+async def export_project() -> Response:
+    data = await asyncio.to_thread(PROJECT.export_bundle)
+    return Response(data, media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="ForgeCAD-Project.forgecad.zip"'})
+
+
+@app.post("/v2/project/import", dependencies=[Depends(require_session)])
+async def import_project(file: UploadFile = File(...)) -> dict[str, Any]:
+    data = await file.read()
+    try:
+        result = await asyncio.to_thread(PROJECT.import_bundle, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await broadcast({"type": "project.updated", "project": result["project"]})
+    return result
+
+
+@app.post("/v2/import/step", dependencies=[Depends(require_session)])
+async def import_step(file: UploadFile = File(...)) -> dict[str, Any]:
+    data = await file.read()
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="STEP filename is required")
+    try:
+        result = await asyncio.to_thread(PROJECT.import_step_part, file.filename, data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await broadcast({"type": "project.updated", "project": result["project"]})
+    return result
+
+
+@app.post("/v2/component-registry/import-step", dependencies=[Depends(require_session)])
+async def import_vendor_step(
+    file: UploadFile = File(...),
+    manufacturer: str = Form(...),
+    model: str = Form(...),
+    category: str = Form("custom"),
+) -> dict[str, Any]:
+    data = await file.read()
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="STEP filename is required")
+    try:
+        return await asyncio.to_thread(PROJECT.import_step_component, file.filename, data, manufacturer=manufacturer, model=model, category=category)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/v2/jarvis/context", dependencies=[Depends(require_session)])
+async def jarvis_context() -> dict[str, Any]:
+    return {
+        "project": PROJECT.snapshot(),
+        "validation": await asyncio.to_thread(PROJECT.validation),
+        "registry": PROJECT.registry_stats(),
+        "operation_contract": [
+            "add", "add_component", "replace_component", "sync_component", "update", "transform",
+            "mate_components", "connect_interfaces", "disconnect", "delete", "add_feature", "delete_feature",
+            "add_load", "add_constraint", "set_requirement", "add_bom_item", "add_note",
+            "code_write", "code_delete", "code_rename", "project_name", "settings",
+        ],
+    }
+
+
+@app.post("/v2/jarvis/execute", dependencies=[Depends(require_session)])
+async def jarvis_execute(request: OperationRequest) -> dict[str, Any]:
+    try:
+        result = PROJECT.execute(request.op, request.args, actor="jarvis", reason=request.reason or "Jarvis engineering operation")
+    except (KeyError, ValueError, StopIteration) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await broadcast({"type": "project.updated", "project": result["project"]})
+    return result
 
 
 async def broadcast(payload: dict[str, Any]) -> None:
@@ -237,14 +386,10 @@ async def update_job(job: EngineeringJob, *, state: JobState | None = None, prog
 
 async def qwen_reply(text: str, job: EngineeringJob) -> str:
     system = (
-        "You are ForgeCAD's local engineering copilot inside a desktop CAD application. "
-        "The deterministic Forge Engine, not you, performs CAD mutations. Respond for a narrow chat rail, not a report. "
-        "Use at most 220 words. Start with a one-sentence answer, then at most 4 short bullets. "
-        "Do not emit markdown tables, long derivations, or multi-level headings unless the user explicitly asks for them. "
-        "Name only the most important physical consequence and the single best verification step. "
-        "If the request is ambiguous, make the smallest reasonable assumption in one short sentence rather than writing a scope essay."
+        "You are ForgeCAD's local engineering copilot. The deterministic Forge Engine is authoritative. "
+        "Be concise, distinguish measured/catalog facts from screening estimates, and name verification gaps. "
+        "Never claim a screening analysis certifies a safety-critical design."
     )
-    context = PROJECT.snapshot()
     payload = {
         "model": CONFIGURED_MODEL,
         "stream": True,
@@ -252,7 +397,7 @@ async def qwen_reply(text: str, job: EngineeringJob) -> str:
         "keep_alive": "10m",
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Current project: {json.dumps(context, separators=(',', ':'))}\n\nRequest: {text}"},
+            {"role": "user", "content": f"Current project: {json.dumps(PROJECT.snapshot(), separators=(',', ':'))}\n\nRequest: {text}"},
         ],
         "options": {"temperature": 0.12, "num_ctx": 8192, "num_predict": 420},
     }
@@ -275,6 +420,42 @@ async def qwen_reply(text: str, job: EngineeringJob) -> str:
     return "".join(answer).strip()
 
 
+async def qwen_plan(text: str) -> dict[str, Any]:
+    context = PROJECT.snapshot()
+    candidates = PROJECT.search_components(text, limit=10)
+    system = (
+        "You are ForgeCAD's local engineering planner. Return JSON only with keys summary, commands, checks. "
+        "Each command is {op,args}. Allowed operations: add, add_component, replace_component, sync_component, update, transform, "
+        "mate_components, connect_interfaces, disconnect, delete, add_feature, delete_feature, add_load, add_constraint, "
+        "set_requirement, add_bom_item, add_note, code_write, code_delete, code_rename, project_name, settings. "
+        "Never invent object IDs or component IDs. Purchased components must use exact registry IDs. "
+        "Do not scale or rewrite authoritative purchased-component geometry. Keep physically verified baselines protected; the engine will fork them."
+    )
+    payload = {
+        "model": CONFIGURED_MODEL,
+        "stream": False,
+        "think": False,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps({"project": context, "candidate_components": candidates, "request": text})},
+        ],
+        "options": {"temperature": 0.08, "num_ctx": 12288, "num_predict": 1400},
+    }
+    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=3.0)) as client:
+        response = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
+        response.raise_for_status()
+    raw = str((response.json().get("message") or {}).get("content") or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("Engineering planner did not return valid JSON")
+    plan = json.loads(raw[start:end + 1])
+    if not isinstance(plan.get("commands", []), list):
+        raise ValueError("Engineering planner commands must be a list")
+    return plan
+
+
 async def run_agent_job(job: EngineeringJob, request: CreateJobRequest) -> None:
     try:
         await update_job(job, state=JobState.WARMING, progress=0.08, message=f"Checking {CONFIGURED_MODEL}")
@@ -282,39 +463,62 @@ async def run_agent_job(job: EngineeringJob, request: CreateJobRequest) -> None:
         if ollama != OllamaState.READY and not DEMO_AGENT:
             raise RuntimeError(f"Configured model {CONFIGURED_MODEL!r} is not available in Ollama")
 
-        await update_job(job, state=JobState.PLANNING, progress=0.24, message="Planning the engineering change")
+        await update_job(job, state=JobState.PLANNING, progress=0.24, message="Planning against canonical engineering state")
+        result: dict[str, Any]
         if DEMO_AGENT and ollama != OllamaState.READY:
-            await asyncio.sleep(0.15)
-            answer = "Created a safe experimental branch and kept the known-good baseline protected.\n\n- Applied the requested actuator change.\n- Preserved the Raspberry Pi code workspace with the design.\n- Re-run thermal and vibration checks before marking this branch as working."
+            answer = "Created a safe experimental branch and kept the known-good baseline protected.\n\n- Applied the request through the same typed operation layer used by the UI.\n- Preserved the embedded device workspace with the design branch.\n- Re-run system validation and physical tests before marking this branch as working."
             job.assistant_text = answer
             await broadcast({"type": "job.token", "job_id": job.id, "token": answer})
+            result = {"assistant_text": answer}
+            if request.apply_edits:
+                await update_job(job, state=JobState.APPLYING, progress=0.62, message="Forking protected baseline and applying typed operation")
+                result.update(PROJECT.apply_demo_change(request.text or "AI engineering change"))
+        elif request.apply_edits:
+            plan = await qwen_plan(request.text or "Review and improve the design")
+            answer = str(plan.get("summary") or "Applied the planned engineering change through Forge Engine typed operations.")
+            job.assistant_text = answer
+            await broadcast({"type": "job.token", "job_id": job.id, "token": answer})
+            await update_job(job, state=JobState.APPLYING, progress=0.62, message="Applying typed engineering operations")
+            result = {"assistant_text": answer, "plan": plan}
+            result.update(PROJECT.apply_agent_plan(plan, request.text or "AI engineering change"))
         else:
             answer = await qwen_reply(request.text or "Review the active design", job)
+            result = {"assistant_text": answer}
 
         if job.state == JobState.CANCELLED:
             return
-        result: dict[str, Any] = {"assistant_text": answer}
-        if request.apply_edits:
-            await update_job(job, state=JobState.APPLYING, progress=0.70, message="Creating child branch and applying typed changes")
-            result.update(PROJECT.apply_agent_change(request.text or "AI engineering change"))
-            job.branch = str(result.get("branch") or job.branch or "")
-            await broadcast({"type": "project.updated", "project": PROJECT.snapshot()})
-        await update_job(job, state=JobState.VERIFYING, progress=0.90, message="Checking branch protection and stale-analysis state")
-        await asyncio.sleep(0.1)
+        await update_job(job, state=JobState.VERIFYING, progress=0.88, message="Running deterministic reality checks")
+        result["validation"] = await asyncio.to_thread(PROJECT.validation)
+        result["project"] = PROJECT.snapshot()
+        job.branch = PROJECT.active_branch
         job.result = result
+        await broadcast({"type": "project.updated", "project": result["project"]})
         await update_job(job, state=JobState.COMPLETED, progress=1.0, message="Complete")
     except Exception as exc:
         job.error = {"code": "agent_failed", "message": str(exc), "recoverable": True}
         await update_job(job, state=JobState.FAILED, progress=1.0, message=str(exc))
 
 
-async def run_generic_job(job: EngineeringJob) -> None:
+async def run_engineering_job(job: EngineeringJob, request: CreateJobRequest) -> None:
     try:
-        await update_job(job, state=JobState.ANALYZING, progress=0.25, message=f"Running {job.kind}")
-        await asyncio.sleep(0.25)
-        await update_job(job, state=JobState.VERIFYING, progress=0.8, message="Verifying result")
-        await asyncio.sleep(0.1)
-        job.result = {"ok": True, "kind": job.kind}
+        await update_job(job, state=JobState.ANALYZING, progress=0.18, message=f"Running {job.kind}")
+        if job.kind == "simulation":
+            result = await asyncio.to_thread(PROJECT.run_simulation, request.selected_object_id, request.payload)
+        elif job.kind == "campaign":
+            result = await asyncio.to_thread(PROJECT.run_campaign, request.selected_object_id, request.payload)
+        elif job.kind == "component-search":
+            result = {"items": PROJECT.search_components(request.text or "", constraints=request.payload.get("constraints") if request.payload else None)}
+        elif job.kind == "deploy":
+            workspace_id = str((request.payload or {}).get("workspace_id") or request.selected_object_id or "")
+            if not workspace_id:
+                raise ValueError("deploy requires a programmable component/workspace")
+            result = await asyncio.to_thread(PROJECT.deploy_workspace, workspace_id)
+        else:
+            raise ValueError(f"Unsupported engineering job: {job.kind}")
+        await update_job(job, state=JobState.VERIFYING, progress=0.85, message="Verifying result against current design")
+        job.result = result
+        if job.kind in {"campaign", "simulation"}:
+            await broadcast({"type": "project.updated", "project": PROJECT.snapshot()})
         await update_job(job, state=JobState.COMPLETED, progress=1.0, message="Complete")
     except Exception as exc:
         job.error = {"code": "job_failed", "message": str(exc), "recoverable": True}
@@ -334,7 +538,7 @@ async def create_job(request: CreateJobRequest) -> EngineeringJob:
     if request.kind == "agent":
         asyncio.create_task(run_agent_job(job, request))
     else:
-        asyncio.create_task(run_generic_job(job))
+        asyncio.create_task(run_engineering_job(job, request))
     return job
 
 
