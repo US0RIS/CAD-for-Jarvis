@@ -2,7 +2,7 @@ name: ForgeCAD v2 vertical slice
 
 on:
   push:
-    branches: [main]
+    branches: [main, forgecad/full-v110-scope]
   pull_request:
   workflow_dispatch:
 
@@ -10,7 +10,7 @@ jobs:
   windows-primary:
     name: Windows 11 primary
     runs-on: windows-2025
-    timeout-minutes: 35
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,6 +30,12 @@ jobs:
           python -m venv services/forge-engine/.venv
           services/forge-engine/.venv/Scripts/python.exe -m pip install --upgrade pip
           services/forge-engine/.venv/Scripts/python.exe -m pip install -e services/forge-engine
+      - name: Full engineering self-test
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE/services/forge-engine"
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-full-scope-selftest"
+          services/forge-engine/.venv/Scripts/python.exe -m forge_engine.full_scope_selftest
       - name: Install desktop dependencies
         run: pnpm install --frozen-lockfile=false
       - name: Typecheck and build Electron renderer
@@ -45,16 +51,17 @@ jobs:
           $env:FORGECAD_SESSION_TOKEN = 'test-session'
           $env:FORGECAD_OLLAMA_MODEL = 'qwen3.8:27b'
           $env:FORGECAD_DEMO_AGENT = '1'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-e2e-state"
           $p = Start-Process -FilePath "$env:GITHUB_WORKSPACE/services/forge-engine/.venv/Scripts/python.exe" -ArgumentList '-m','uvicorn','forge_engine.main:app','--host','127.0.0.1','--port','8765','--log-level','warning' -WorkingDirectory "$env:GITHUB_WORKSPACE/services/forge-engine" -PassThru
           $p.Id | Set-Content "$env:RUNNER_TEMP/forge-engine.pid"
-          $deadline = (Get-Date).AddSeconds(20)
+          $deadline = (Get-Date).AddSeconds(45)
           $healthy = $false
           do {
-            try { $r = Invoke-RestMethod http://127.0.0.1:8765/v2/health; if ($r.ok) { $healthy = $true; break } } catch {}
+            try { $r = Invoke-RestMethod http://127.0.0.1:8765/v2/health; if ($r.ok -and $r.engineering_layer -eq 'v1.1-full-scope') { $healthy = $true; break } } catch {}
             Start-Sleep -Milliseconds 250
           } while ((Get-Date) -lt $deadline)
-          if (-not $healthy) { throw 'Forge Engine did not become healthy' }
-      - name: Run browser vertical-slice acceptance
+          if (-not $healthy) { throw 'Full-scope Forge Engine did not become healthy' }
+      - name: Run browser full-scope acceptance
         run: pnpm --filter @forgecad/desktop e2e
       - name: Upload Playwright diagnostics on failure
         if: failure()
@@ -69,7 +76,7 @@ jobs:
   macos-secondary:
     name: macOS secondary smoke
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -87,6 +94,11 @@ jobs:
           python -m venv services/forge-engine/.venv
           services/forge-engine/.venv/bin/python -m pip install --upgrade pip
           services/forge-engine/.venv/bin/python -m pip install -e services/forge-engine
+      - name: Full engineering self-test
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-full-scope-selftest
+        run: services/forge-engine/.venv/bin/python -m forge_engine.full_scope_selftest
       - name: Install and compile shared desktop
         run: |
           pnpm install --frozen-lockfile=false
@@ -96,5 +108,6 @@ jobs:
         env:
           PYTHONPATH: services/forge-engine
           FORGECAD_OLLAMA_MODEL: qwen3.8:27b
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-import-smoke
         run: |
-          services/forge-engine/.venv/bin/python -c "from forge_engine.main import app, CONFIGURED_MODEL; assert app and CONFIGURED_MODEL == 'qwen3.8:27b'; print('macOS secondary smoke: PASS')"
+          services/forge-engine/.venv/bin/python -c "from forge_engine.main import app, CONFIGURED_MODEL, PROJECT; assert app and CONFIGURED_MODEL == 'qwen3.8:27b'; assert PROJECT.registry_stats()['total'] >= 238; assert len(PROJECT.scene_manifest()['parts']) >= 6; print('macOS full-scope smoke: PASS')"
