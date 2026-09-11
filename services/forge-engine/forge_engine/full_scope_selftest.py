@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-import tempfile
+import os
+import sys
 
 
 def main() -> None:
@@ -74,3 +74,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # CadQuery/OCP/VTK can return a spurious non-zero code during CPython native
+    # extension teardown on Windows after all Python work has completed. Reaching
+    # this point means every assertion above passed, so flush the proof and bypass
+    # only native interpreter finalization. Assertion/exception failures never reach
+    # this block and still fail normally.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if os.name == "nt":
+        os._exit(0)
