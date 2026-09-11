@@ -2,7 +2,7 @@ name: ForgeCAD macOS Installers
 
 on:
   push:
-    branches: [main]
+    branches: [main, forgecad/full-v110-scope]
     paths:
       - 'apps/desktop/**'
       - 'services/forge-engine/**'
@@ -23,7 +23,7 @@ jobs:
           - runner: macos-15-intel
             arch: x64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    timeout-minutes: 80
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -42,11 +42,21 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Build standalone Forge Engine
+      - name: Install and self-test full engineering layer
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e services/forge-engine pyinstaller
+          export PYTHONPATH="$GITHUB_WORKSPACE/services/forge-engine"
+          export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-full-scope-selftest"
+          python -m forge_engine.full_scope_selftest
+
+      - name: Build standalone Forge Engine
+        run: |
           python -m PyInstaller --noconfirm --clean --onefile --name forge-engine \
+            --collect-all cadquery \
+            --collect-all OCP \
+            --collect-all vtkmodules \
+            --collect-submodules forge_engine.v110 \
             --distpath services/forge-engine/dist \
             --workpath services/forge-engine/build/pyinstaller \
             --specpath services/forge-engine/build \
@@ -54,25 +64,27 @@ jobs:
           chmod +x services/forge-engine/dist/forge-engine
           file services/forge-engine/dist/forge-engine
 
-      - name: Smoke bundled Forge Engine
+      - name: Smoke bundled Forge Engine full scope
         shell: bash
         run: |
           set -euo pipefail
           export FORGECAD_PORT=8878
           export FORGECAD_SESSION_TOKEN=installer-smoke
           export FORGECAD_OLLAMA_MODEL=qwen3.8:27b
+          export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-bundled-smoke"
           services/forge-engine/dist/forge-engine > "$RUNNER_TEMP/forge-engine.log" 2>&1 &
           ENGINE_PID=$!
           trap 'kill "$ENGINE_PID" 2>/dev/null || true' EXIT
-          for i in {1..80}; do
-            if curl --fail --silent http://127.0.0.1:8878/v2/health > "$RUNNER_TEMP/health.json"; then
-              cat "$RUNNER_TEMP/health.json"
-              exit 0
-            fi
+          for i in {1..160}; do
+            if curl --fail --silent http://127.0.0.1:8878/v2/health > "$RUNNER_TEMP/health.json"; then break; fi
             sleep 0.25
           done
-          cat "$RUNNER_TEMP/forge-engine.log" || true
-          exit 1
+          cat "$RUNNER_TEMP/health.json"
+          grep -q 'v1.1-full-scope' "$RUNNER_TEMP/health.json"
+          curl --fail --silent -H 'X-ForgeCAD-Session: installer-smoke' http://127.0.0.1:8878/v2/component-registry/stats > "$RUNNER_TEMP/stats.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/stats.json')); assert d['total'] >= 238; print('macOS registry', d['total'])"
+          curl --fail --silent -H 'X-ForgeCAD-Session: installer-smoke' http://127.0.0.1:8878/v2/project > "$RUNNER_TEMP/project.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/project.json')); assert any(p.get('component_ref')=='compute.raspberry_pi_5_8gb' for p in d['parts']); print('macOS project parts', len(d['parts']))"
 
       - name: Install desktop dependencies
         run: pnpm install --frozen-lockfile=false
@@ -85,19 +97,35 @@ jobs:
           pnpm --filter @forgecad/desktop build
           pnpm --filter @forgecad/desktop exec electron-builder --mac dmg --${{ matrix.arch }}
 
-      - name: Verify DMG and bundled engine
+      - name: Verify DMG and installed engine full scope
         shell: bash
         run: |
           set -euo pipefail
-          DMG="apps/desktop/release/ForgeCAD-2.0.2-${{ matrix.arch }}.dmg"
+          DMG="apps/desktop/release/ForgeCAD-2.1.0-${{ matrix.arch }}.dmg"
           test -f "$DMG"
           MOUNT="$RUNNER_TEMP/forgecad-mount"
           mkdir -p "$MOUNT"
           hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
           trap 'hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true' EXIT
           test -d "$MOUNT/ForgeCAD.app"
-          test -x "$MOUNT/ForgeCAD.app/Contents/Resources/forge-engine/forge-engine"
-          file "$MOUNT/ForgeCAD.app/Contents/Resources/forge-engine/forge-engine"
+          ENGINE="$MOUNT/ForgeCAD.app/Contents/Resources/forge-engine/forge-engine"
+          test -x "$ENGINE"
+          file "$ENGINE"
+
+          export FORGECAD_PORT=8879
+          export FORGECAD_SESSION_TOKEN=dmg-smoke
+          export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-dmg-state"
+          "$ENGINE" > "$RUNNER_TEMP/dmg-engine.log" 2>&1 &
+          ENGINE_PID=$!
+          for i in {1..160}; do
+            if curl --fail --silent http://127.0.0.1:8879/v2/health > "$RUNNER_TEMP/dmg-health.json"; then break; fi
+            sleep 0.25
+          done
+          cat "$RUNNER_TEMP/dmg-health.json"
+          grep -q 'v1.1-full-scope' "$RUNNER_TEMP/dmg-health.json"
+          curl --fail --silent -H 'X-ForgeCAD-Session: dmg-smoke' http://127.0.0.1:8879/v2/component-registry/stats > "$RUNNER_TEMP/dmg-stats.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/dmg-stats.json')); assert d['total'] >= 238"
+          kill "$ENGINE_PID" 2>/dev/null || true
           hdiutil detach "$MOUNT"
           trap - EXIT
           shasum -a 256 "$DMG"
@@ -106,6 +134,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ForgeCAD-macOS-${{ matrix.arch }}-Installer
-          path: apps/desktop/release/ForgeCAD-2.0.2-${{ matrix.arch }}.dmg
+          path: apps/desktop/release/ForgeCAD-2.1.0-${{ matrix.arch }}.dmg
           if-no-files-found: error
           retention-days: 30
