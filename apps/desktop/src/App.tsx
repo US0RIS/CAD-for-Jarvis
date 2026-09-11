@@ -156,16 +156,15 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      try {
-        const [nextRuntime, nextProject, nextComponents] = await Promise.all([fetchRuntime(), fetchProject(), fetchComponents('')]);
-        if (cancelled) return;
-        setRuntime(nextRuntime);
-        setProject(nextProject);
-        setComponents(nextComponents.items);
-        setStartupError(null);
-      } catch (error) {
-        if (!cancelled) setStartupError(error instanceof Error ? error.message : String(error));
-      }
+      const tasks = [
+        fetchRuntime().then((nextRuntime) => { if (!cancelled) setRuntime(nextRuntime); }),
+        fetchProject().then((nextProject) => { if (!cancelled) setProject(nextProject); }),
+        fetchComponents('').then((nextComponents) => { if (!cancelled) setComponents(nextComponents.items); }),
+      ];
+      const results = await Promise.allSettled(tasks);
+      if (cancelled) return;
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      setStartupError(failure ? (failure.reason instanceof Error ? failure.reason.message : String(failure.reason)) : null);
     };
     void load();
     const runtimeTimer = window.setInterval(() => {
