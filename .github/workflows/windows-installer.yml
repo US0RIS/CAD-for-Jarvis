@@ -19,6 +19,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Confirm clean latest-main checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host '> git fetch origin main'
+          git fetch origin main
+          Write-Host '> git checkout --force main'
+          git checkout --force main
+          Write-Host '> git reset --hard origin/main'
+          git reset --hard origin/main
+          Write-Host '> git clean -ffdx'
+          git clean -ffdx
+          $head = git rev-parse HEAD
+          $status = git status --porcelain
+          Write-Host "HEAD=$head"
+          if ($status) { throw "Working tree is not clean:`n$status" }
+          Write-Host 'Working tree: clean'
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -89,6 +107,82 @@ jobs:
           if (-not $installer) { throw 'ForgeCAD installer was not produced.' }
           Write-Host "Installer: $($installer.FullName)"
           Write-Host "Size: $([math]::Round($installer.Length / 1MB, 1)) MB"
+
+      - name: Install and smoke-test packaged ForgeCAD
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-*.exe' | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'ForgeCAD installer was not produced.' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'ForgeCAD-Installed-Copy'
+          if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+
+          Write-Host "> Start-Process -FilePath '$installer' -ArgumentList '/S','/D=$installDir' -Wait -PassThru"
+          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+          Write-Host "Installer exit code: $($install.ExitCode)"
+          if ($install.ExitCode -ne 0) { throw "Installer failed with exit code $($install.ExitCode)." }
+
+          $app = Join-Path $installDir 'ForgeCAD.exe'
+          $engine = Join-Path $installDir 'resources\forge-engine\forge-engine.exe'
+          if (-not (Test-Path $app)) { throw "Installed desktop executable missing: $app" }
+          if (-not (Test-Path $engine)) { throw "Installed Forge Engine executable missing: $engine" }
+          Write-Host "Installed app: $app"
+          Write-Host "Installed engine: $engine"
+          $version = (Get-Item $app).VersionInfo.ProductVersion
+          Write-Host "Installed ProductVersion: $version"
+
+          $env:FORGECAD_PORT = '8878'
+          $env:FORGECAD_SESSION_TOKEN = 'installed-copy-smoke'
+          $env:FORGECAD_OLLAMA_MODEL = 'qwen3.8:27b'
+          Write-Host "> Start-Process -FilePath '$engine' -PassThru -WindowStyle Hidden"
+          $engineProcess = Start-Process -FilePath $engine -PassThru -WindowStyle Hidden
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            $health = $null
+            do {
+              try {
+                $health = Invoke-RestMethod http://127.0.0.1:8878/v2/health -TimeoutSec 2
+                if ($health.ok -and $health.api_version -eq '2') { break }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            if (-not ($health.ok -and $health.api_version -eq '2')) { throw 'Installed Forge Engine failed health smoke test.' }
+            Write-Host "Installed engine health: ok=$($health.ok) api_version=$($health.api_version)"
+          } finally {
+            if (-not $engineProcess.HasExited) { Stop-Process -Id $engineProcess.Id -Force }
+          }
+
+          Write-Host "> Start-Process -FilePath '$app' -ArgumentList '--disable-gpu' -PassThru"
+          $appProcess = Start-Process -FilePath $app -ArgumentList '--disable-gpu' -PassThru
+          $childEngine = $null
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              Start-Sleep -Milliseconds 500
+              $appProcess.Refresh()
+              if ($appProcess.HasExited) { throw "Installed ForgeCAD exited during launch smoke with code $($appProcess.ExitCode)." }
+              $childEngine = Get-CimInstance Win32_Process -Filter "Name='forge-engine.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.ExecutablePath -eq $engine } |
+                Select-Object -First 1
+            } while (-not $childEngine -and (Get-Date) -lt $deadline)
+            if (-not $childEngine) { throw 'Installed ForgeCAD did not start its bundled Forge Engine within 30 seconds.' }
+            Write-Host "Installed desktop launch: PASS pid=$($appProcess.Id) bundled_engine_pid=$($childEngine.ProcessId)"
+          } finally {
+            if (-not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force }
+            if ($childEngine) { Stop-Process -Id $childEngine.ProcessId -Force -ErrorAction SilentlyContinue }
+          }
+
+          $uninstaller = Get-ChildItem $installDir -Filter 'Uninstall*.exe' | Select-Object -First 1
+          if (-not $uninstaller) { throw "Uninstaller missing from $installDir" }
+          Write-Host "> Start-Process -FilePath '$($uninstaller.FullName)' -ArgumentList '/S' -Wait -PassThru"
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
+          Write-Host "Uninstaller exit code: $($uninstall.ExitCode)"
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($uninstall.ExitCode)." }
+
+          $deadline = (Get-Date).AddSeconds(30)
+          while ((Test-Path $app) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+          if (Test-Path $app) { throw "Installed ForgeCAD executable still exists after uninstall: $app" }
+          Write-Host 'Installed-copy smoke test: PASS'
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
