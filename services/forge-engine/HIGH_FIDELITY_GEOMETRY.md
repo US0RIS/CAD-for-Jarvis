@@ -22,3 +22,5 @@ The acceptance assembly currently has dedicated high-fidelity geometry for:
 `full_scope_selftest` rejects the release if any of those five components resolves below `detailed_parametric` fidelity or through the legacy generic-geometry fallback.
 
 The canonical `/v2/scene` payload publishes `geometry_source`, `geometry_fidelity`, and `geometry_fallback` for each rendered part so clients and tests can distinguish manufacturer CAD from derived geometry.
+
+Release qualification must execute this geometry-fidelity gate on the same clean branch head used to build the installer.
