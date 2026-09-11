@@ -34,8 +34,25 @@ test('vertical slice stays interactive and contained end to end', async ({ page 
 
   // Branch cards are real controls rather than decorative UI. Use text content rather
   // than the computed accessible name because branch metadata can change the latter.
+  //
+  // This assertion has failed on Windows CI even with /v2/project confirmed resolving
+  // correctly within a few seconds and a full 20s margin, which rules out a pure timing
+  // explanation. Dump the actual DOM state on failure - not before, since a snapshot taken
+  // before the wait starts just shows the same "too early" false negative - so a failure
+  // shows exactly what was (or wasn't) in the tree at the moment of timeout.
   const piBranch = page.locator('.branch-card').filter({ hasText: 'pi-control-v2' }).first();
-  await expect(piBranch).toBeVisible({ timeout: 20_000 });
+  try {
+    await expect(piBranch).toBeVisible({ timeout: 20_000 });
+  } catch (err) {
+    const domSnapshot = await page.evaluate(() => ({
+      branchCardCount: document.querySelectorAll('.branch-card').length,
+      branchCardTexts: [...document.querySelectorAll('.branch-card')].map((el) => el.textContent),
+      lineageFlowHtml: document.querySelector('.lineage-flow')?.outerHTML?.slice(0, 1500) ?? '<lineage-flow not found>',
+      bodyTextSnippet: document.body.textContent?.slice(0, 500) ?? '<no body text>',
+    }));
+    console.log('[dom snapshot at branch-card failure]', JSON.stringify(domSnapshot));
+    throw err;
+  }
   await piBranch.click();
   await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 20_000 });
 
