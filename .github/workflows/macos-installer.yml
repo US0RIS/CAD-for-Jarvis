@@ -74,7 +74,7 @@ jobs:
           export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-bundled-smoke"
           services/forge-engine/dist/forge-engine > "$RUNNER_TEMP/forge-engine.log" 2>&1 &
           ENGINE_PID=$!
-          trap 'kill "$ENGINE_PID" 2>/dev/null || true' EXIT
+          trap 'kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true' EXIT
           for i in {1..160}; do
             if curl --fail --silent http://127.0.0.1:8878/v2/health > "$RUNNER_TEMP/health.json"; then break; fi
             sleep 0.25
@@ -97,37 +97,74 @@ jobs:
           pnpm --filter @forgecad/desktop build
           pnpm --filter @forgecad/desktop exec electron-builder --mac dmg --${{ matrix.arch }}
 
-      - name: Verify DMG and installed engine full scope
+      - name: Verify DMG and installed-copy engine full scope
         shell: bash
         run: |
           set -euo pipefail
           DMG="apps/desktop/release/ForgeCAD-2.1.0-${{ matrix.arch }}.dmg"
           test -f "$DMG"
+
           MOUNT="$RUNNER_TEMP/forgecad-mount"
-          mkdir -p "$MOUNT"
+          INSTALLED="$RUNNER_TEMP/forgecad-installed/ForgeCAD.app"
+          mkdir -p "$MOUNT" "$(dirname "$INSTALLED")"
           hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
           trap 'hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true' EXIT
+
           test -d "$MOUNT/ForgeCAD.app"
-          ENGINE="$MOUNT/ForgeCAD.app/Contents/Resources/forge-engine/forge-engine"
+          /usr/bin/ditto "$MOUNT/ForgeCAD.app" "$INSTALLED"
+          test -d "$INSTALLED"
+
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INSTALLED/Contents/Info.plist")
+          test "$VERSION" = "2.1.0"
+          echo "Installed app version: $VERSION"
+
+          ENGINE="$INSTALLED/Contents/Resources/forge-engine/forge-engine"
           test -x "$ENGINE"
           file "$ENGINE"
+          case "${{ matrix.arch }}" in
+            arm64) file "$ENGINE" | grep -q 'arm64' ;;
+            x64) file "$ENGINE" | grep -q 'x86_64' ;;
+          esac
+
+          # The copy is now independent of the disk image. Unmount before starting
+          # native OCP/VTK code so process teardown can never keep the DMG busy.
+          hdiutil detach "$MOUNT"
+          trap - EXIT
 
           export FORGECAD_PORT=8879
           export FORGECAD_SESSION_TOKEN=dmg-smoke
           export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-dmg-state"
           "$ENGINE" > "$RUNNER_TEMP/dmg-engine.log" 2>&1 &
           ENGINE_PID=$!
-          for i in {1..160}; do
-            if curl --fail --silent http://127.0.0.1:8879/v2/health > "$RUNNER_TEMP/dmg-health.json"; then break; fi
+          trap 'kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true' EXIT
+
+          HEALTH_OK=0
+          for i in {1..200}; do
+            if curl --fail --silent http://127.0.0.1:8879/v2/health > "$RUNNER_TEMP/dmg-health.json"; then
+              HEALTH_OK=1
+              break
+            fi
             sleep 0.25
           done
+          if [ "$HEALTH_OK" -ne 1 ]; then
+            cat "$RUNNER_TEMP/dmg-engine.log" || true
+            exit 1
+          fi
+
           cat "$RUNNER_TEMP/dmg-health.json"
+          grep -q '"engine_version":"2.1.0"' "$RUNNER_TEMP/dmg-health.json"
           grep -q 'v1.1-full-scope' "$RUNNER_TEMP/dmg-health.json"
+
           curl --fail --silent -H 'X-ForgeCAD-Session: dmg-smoke' http://127.0.0.1:8879/v2/component-registry/stats > "$RUNNER_TEMP/dmg-stats.json"
-          python -c "import json; d=json.load(open('$RUNNER_TEMP/dmg-stats.json')); assert d['total'] >= 238"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/dmg-stats.json')); assert d['total'] >= 238; print('installed-copy registry', d['total'])"
+
+          curl --fail --silent -H 'X-ForgeCAD-Session: dmg-smoke' http://127.0.0.1:8879/v2/scene > "$RUNNER_TEMP/dmg-scene.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/dmg-scene.json')); assert d['authoritative'] is True; assert len(d['parts']) >= 6; assert all(len(p['mesh']['triangles']) >= 60 for p in d['parts'] if p.get('geometry_fidelity') in ('detailed_parametric','official_step','verified_step')); print('installed-copy scene parts', len(d['parts']))"
+
           kill "$ENGINE_PID" 2>/dev/null || true
-          hdiutil detach "$MOUNT"
+          wait "$ENGINE_PID" 2>/dev/null || true
           trap - EXIT
+
           shasum -a 256 "$DMG"
 
       - name: Upload macOS installer
