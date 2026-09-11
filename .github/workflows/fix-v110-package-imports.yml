@@ -26,7 +26,7 @@ jobs:
               ('        import assembly_validation\n        assembly=assembly_validation.validate_assembly', '        from . import assembly_validation\n        assembly=assembly_validation.validate_assembly'),
             ],
             'services/forge-engine/forge_engine/v110/acceptance_design.py': [
-              ('        import assembly_validation\n        report["assembly"]=', '        from . import assembly_validation\n        report["assembly"]="),
+              ('        import assembly_validation\n        report["assembly"]=', '        from . import assembly_validation\n        report["assembly"]='),
               ('    import core\n    project=core.upgrade_project', '    from . import core\n    project=core.upgrade_project'),
             ],
             'services/forge-engine/forge_engine/v110/agents.py': [
