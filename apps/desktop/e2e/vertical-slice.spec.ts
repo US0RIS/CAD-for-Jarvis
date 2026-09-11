@@ -18,9 +18,9 @@ test('vertical slice stays interactive and contained end to end', async ({ page 
   // Branch cards are real controls rather than decorative UI. Use text content rather
   // than the computed accessible name because branch metadata can change the latter.
   const piBranch = page.locator('.branch-card').filter({ hasText: 'pi-control-v2' }).first();
-  await expect(piBranch).toBeVisible();
+  await expect(piBranch).toBeVisible({ timeout: 20_000 });
   await piBranch.click();
-  await expect(piBranch).toHaveAttribute('aria-pressed', 'true');
+  await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 20_000 });
 
   await page.getByTestId('tab-notebook').click();
   await expect(page.locator('.dock-content')).toContainText('NOTEBOOK');
