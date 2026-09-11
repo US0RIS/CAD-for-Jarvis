@@ -43,14 +43,27 @@ def main() -> None:
     assert scene["authoritative"] is True
     assert len(scene["parts"]) >= 6
     assert all(part["mesh"]["positions"] and part["mesh"]["triangles"] for part in scene["parts"])
+
+    # Fidelity metadata alone cannot prove that a visible part is realistic. A generic
+    # cuboid tessellates to only 12 triangles, so require materially complex rendered
+    # meshes for every purchased part in the acceptance assembly as an independent gate.
+    core = __import__("forge_engine.v110.core", fromlist=["PROJECT"])
+    scene_by_id = {part["id"]: part for part in scene["parts"]}
     acceptance_geometry = {}
-    for obj in __import__("forge_engine.v110.core", fromlist=["PROJECT"]).PROJECT.get("objects", []):
+    acceptance_meshes = {}
+    for obj in core.PROJECT.get("objects", []):
         component_id = obj.get("component_ref")
         if component_id in realistic_components.ACCEPTANCE_COMPONENTS:
             status = physical_components.component_geometry_status(obj)
             acceptance_geometry[component_id] = status
             assert component_registry.GEOMETRY_RANK.get(status.get("geometry_fidelity", "none"), 0) >= component_registry.GEOMETRY_RANK["detailed_parametric"], status
             assert status.get("geometry_source") not in {"legacy_fallback", "legacy_estimate"}, status
+            rendered = scene_by_id[str(obj["id"])]["mesh"]
+            triangle_count = len(rendered.get("triangles") or [])
+            vertex_count = len(rendered.get("positions") or [])
+            acceptance_meshes[component_id] = {"triangles": triangle_count, "vertices": vertex_count}
+            assert triangle_count >= 60, {"component_id": component_id, "triangles": triangle_count, "reason": "acceptance component is still visually equivalent to primitive/envelope geometry"}
+            assert vertex_count >= 40, {"component_id": component_id, "vertices": vertex_count, "reason": "acceptance component mesh is insufficiently detailed"}
     assert set(acceptance_geometry) == set(realistic_components.ACCEPTANCE_COMPONENTS), acceptance_geometry
 
     validation = PROJECT.validation()
@@ -112,6 +125,7 @@ def main() -> None:
         "responsive_snapshot_verified": True,
         "snapshot_seconds": round(summary_seconds, 3),
         "acceptance_geometry": acceptance_geometry,
+        "acceptance_meshes": acceptance_meshes,
     }, indent=2))
 
 
