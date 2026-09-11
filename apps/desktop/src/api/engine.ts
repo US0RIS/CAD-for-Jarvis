@@ -18,14 +18,29 @@ export interface BranchPayload {
   active: boolean;
 }
 
+export interface PartPayload {
+  id: string;
+  name: string;
+  role: string;
+  mass_g: number;
+  material: string;
+  programmable_workspace_id?: string | null;
+  component_ref?: string | null;
+  geometry_fidelity?: string;
+}
+
 export interface ProjectPayload {
   name: string;
   revision: string;
   active_branch: string;
   branches: BranchPayload[];
-  parts: Array<{ id: string; name: string; role: string; mass_g: number; material: string; programmable_workspace_id?: string | null }>;
+  parts: PartPayload[];
   history: Array<{ time: string; actor: string; message: string; branch: string }>;
   selected_part_id?: string | null;
+  bom?: Array<Record<string, unknown>>;
+  connections?: Array<Record<string, unknown>>;
+  requirements?: Array<Record<string, unknown>>;
+  metrics?: Record<string, unknown>;
 }
 
 export interface ComponentPayload {
@@ -35,12 +50,54 @@ export interface ComponentPayload {
   category: string;
   image?: { kind: string; uri: string; source?: string };
   key_specs: Array<{ label: string; value: string }>;
-  price?: { amount: number; currency: string; supplier: string };
+  price?: { amount: number; currency: string; supplier: string } | null;
   fit_score?: number;
   fit_reason?: string;
   unknown_required_fields: string[];
   geometry_fidelity: string;
+  trust_score?: number;
   added?: boolean;
+}
+
+export interface RegistryStatsPayload {
+  schema_version: number;
+  total: number;
+  builtin: number;
+  custom: number;
+  categories: string[];
+  geometry_fidelity: Record<string, number>;
+  provenance: Record<string, number>;
+}
+
+export interface ValidationPayload {
+  ok: boolean;
+  counts: { error: number; warning: number; info: number };
+  risks: Array<{ severity: 'error' | 'warning' | 'info'; code?: string; message: string; [key: string]: unknown }>;
+  requirements?: Array<Record<string, unknown>>;
+  metrics?: Record<string, unknown>;
+  assembly?: Record<string, unknown>;
+}
+
+export interface SceneMeshPayload {
+  id: string;
+  positions: number[][];
+  triangles: number[][];
+  triangle_colors?: string[];
+  color?: string;
+}
+
+export interface ScenePayload {
+  revision: string;
+  branch: string;
+  authoritative: boolean;
+  parts: Array<{
+    id: string;
+    name: string;
+    semantic_role: string;
+    explode_vector: number[];
+    programmable_workspace_id?: string | null;
+    mesh: SceneMeshPayload;
+  }>;
 }
 
 export interface WorkspacePayload {
@@ -88,28 +145,64 @@ export async function engineConnection(): Promise<ForgeEngineConnection> {
   return cachedConnection;
 }
 
-export async function engineFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function engineRawFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const connection = await engineConnection();
   const headers = new Headers(init.headers);
   headers.set('X-ForgeCAD-Session', connection.sessionToken);
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(`${connection.baseUrl}${path}`, { ...init, headers });
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`Forge Engine ${response.status}: ${detail}`);
   }
+  return response;
+}
+
+export async function engineFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await engineRawFetch(path, init);
   return response.json() as Promise<T>;
 }
 
 export const fetchRuntime = () => engineFetch<RuntimePayload>('/v2/runtime');
 export const fetchProject = () => engineFetch<ProjectPayload>('/v2/project');
-export const fetchComponents = (query = '') => engineFetch<{ items: ComponentPayload[] }>(`/v2/components?q=${encodeURIComponent(query)}`);
+export const fetchScene = () => engineFetch<ScenePayload>('/v2/scene');
+export const fetchRegistryStats = () => engineFetch<RegistryStatsPayload>('/v2/component-registry/stats');
+export const fetchValidation = () => engineFetch<ValidationPayload>('/v2/validation');
+export const fetchComponents = (query = '', category?: string, voltage?: number) => {
+  const params = new URLSearchParams({ q: query });
+  if (category) params.set('category', category);
+  if (voltage != null) params.set('voltage_v', String(voltage));
+  return engineFetch<{ items: ComponentPayload[]; stats?: RegistryStatsPayload }>(`/v2/components?${params.toString()}`);
+};
 export const fetchWorkspace = (id: string) => engineFetch<WorkspacePayload>(`/v2/code/workspaces/${encodeURIComponent(id)}`);
 export const fetchCodeFile = (workspaceId: string, path: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`);
 export const saveCodeFile = (workspaceId: string, path: string, content: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`, { method: 'PUT', body: JSON.stringify({ content }) });
 export const fetchJob = (id: string) => engineFetch<JobPayload>(`/v2/jobs/${encodeURIComponent(id)}`);
 export const activateBranch = (name: string) => engineFetch<ProjectPayload>(`/v2/branches/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+export const createBranch = (name: string, reason = '') => engineFetch<ProjectPayload>('/v2/branches', { method: 'POST', body: JSON.stringify({ name, reason }) });
+export const compareBranch = (name: string) => engineFetch<{ source: string; target: string; changes: Array<Record<string, unknown>>; count: number }>(`/v2/branches/${encodeURIComponent(name)}/compare`);
+export const setBranchStatus = (name: string, status: BranchPayload['status'], note = '', physicalVerified = false) => engineFetch<{ branch: Record<string, unknown>; project: ProjectPayload }>(`/v2/branches/${encodeURIComponent(name)}/status`, { method: 'PUT', body: JSON.stringify({ status, note, physical_verified: physicalVerified }) });
 export const addComponent = (id: string) => engineFetch<{ component: ComponentPayload; project: ProjectPayload }>(`/v2/components/${encodeURIComponent(id)}/add`, { method: 'POST' });
+export const executeOperation = (op: string, args: Record<string, unknown>, reason = '') => engineFetch<{ operation: Record<string, unknown>; project: ProjectPayload }>('/v2/operations', { method: 'POST', body: JSON.stringify({ op, args, reason }) });
+export const undoHistory = () => engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/undo', { method: 'POST' });
+export const redoHistory = () => engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/redo', { method: 'POST' });
+
+export async function importStepFile(file: File) {
+  const body = new FormData();
+  body.set('file', file);
+  return engineFetch<{ object: Record<string, unknown>; project: ProjectPayload }>('/v2/import/step', { method: 'POST', body });
+}
+
+export async function importProjectBundle(file: File) {
+  const body = new FormData();
+  body.set('file', file);
+  return engineFetch<{ project: ProjectPayload }>('/v2/project/import', { method: 'POST', body });
+}
+
+export async function downloadProjectBundle(): Promise<Blob> {
+  const response = await engineRawFetch('/v2/project/export');
+  return response.blob();
+}
 
 export function createJob(input: { kind: 'agent' | 'simulation' | 'campaign' | 'component-search' | 'deploy'; text?: string; branch?: string; selected_object_id?: string | null; apply_edits?: boolean; payload?: Record<string, unknown> }) {
   return engineFetch<JobPayload>('/v2/jobs', { method: 'POST', body: JSON.stringify(input) });
