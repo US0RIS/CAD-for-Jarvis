@@ -21,7 +21,6 @@ jobs:
         run: |
           from pathlib import Path
 
-          # Preserve canonical object transforms when the renderer manipulates pre-transformed meshes.
           p = Path('services/forge-engine/forge_engine/engineering_state.py')
           s = p.read_text()
           old = '''                "mesh": mesh,\n                "explode_vector": explode,\n                "programmable_workspace_id": str(obj["id"]) if isinstance(obj.get("code"), dict) else None,\n'''
@@ -43,11 +42,10 @@ jobs:
           if old not in s: raise SystemExit('SceneController authoritativeBase assignment missing')
           s = s.replace(old, new)
           old = '''    const object = record.object;\n    const args = {\n      id: this.selectedId,\n      position: [object.position.x, object.position.y, object.position.z],\n      rotation_deg: [THREE.MathUtils.radToDeg(object.rotation.x), THREE.MathUtils.radToDeg(object.rotation.y), THREE.MathUtils.radToDeg(object.rotation.z)],\n      scale: [object.scale.x, object.scale.y, object.scale.z],\n    };\n'''
-          new = '''    const object = record.object;\n    const base = object.userData.authoritativeBase as { position?: number[]; rotation_deg?: number[]; scale?: number[] } | undefined;\n    const basePosition = base?.position ?? [0, 0, 0];\n    const baseRotation = base?.rotation_deg ?? [0, 0, 0];\n    const baseScale = base?.scale ?? [1, 1, 1];\n    const args = {\n      id: this.selectedId,\n      position: [\n        Number(basePosition[0] ?? 0) + object.position.x,\n        Number(basePosition[1] ?? 0) + object.position.y,\n        Number(basePosition[2] ?? 0) + object.position.z,\n      ],\n      rotation_deg: [\n        Number(baseRotation[0] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.x),\n        Number(baseRotation[1] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.y),\n        Number(baseRotation[2] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.z),\n      ],\n      scale: [\n        Number(baseScale[0] ?? 1) * object.scale.x,\n        Number(baseScale[1] ?? 1) * object.scale.y,\n        Number(baseScale[2] ?? 1) * object.scale.z,\n      ],\n    };\n'''
+          new = '''    const object = record.object;\n    const base = object.userData.authoritativeBase as { position?: number[]; rotation_deg?: number[]; scale?: number[] } | undefined;\n    const basePosition = base?.position ?? [0, 0, 0];\n    const baseRotation = base?.rotation_deg ?? [0, 0, 0];\n    const baseScale = base?.scale ?? [1, 1, 1];\n    const args = {\n      id: this.selectedId,\n      position: [Number(basePosition[0] ?? 0) + object.position.x, Number(basePosition[1] ?? 0) + object.position.y, Number(basePosition[2] ?? 0) + object.position.z],\n      rotation_deg: [Number(baseRotation[0] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.x), Number(baseRotation[1] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.y), Number(baseRotation[2] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.z)],\n      scale: [Number(baseScale[0] ?? 1) * object.scale.x, Number(baseScale[1] ?? 1) * object.scale.y, Number(baseScale[2] ?? 1) * object.scale.z],\n    };\n'''
           if old not in s: raise SystemExit('SceneController commitTransform block missing')
           p.write_text(s.replace(old, new))
 
-          # The release self-test must prove STEP import rather than merely asserting the API exists.
           p = Path('services/forge-engine/forge_engine/full_scope_selftest.py')
           s = p.read_text()
           s = s.replace('import tempfile\n', 'import tempfile\n\nimport cadquery as cq\n')
@@ -56,27 +54,16 @@ jobs:
           if old not in s: raise SystemExit('STEP selftest insertion point missing')
           p.write_text(s.replace(old, new))
 
-          # Keep the component button locator stable after it changes into the disabled Added state.
           p = Path('apps/desktop/e2e/vertical-slice.spec.ts')
           s = p.read_text()
           old = '''  const firstAdd = page.locator('.component-card .add-button:not([disabled])').first();\n  await expect(firstAdd).toBeVisible({ timeout: 20_000 });\n  await firstAdd.click();\n  await expect(firstAdd).toContainText('Added', { timeout: 20_000 });\n'''
           new = '''  const firstAdd = page.locator('.component-card .add-button').first();\n  await expect(firstAdd).toBeVisible({ timeout: 20_000 });\n  await expect(firstAdd).toBeEnabled();\n  await firstAdd.click();\n  await expect(page.locator('.component-card .add-button').first()).toContainText('Added', { timeout: 20_000 });\n'''
           if old not in s: raise SystemExit('E2E component add block missing')
           p.write_text(s.replace(old, new))
-
-          # One final marker commit must trigger every release gate on the same exact SHA.
-          for filename in ['.github/workflows/windows-installer.yml', '.github/workflows/macos-installer.yml']:
-              p = Path(filename)
-              s = p.read_text()
-              needle = "      - 'pnpm-workspace.yaml'\n" if 'windows' in filename else "      - '.github/workflows/macos-installer.yml'\n"
-              if "FULL_SCOPE_QUALIFY" not in s:
-                  if needle not in s: raise SystemExit(f'qualification path insertion point missing in {filename}')
-                  s = s.replace(needle, needle + "      - 'FULL_SCOPE_QUALIFY'\n")
-              p.write_text(s)
       - name: Commit release corrections
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add services/forge-engine apps/desktop .github/workflows/windows-installer.yml .github/workflows/macos-installer.yml
+          git add services/forge-engine apps/desktop
           git commit -m "Harden full-scope engineering release acceptance"
           git push origin HEAD:forgecad/full-v110-scope
