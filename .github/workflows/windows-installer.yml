@@ -2,7 +2,7 @@ name: ForgeCAD Windows Installer
 
 on:
   push:
-    branches: [main]
+    branches: [main, forgecad/full-v110-scope]
     paths:
       - 'apps/desktop/**'
       - 'services/forge-engine/**'
@@ -15,20 +15,16 @@ jobs:
   installer:
     name: Build ForgeCAD-Setup.exe
     runs-on: windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
 
-      - name: Confirm clean latest-main checkout
+      - name: Confirm clean checkout
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host '> git fetch origin main'
-          git fetch origin main
-          Write-Host '> git checkout --force main'
-          git checkout --force main
-          Write-Host '> git reset --hard origin/main'
-          git reset --hard origin/main
+          Write-Host '> git reset --hard HEAD'
+          git reset --hard HEAD
           Write-Host '> git clean -ffdx'
           git clean -ffdx
           $head = git rev-parse HEAD
@@ -51,40 +47,60 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Build standalone Forge Engine
+      - name: Install and self-test full engineering layer
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e services/forge-engine pyinstaller
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-full-scope-selftest"
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\services\forge-engine"
+          python -m forge_engine.full_scope_selftest
+
+      - name: Build standalone Forge Engine
+        shell: pwsh
+        run: |
           python -m PyInstaller `
             --noconfirm `
             --clean `
             --onefile `
             --name forge-engine `
+            --collect-all cadquery `
+            --collect-all OCP `
+            --collect-all vtkmodules `
+            --collect-submodules forge_engine.v110 `
             --distpath services/forge-engine/dist `
             --workpath services/forge-engine/build/pyinstaller `
             --specpath services/forge-engine/build `
             services/forge-engine/forge_engine/desktop_entry.py
           if (-not (Test-Path 'services/forge-engine/dist/forge-engine.exe')) { throw 'Forge Engine executable was not produced.' }
 
-      - name: Smoke bundled Forge Engine
+      - name: Smoke bundled Forge Engine full scope
         shell: pwsh
         run: |
           $env:FORGECAD_PORT = '8877'
           $env:FORGECAD_SESSION_TOKEN = 'installer-smoke'
           $env:FORGECAD_OLLAMA_MODEL = 'qwen3.8:27b'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-bundled-smoke"
           $p = Start-Process -FilePath "$env:GITHUB_WORKSPACE/services/forge-engine/dist/forge-engine.exe" -PassThru -WindowStyle Hidden
           try {
-            $deadline = (Get-Date).AddSeconds(30)
-            $ok = $false
+            $deadline = (Get-Date).AddSeconds(60)
+            $headers = @{ 'X-ForgeCAD-Session' = 'installer-smoke' }
+            $health = $null
             do {
               try {
-                $r = Invoke-RestMethod http://127.0.0.1:8877/v2/health -TimeoutSec 2
-                if ($r.ok -and $r.api_version -eq '2') { $ok = $true; break }
+                $health = Invoke-RestMethod http://127.0.0.1:8877/v2/health -TimeoutSec 2
+                if ($health.ok -and $health.api_version -eq '2') { break }
               } catch {}
               Start-Sleep -Milliseconds 250
             } while ((Get-Date) -lt $deadline)
-            if (-not $ok) { throw 'Bundled Forge Engine failed health smoke test.' }
+            if (-not ($health.ok -and $health.engineering_layer -eq 'v1.1-full-scope')) { throw 'Bundled Forge Engine did not report the full engineering layer.' }
+            $stats = Invoke-RestMethod http://127.0.0.1:8877/v2/component-registry/stats -Headers $headers -TimeoutSec 20
+            if ([int]$stats.total -lt 238) { throw "Expected at least 238 registry components, got $($stats.total)." }
+            $scene = Invoke-RestMethod http://127.0.0.1:8877/v2/scene -Headers $headers -TimeoutSec 60
+            if (-not $scene.authoritative -or @($scene.parts).Count -lt 6) { throw 'Canonical scene is missing the full acceptance assembly.' }
+            $validation = Invoke-RestMethod http://127.0.0.1:8877/v2/validation -Headers $headers -TimeoutSec 60
+            if (-not $validation.metrics) { throw 'Validation payload did not contain engineering metrics.' }
+            Write-Host "Bundled full scope: registry=$($stats.total) scene_parts=$(@($scene.parts).Count) validation_errors=$($validation.counts.error)"
           } finally {
             if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           }
@@ -108,7 +124,7 @@ jobs:
           Write-Host "Installer: $($installer.FullName)"
           Write-Host "Size: $([math]::Round($installer.Length / 1MB, 1)) MB"
 
-      - name: Install and smoke-test packaged ForgeCAD
+      - name: Install and smoke-test packaged ForgeCAD full scope
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -130,15 +146,18 @@ jobs:
           Write-Host "Installed engine: $engine"
           $version = (Get-Item $app).VersionInfo.ProductVersion
           Write-Host "Installed ProductVersion: $version"
+          if (-not $version.StartsWith('2.1.0')) { throw "Expected installed ProductVersion 2.1.0, got $version" }
 
           $env:FORGECAD_PORT = '8878'
           $env:FORGECAD_SESSION_TOKEN = 'installed-copy-smoke'
           $env:FORGECAD_OLLAMA_MODEL = 'qwen3.8:27b'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-installed-smoke-state"
           Write-Host "> Start-Process -FilePath '$engine' -PassThru -WindowStyle Hidden"
           $engineProcess = Start-Process -FilePath $engine -PassThru -WindowStyle Hidden
           try {
-            $deadline = (Get-Date).AddSeconds(30)
+            $deadline = (Get-Date).AddSeconds(60)
             $health = $null
+            $headers = @{ 'X-ForgeCAD-Session' = 'installed-copy-smoke' }
             do {
               try {
                 $health = Invoke-RestMethod http://127.0.0.1:8878/v2/health -TimeoutSec 2
@@ -146,8 +165,25 @@ jobs:
               } catch {}
               Start-Sleep -Milliseconds 250
             } while ((Get-Date) -lt $deadline)
-            if (-not ($health.ok -and $health.api_version -eq '2')) { throw 'Installed Forge Engine failed health smoke test.' }
-            Write-Host "Installed engine health: ok=$($health.ok) api_version=$($health.api_version)"
+            if (-not ($health.ok -and $health.api_version -eq '2' -and $health.engineering_layer -eq 'v1.1-full-scope')) { throw 'Installed Forge Engine failed full-scope health smoke test.' }
+            Write-Host "Installed engine health: ok=$($health.ok) api_version=$($health.api_version) engineering_layer=$($health.engineering_layer)"
+
+            $stats = Invoke-RestMethod http://127.0.0.1:8878/v2/component-registry/stats -Headers $headers -TimeoutSec 20
+            Write-Host "Installed component registry: total=$($stats.total) builtin=$($stats.builtin)"
+            if ([int]$stats.total -lt 238) { throw "Installed registry incomplete: $($stats.total)" }
+
+            $project = Invoke-RestMethod http://127.0.0.1:8878/v2/project -Headers $headers -TimeoutSec 20
+            if (-not (@($project.parts) | Where-Object { $_.component_ref -eq 'compute.raspberry_pi_5_8gb' })) { throw 'Installed acceptance project is missing Raspberry Pi 5.' }
+            if (-not (@($project.branches) | Where-Object { $_.name -eq 'baseline' -and $_.protected })) { throw 'Installed project is missing protected working baseline.' }
+            Write-Host "Installed project: parts=$(@($project.parts).Count) branches=$(@($project.branches).Count) BOM=$(@($project.bom).Count)"
+
+            $scene = Invoke-RestMethod http://127.0.0.1:8878/v2/scene -Headers $headers -TimeoutSec 60
+            if (-not $scene.authoritative -or @($scene.parts).Count -lt 6) { throw 'Installed canonical scene failed.' }
+            Write-Host "Installed authoritative scene: parts=$(@($scene.parts).Count)"
+
+            $validation = Invoke-RestMethod http://127.0.0.1:8878/v2/validation -Headers $headers -TimeoutSec 60
+            Write-Host "Installed validation: errors=$($validation.counts.error) warnings=$($validation.counts.warning)"
+            if (-not $validation.metrics) { throw 'Installed validation payload missing metrics.' }
           } finally {
             if (-not $engineProcess.HasExited) { Stop-Process -Id $engineProcess.Id -Force }
           }
@@ -156,7 +192,7 @@ jobs:
           $appProcess = Start-Process -FilePath $app -ArgumentList '--disable-gpu' -PassThru
           $childEngine = $null
           try {
-            $deadline = (Get-Date).AddSeconds(30)
+            $deadline = (Get-Date).AddSeconds(45)
             do {
               Start-Sleep -Milliseconds 500
               $appProcess.Refresh()
@@ -165,7 +201,7 @@ jobs:
                 Where-Object { $_.ExecutablePath -eq $engine } |
                 Select-Object -First 1
             } while (-not $childEngine -and (Get-Date) -lt $deadline)
-            if (-not $childEngine) { throw 'Installed ForgeCAD did not start its bundled Forge Engine within 30 seconds.' }
+            if (-not $childEngine) { throw 'Installed ForgeCAD did not start its bundled Forge Engine within 45 seconds.' }
             Write-Host "Installed desktop launch: PASS pid=$($appProcess.Id) bundled_engine_pid=$($childEngine.ProcessId)"
           } finally {
             if (-not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force }
@@ -182,7 +218,7 @@ jobs:
           $deadline = (Get-Date).AddSeconds(30)
           while ((Test-Path $app) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
           if (Test-Path $app) { throw "Installed ForgeCAD executable still exists after uninstall: $app" }
-          Write-Host 'Installed-copy smoke test: PASS'
+          Write-Host 'Installed-copy full-scope smoke test: PASS'
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
