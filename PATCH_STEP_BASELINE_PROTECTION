@@ -1,0 +1,1 @@
+Protect physically verified/working baselines by auto-forking before STEP part import, and prove the invariant in full-scope acceptance.
