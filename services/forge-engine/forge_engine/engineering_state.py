@@ -364,7 +364,9 @@ class EngineeringProject:
         return {**restored, "project": self.snapshot()}
 
     def import_step_part(self, filename: str, data: bytes) -> dict[str, Any]:
-        obj = core.import_step_bytes(filename, data)
+        with core.LOCK:
+            core.ensure_mutable("human", f"Import STEP {filename}")
+            obj = core.import_step_bytes(filename, data)
         return {"object": obj, "project": self.snapshot()}
 
     def import_step_component(self, filename: str, data: bytes, *, manufacturer: str, model: str, category: str = "custom") -> dict[str, Any]:
