@@ -6,10 +6,11 @@ import {
   Search, Send, Settings, ShieldCheck, Undo2, Redo2, X, CircleAlert,
 } from 'lucide-react';
 import {
-  activateBranch, addComponent, createJob, fetchComponents, fetchJob, fetchProject, fetchRuntime,
-  subscribeEngineEvents, type ComponentPayload, type JobPayload, type ProjectPayload, type RuntimePayload,
+  activateBranch, addComponent, createJob, fetchComponents, fetchJob, fetchProject, fetchRegistryStats, fetchRuntime,
+  redoHistory, subscribeEngineEvents, undoHistory, type ComponentPayload, type JobPayload, type ProjectPayload, type RegistryStatsPayload, type RuntimePayload,
 } from './api/engine';
 import { CodeWorkspace } from './components/CodeWorkspace';
+import { EngineeringWorkbench } from './components/EngineeringWorkbench';
 import { Viewport } from './components/Viewport';
 
 type RightTab = 'design' | 'components' | 'analysis';
@@ -113,6 +114,9 @@ export default function App() {
   const [project, setProject] = useState<ProjectPayload | null>(null);
   const [components, setComponents] = useState<ComponentPayload[]>([]);
   const [componentQuery, setComponentQuery] = useState('');
+  const [componentCategory, setComponentCategory] = useState('');
+  const [componentVoltage, setComponentVoltage] = useState('');
+  const [registryStats, setRegistryStats] = useState<RegistryStatsPayload | null>(null);
   const [addingComponentId, setAddingComponentId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>('raspberry-pi');
   const [sceneReady, setSceneReady] = useState(false);
@@ -134,10 +138,16 @@ export default function App() {
   const jobBusy = Boolean(activeJob && !terminalStates.has(activeJob.state));
 
   const refreshProject = useCallback(async () => {
-    const [nextProject, nextComponents] = await Promise.all([fetchProject(), fetchComponents(componentQuery)]);
+    const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;
+    const [nextProject, nextComponents, nextStats] = await Promise.all([
+      fetchProject(),
+      fetchComponents(componentQuery, componentCategory || undefined, Number.isFinite(voltage) ? voltage : undefined),
+      fetchRegistryStats(),
+    ]);
     setProject(nextProject);
     setComponents(nextComponents.items);
-  }, [componentQuery]);
+    setRegistryStats(nextStats);
+  }, [componentQuery, componentCategory, componentVoltage]);
 
   const acceptJobSnapshot = useCallback((job: JobPayload) => {
     setActiveJob(job);
@@ -160,6 +170,7 @@ export default function App() {
         fetchRuntime().then((nextRuntime) => { if (!cancelled) setRuntime(nextRuntime); }),
         fetchProject().then((nextProject) => { if (!cancelled) setProject(nextProject); }),
         fetchComponents('').then((nextComponents) => { if (!cancelled) setComponents(nextComponents.items); }),
+        fetchRegistryStats().then((nextStats) => { if (!cancelled) setRegistryStats(nextStats); }),
       ];
       const results = await Promise.allSettled(tasks);
       if (cancelled) return;
@@ -188,10 +199,11 @@ export default function App() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void fetchComponents(componentQuery).then((result) => setComponents(result.items)).catch(() => undefined);
+      const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;
+      void fetchComponents(componentQuery, componentCategory || undefined, Number.isFinite(voltage) ? voltage : undefined).then((result) => setComponents(result.items)).catch(() => undefined);
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [componentQuery]);
+  }, [componentQuery, componentCategory, componentVoltage]);
 
   useEffect(() => {
     const node = conversationRef.current;
@@ -218,6 +230,20 @@ export default function App() {
       setChat((items) => [...items, { role: 'agent', text: `**Could not start engineering job:** ${error instanceof Error ? error.message : String(error)}` }]);
     }
   }, [jobBusy, project?.active_branch, selectedId]);
+
+  async function undoDesign() {
+    try {
+      const result = await undoHistory();
+      setProject(result.project);
+    } catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }
+  }
+
+  async function redoDesign() {
+    try {
+      const result = await redoHistory();
+      setProject(result.project);
+    } catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }
+  }
 
   async function switchBranch(name: string) {
     try {
@@ -294,10 +320,10 @@ export default function App() {
       <header className="project-toolbar">
         <div className="project-title">{project?.name ?? 'Loading project…'} <ChevronDown size={14}/></div>
         <button className="branch-select" onClick={() => setBottomTab('designs')}><GitBranch size={14}/>{project?.active_branch ?? '—'}<ChevronDown size={13}/></button>
-        <button className="icon-button" disabled title="Undo will be enabled when command history lands"><Undo2 size={16}/></button>
-        <button className="icon-button" disabled title="Redo will be enabled when command history lands"><Redo2 size={16}/></button>
+        <button className="icon-button" title="Undo canonical design operation" onClick={() => void undoDesign()}><Undo2 size={16}/></button>
+        <button className="icon-button" title="Redo canonical design operation" onClick={() => void redoDesign()}><Redo2 size={16}/></button>
         <div className="toolbar-spacer"/>
-        <button className="toolbar-button" disabled title="STEP import is not implemented in this vertical slice">⇧ Import STEP</button>
+        <button className="toolbar-button" title="Open STEP and portable project controls" onClick={() => setRightTab('design')}>⇧ Import / Export</button>
         <button className="toolbar-button" onClick={() => setBottomTab('designs')}><FolderOpen size={15}/>Project</button>
         <button className="dynamics-button" onClick={() => void startSimulation()}><Play size={15}/>Dynamics</button>
       </header>
@@ -321,12 +347,15 @@ export default function App() {
           <div className="rail-tabs">{(['design', 'components', 'analysis'] as RightTab[]).map((tab) => <button key={tab} className={rightTab === tab ? 'active' : ''} onClick={() => setRightTab(tab)}>{tab.charAt(0).toUpperCase() + tab.slice(1)}</button>)}</div>
           {rightTab === 'components' ? <div className="component-library">
             <h2>Real component library</h2><p>Actual parts from real suppliers. Buildable designs.</p>
-            <div className="search-box"><Search size={15}/><input value={componentQuery} placeholder="Search components" onChange={(event) => setComponentQuery(event.target.value)}/><button disabled title="Advanced filters are not enabled yet">☷</button></div>
-            <div className="filter-row"><button disabled>Category All⌄</button><button disabled>Voltage Any⌄</button><button disabled>Supplier Any⌄</button></div>
-            <div className="results-meta"><span>{components.length} results</span><span>Sort: Relevance</span></div>
+            <div className="search-box"><Search size={15}/><input value={componentQuery} placeholder="Search 238+ real components" onChange={(event) => setComponentQuery(event.target.value)}/></div>
+            <div className="filter-row">
+              <select aria-label="Component category" value={componentCategory} onChange={(event) => setComponentCategory(event.target.value)}><option value="">Category All</option>{registryStats?.categories.map((category) => <option key={category} value={category}>{category}</option>)}</select>
+              <input aria-label="Component voltage" value={componentVoltage} onChange={(event) => setComponentVoltage(event.target.value)} placeholder="Voltage (V)" inputMode="decimal"/>
+            </div>
+            <div className="results-meta"><span>{components.length} shown · {registryStats?.total ?? '…'} catalog</span><span>Constraint-aware relevance</span></div>
             {components.map((item) => <ComponentCard key={item.id} item={item} adding={addingComponentId === item.id} onAdd={(id) => void addLibraryComponent(id)}/>)}
             <div className="campaign-card"><div className="campaign-title">⌬ <div><strong>Autonomous engineering campaign</strong><span>Let AI explore, simulate, and improve this design.</span></div></div><ul><li>Parameter optimizer (multi-objective)</li><li>Generate and test design variants</li><li>Validate against real-world constraints</li></ul><button disabled={jobBusy} onClick={() => void startCampaign()}>Start engineering campaign →</button></div>
-          </div> : <div className="rail-empty"><strong>{rightTab === 'design' ? 'Design inspector' : 'Analysis workspace'}</strong><span>{rightTab === 'design' ? `${project?.parts.length ?? 0} physical parts · revision ${project?.revision ?? '—'} · active ${project?.active_branch ?? '—'}` : 'Async solver jobs mount here without blocking the viewport.'}</span></div>}
+          </div> : <EngineeringWorkbench mode={rightTab} project={project} selectedId={selectedId} activeJob={activeJob} onProject={setProject} onStartSimulation={() => void startSimulation()} onStartCampaign={() => void startCampaign()}/>}
         </aside>
       </section>
 
