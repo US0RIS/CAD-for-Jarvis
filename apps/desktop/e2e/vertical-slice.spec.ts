@@ -1,6 +1,23 @@
 import { expect, test } from '@playwright/test';
 
 test('vertical slice stays interactive and contained end to end', async ({ page }) => {
+  // Diagnostics: this spec has a history of hard-to-diagnose Windows CI failures, and the
+  // Playwright HTML report/trace artifact is unreachable from some environments (blocked
+  // egress to the blob storage GitHub Actions serves it from). Surface what actually
+  // happens on the wire and in the page directly into the CI text log instead - cheap,
+  // harmless on a passing run, and the only way to get real signal when it isn't.
+  page.on('console', (msg) => console.log(`[browser console:${msg.type()}]`, msg.text()));
+  page.on('pageerror', (err) => console.log('[browser pageerror]', err.stack ?? String(err)));
+  page.on('requestfailed', (req) => console.log('[browser requestfailed]', req.url(), req.failure()?.errorText));
+  page.on('response', (res) => {
+    if (res.url().endsWith('/v2/project')) {
+      res.text().then((body) => console.log('[project body]', body.slice(0, 4000))).catch((err) => console.log('[project body read failed]', String(err)));
+    }
+    if (res.url().includes('/v2/') || res.url().includes(':8765')) {
+      console.log('[browser response]', res.status(), res.url());
+    }
+  });
+
   await page.goto('/');
 
   await expect(page.getByText('ForgeCAD').first()).toBeVisible();
