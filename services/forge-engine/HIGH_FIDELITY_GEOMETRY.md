@@ -23,4 +23,6 @@ The acceptance assembly currently has dedicated high-fidelity geometry for:
 
 The canonical `/v2/scene` payload publishes `geometry_source`, `geometry_fidelity`, and `geometry_fallback` for each rendered part so clients and tests can distinguish manufacturer CAD from derived geometry.
 
+On normal desktop sessions, components with a published CAD source attempt a bounded first-use STEP download and cache the result locally. Raspberry Pi 5 and Pololu D24V50F5 resolve from manufacturer engineering files; MEAN WELL LRS-75 uses the published distributor CAD package. If a source is unavailable, ForgeCAD falls back to its dedicated part-specific B-rep rather than a generic block. CI disables those network fetches so the detailed offline fallback is independently qualified.
+
 Release qualification must execute this geometry-fidelity gate on the same clean branch head used to build the installer.
