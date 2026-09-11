@@ -88,6 +88,9 @@ def main() -> None:
         "programmable_workspace": workspace_id,
         "bundle_bytes": len(bundle),
         "validation_counts": validation.get("counts"),
+        "step_import_forked_from": protected_branch,
+        "step_import_branch": imported_branch,
+        "protected_baseline_unchanged": True,
     }, indent=2))
 
 
