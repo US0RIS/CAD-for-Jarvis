@@ -1,0 +1,102 @@
+name: Port ForgeCAD v1.1 engineering layer
+
+on:
+  push:
+    branches: [forgecad/full-v110-scope]
+    paths:
+      - PORT_V110_ENGINEERING
+
+permissions:
+  contents: write
+
+jobs:
+  port:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out ForgeCAD v2 shell
+        uses: actions/checkout@v4
+        with:
+          path: current
+          ref: forgecad/full-v110-scope
+          fetch-depth: 0
+
+      - name: Check out validated ForgeCAD v1.1 engineering source
+        uses: actions/checkout@v4
+        with:
+          repository: US0RIS/3D-CAD-LITE
+          ref: forgecad-v1.1.0-dev
+          path: legacy
+
+      - name: Vendor v1.1 engineering modules into Forge Engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="current/services/forge-engine/forge_engine/v110"
+          src="legacy/v1.1/base"
+          mkdir -p "$dest"
+          modules=(
+            agents.py
+            analysis.py
+            assembly_validation.py
+            component_importers.py
+            component_registry.py
+            components.py
+            core.py
+            curated_catalog.py
+            jarvis_bridge.py
+            mounting.py
+            physical_components.py
+            project_bundle.py
+            software.py
+            system_validation.py
+            acceptance_design.py
+          )
+          for file in "${modules[@]}"; do
+            cp "$src/$file" "$dest/$file"
+          done
+          cat > "$dest/__init__.py" <<'PY'
+          """Validated ForgeCAD v1.1 engineering subsystems, integrated into the v2 desktop shell."""
+          ENGINEERING_LAYER_VERSION = "1.1.0"
+          PY
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('current/services/forge-engine/forge_engine/v110')
+          modules = {
+              'agents','analysis','assembly_validation','component_importers','component_registry',
+              'components','core','curated_catalog','jarvis_bridge','mounting','physical_components',
+              'project_bundle','software','system_validation','acceptance_design'
+          }
+          for path in root.glob('*.py'):
+              if path.name == '__init__.py':
+                  continue
+              text = path.read_text(encoding='utf-8')
+              for module in sorted(modules, key=len, reverse=True):
+                  text = re.sub(rf'(?m)^import {re.escape(module)}(?=\s|$)', f'from . import {module}', text)
+                  text = re.sub(rf'(?m)^from {re.escape(module)} import ', f'from .{module} import ', text)
+              if path.name == 'core.py':
+                  text = text.replace('APP_VERSION = "1.1.0"', 'APP_VERSION = "2.1.0"')
+              path.write_text(text, encoding='utf-8')
+          PY
+
+          mkdir -p current/docs/v1.1-reference
+          cp "$src/COMPONENT_REGISTRY.md" current/docs/v1.1-reference/COMPONENT_REGISTRY.md
+          cp "$src/JARVIS_INTEGRATION.md" current/docs/v1.1-reference/JARVIS_INTEGRATION.md
+          cp "$src/README.md" current/docs/v1.1-reference/ENGINEERING_LAYER.md
+
+      - name: Commit vendored engineering layer
+        working-directory: current
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add services/forge-engine/forge_engine/v110 docs/v1.1-reference
+          if git diff --cached --quiet; then
+            echo "Engineering layer already vendored."
+            exit 0
+          fi
+          git commit -m "Vendor validated ForgeCAD v1.1 engineering layer"
+          git push origin HEAD:forgecad/full-v110-scope
