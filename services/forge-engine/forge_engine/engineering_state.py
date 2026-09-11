@@ -10,6 +10,7 @@ from .v110 import assembly_validation
 from .v110 import component_importers
 from .v110 import component_registry as registry
 from .v110 import core
+from .v110 import physical_components
 from .v110 import project_bundle
 from .v110 import software
 from .v110 import system_validation
