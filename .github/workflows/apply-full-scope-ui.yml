@@ -1,0 +1,84 @@
+name: Apply ForgeCAD full-scope desktop integration
+
+on:
+  push:
+    branches: [forgecad/full-v110-scope]
+    paths: [APPLY_FULL_SCOPE_UI]
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: forgecad/full-v110-scope
+          fetch-depth: 0
+      - name: Wire engineering controls into App
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('apps/desktop/src/App.tsx')
+          s = p.read_text()
+
+          old = """  activateBranch, addComponent, createJob, fetchComponents, fetchJob, fetchProject, fetchRuntime,\n  subscribeEngineEvents, type ComponentPayload, type JobPayload, type ProjectPayload, type RuntimePayload,\n"""
+          new = """  activateBranch, addComponent, createJob, fetchComponents, fetchJob, fetchProject, fetchRegistryStats, fetchRuntime,\n  redoHistory, subscribeEngineEvents, undoHistory, type ComponentPayload, type JobPayload, type ProjectPayload, type RegistryStatsPayload, type RuntimePayload,\n"""
+          if old not in s: raise SystemExit('API import block not found')
+          s = s.replace(old, new)
+          s = s.replace("import { CodeWorkspace } from './components/CodeWorkspace';\n", "import { CodeWorkspace } from './components/CodeWorkspace';\nimport { EngineeringWorkbench } from './components/EngineeringWorkbench';\n")
+
+          old = """  const [componentQuery, setComponentQuery] = useState('');\n  const [addingComponentId, setAddingComponentId] = useState<string | null>(null);\n"""
+          new = """  const [componentQuery, setComponentQuery] = useState('');\n  const [componentCategory, setComponentCategory] = useState('');\n  const [componentVoltage, setComponentVoltage] = useState('');\n  const [registryStats, setRegistryStats] = useState<RegistryStatsPayload | null>(null);\n  const [addingComponentId, setAddingComponentId] = useState<string | null>(null);\n"""
+          if old not in s: raise SystemExit('component state block not found')
+          s = s.replace(old, new)
+
+          old = """  const refreshProject = useCallback(async () => {\n    const [nextProject, nextComponents] = await Promise.all([fetchProject(), fetchComponents(componentQuery)]);\n    setProject(nextProject);\n    setComponents(nextComponents.items);\n  }, [componentQuery]);\n"""
+          new = """  const refreshProject = useCallback(async () => {\n    const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;\n    const [nextProject, nextComponents, nextStats] = await Promise.all([\n      fetchProject(),\n      fetchComponents(componentQuery, componentCategory || undefined, Number.isFinite(voltage) ? voltage : undefined),\n      fetchRegistryStats(),\n    ]);\n    setProject(nextProject);\n    setComponents(nextComponents.items);\n    setRegistryStats(nextStats);\n  }, [componentQuery, componentCategory, componentVoltage]);\n"""
+          if old not in s: raise SystemExit('refreshProject block not found')
+          s = s.replace(old, new)
+
+          old = """        fetchComponents('').then((nextComponents) => { if (!cancelled) setComponents(nextComponents.items); }),\n"""
+          new = """        fetchComponents('').then((nextComponents) => { if (!cancelled) setComponents(nextComponents.items); }),\n        fetchRegistryStats().then((nextStats) => { if (!cancelled) setRegistryStats(nextStats); }),\n"""
+          if old not in s: raise SystemExit('initial component load not found')
+          s = s.replace(old, new)
+
+          old = """  useEffect(() => {\n    const timer = window.setTimeout(() => {\n      void fetchComponents(componentQuery).then((result) => setComponents(result.items)).catch(() => undefined);\n    }, 220);\n    return () => window.clearTimeout(timer);\n  }, [componentQuery]);\n"""
+          new = """  useEffect(() => {\n    const timer = window.setTimeout(() => {\n      const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;\n      void fetchComponents(componentQuery, componentCategory || undefined, Number.isFinite(voltage) ? voltage : undefined).then((result) => setComponents(result.items)).catch(() => undefined);\n    }, 220);\n    return () => window.clearTimeout(timer);\n  }, [componentQuery, componentCategory, componentVoltage]);\n"""
+          if old not in s: raise SystemExit('component search effect not found')
+          s = s.replace(old, new)
+
+          marker = """  async function switchBranch(name: string) {\n"""
+          insert = """  async function undoDesign() {\n    try {\n      const result = await undoHistory();\n      setProject(result.project);\n    } catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }\n  }\n\n  async function redoDesign() {\n    try {\n      const result = await redoHistory();\n      setProject(result.project);\n    } catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }\n  }\n\n"""
+          if marker not in s: raise SystemExit('switchBranch marker not found')
+          s = s.replace(marker, insert + marker)
+
+          old = """        <button className=\"icon-button\" disabled title=\"Undo will be enabled when command history lands\"><Undo2 size={16}/></button>\n        <button className=\"icon-button\" disabled title=\"Redo will be enabled when command history lands\"><Redo2 size={16}/></button>\n"""
+          new = """        <button className=\"icon-button\" title=\"Undo canonical design operation\" onClick={() => void undoDesign()}><Undo2 size={16}/></button>\n        <button className=\"icon-button\" title=\"Redo canonical design operation\" onClick={() => void redoDesign()}><Redo2 size={16}/></button>\n"""
+          if old not in s: raise SystemExit('undo/redo buttons not found')
+          s = s.replace(old, new)
+
+          old = """        <button className=\"toolbar-button\" disabled title=\"STEP import is not implemented in this vertical slice\">⇧ Import STEP</button>\n"""
+          new = """        <button className=\"toolbar-button\" title=\"Open STEP and portable project controls\" onClick={() => setRightTab('design')}>⇧ Import / Export</button>\n"""
+          if old not in s: raise SystemExit('import step toolbar button not found')
+          s = s.replace(old, new)
+
+          old = """            <div className=\"search-box\"><Search size={15}/><input value={componentQuery} placeholder=\"Search components\" onChange={(event) => setComponentQuery(event.target.value)}/><button disabled title=\"Advanced filters are not enabled yet\">☷</button></div>\n            <div className=\"filter-row\"><button disabled>Category All⌄</button><button disabled>Voltage Any⌄</button><button disabled>Supplier Any⌄</button></div>\n            <div className=\"results-meta\"><span>{components.length} results</span><span>Sort: Relevance</span></div>\n"""
+          new = """            <div className=\"search-box\"><Search size={15}/><input value={componentQuery} placeholder=\"Search 238+ real components\" onChange={(event) => setComponentQuery(event.target.value)}/></div>\n            <div className=\"filter-row\">\n              <select aria-label=\"Component category\" value={componentCategory} onChange={(event) => setComponentCategory(event.target.value)}><option value=\"\">Category All</option>{registryStats?.categories.map((category) => <option key={category} value={category}>{category}</option>)}</select>\n              <input aria-label=\"Component voltage\" value={componentVoltage} onChange={(event) => setComponentVoltage(event.target.value)} placeholder=\"Voltage (V)\" inputMode=\"decimal\"/>\n            </div>\n            <div className=\"results-meta\"><span>{components.length} shown · {registryStats?.total ?? '…'} catalog</span><span>Constraint-aware relevance</span></div>\n"""
+          if old not in s: raise SystemExit('component filters block not found')
+          s = s.replace(old, new)
+
+          old = """          </div> : <div className=\"rail-empty\"><strong>{rightTab === 'design' ? 'Design inspector' : 'Analysis workspace'}</strong><span>{rightTab === 'design' ? `${project?.parts.length ?? 0} physical parts · revision ${project?.revision ?? '—'} · active ${project?.active_branch ?? '—'}` : 'Async solver jobs mount here without blocking the viewport.'}</span></div>}\n"""
+          new = """          </div> : <EngineeringWorkbench mode={rightTab} project={project} selectedId={selectedId} activeJob={activeJob} onProject={setProject} onStartSimulation={() => void startSimulation()} onStartCampaign={() => void startCampaign()}/>}\n"""
+          if old not in s: raise SystemExit('engineering rail placeholder not found')
+          s = s.replace(old, new)
+
+          p.write_text(s)
+      - name: Commit UI integration
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/desktop/src/App.tsx
+          git commit -m "Expose full engineering scope in ForgeCAD desktop"
+          git push origin HEAD:forgecad/full-v110-scope
