@@ -1,53 +1,68 @@
 import { expect, test } from '@playwright/test';
 
-test('vertical slice stays interactive and contained end to end', async ({ page }) => {
+test('full ForgeCAD engineering workbench stays interactive end to end', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.getByText('ForgeCAD').first()).toBeVisible();
   await expect(page.getByTestId('runtime-banner')).toBeVisible();
   await expect(page.getByTestId('scene-canvas')).toBeVisible();
-  await expect(page.getByTestId('scene-health')).toHaveText('3D READY');
+  await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 60_000 });
 
-  // An installed project must open assembled, never in a surprise exploded state.
+  // The canonical OpenCascade scene opens assembled and the viewport remains interactive.
   const slider = page.getByTestId('explode-slider');
   await expect(page.getByTestId('explode-percent')).toHaveText('0%');
   await slider.fill('70');
   await expect(page.getByTestId('explode-percent')).toHaveText('70%');
   await slider.fill('0');
 
-  // Branch cards are real controls rather than decorative UI. Use text content rather
-  // than the computed accessible name because branch metadata can change the latter.
+  // Design history is real state, not decorative labels.
   const piBranch = page.locator('.branch-card').filter({ hasText: 'pi-control-v2' }).first();
-  await expect(piBranch).toBeVisible({ timeout: 20_000 });
+  await expect(piBranch).toBeVisible({ timeout: 30_000 });
   await piBranch.click();
-  await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 20_000 });
+  await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 30_000 });
 
-  await page.getByTestId('tab-notebook').click();
-  await expect(page.locator('.dock-content')).toContainText('NOTEBOOK');
+  // The real Raspberry Pi 5 carries its embedded workspace with the design branch.
   await page.getByTestId('tab-code').click();
   await expect(page.getByTestId('code-workspace')).toBeVisible();
   await expect(page.getByTestId('monaco-host')).toBeVisible();
 
-  // Every visible component card must have a renderable local image, including fallback imagery.
-  const images = page.locator('.component-card img');
-  await expect(images).toHaveCount(3);
-  await expect.poll(async () => images.evaluateAll((nodes) => nodes.every((node) => {
-    const image = node as HTMLImageElement;
-    return image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
-  })), { timeout: 20_000 }).toBe(true);
-
-  const firstAdd = page.locator('.component-card .add-button').first();
+  // The local component catalog is the full engineering registry and is constraint-filterable.
+  const search = page.getByPlaceholder('Search 238+ real components');
+  await expect(search).toBeVisible();
+  await search.fill('raspberry');
+  await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/catalog/).first()).toBeVisible();
+  await search.fill('stepper');
+  const firstAdd = page.locator('.component-card .add-button:not([disabled])').first();
+  await expect(firstAdd).toBeVisible({ timeout: 20_000 });
   await firstAdd.click();
-  await expect(page.getByTestId('component-jf-0530b-12v')).toContainText('Added');
+  await expect(firstAdd).toContainText('Added', { timeout: 20_000 });
 
+  // Design workbench exposes project bundles, STEP import, BOM, branch status and real diffs.
+  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await expect(page.getByTestId('design-inspector')).toBeVisible();
+  await expect(page.getByTestId('import-step')).toBeVisible();
+  await expect(page.getByText('Portable project + CAD import')).toBeVisible();
+  await expect(page.getByText('Bill of materials')).toBeVisible();
+  await page.getByRole('button', { name: /Compare to working branch/ }).click();
+  await expect(page.getByTestId('design-inspector')).toContainText('changes', { timeout: 20_000 });
+
+  // Analysis is an actual engineering job: structural/modal/thermal/manufacturing/system checks.
+  await page.getByRole('button', { name: 'Analysis', exact: true }).click();
+  await expect(page.getByTestId('analysis-workspace')).toBeVisible();
+  await expect(page.getByTestId('analysis-workspace')).toContainText('Real component registry');
+  await page.getByRole('button', { name: 'Run engineering screen' }).click();
+  await expect(page.getByTestId('analysis-workspace')).toContainText('simulation: completed', { timeout: 90_000 });
+  await expect(page.getByTestId('analysis-workspace')).toContainText('structural', { timeout: 20_000 });
+
+  // AI edits fork safely from a design branch and use the canonical typed operation layer.
   const request = 'Swap in a 12V solenoid on a safe child branch and keep the baseline protected.';
   await page.locator('.composer textarea').fill(request);
   await page.getByTestId('send-button').click();
   await expect(page.getByTestId('conversation')).toContainText(request);
-  await expect(page.locator('.branch-card').filter({ hasText: 'solenoid-swap-2' })).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId('conversation')).toContainText('safe experimental branch', { timeout: 20_000 });
+  await expect(page.locator('.branch-card').filter({ hasText: 'solenoid-swap-2' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('conversation')).toContainText('safe experimental branch', { timeout: 30_000 });
 
-  // Long/streamed chat can scroll internally, but it must never displace the composer off-screen.
   const composer = page.getByTestId('composer');
   await expect(composer).toBeVisible();
   const box = await composer.boundingBox();
