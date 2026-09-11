@@ -100,6 +100,7 @@ def main() -> None:
         "step_import_forked_from": protected_branch,
         "step_import_branch": imported_branch,
         "protected_baseline_unchanged": True,
+        "responsive_snapshot_verified": True,
         "snapshot_seconds": round(summary_seconds, 3),
     }, indent=2))
 
