@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+"""Portable ForgeCAD project bundles.
+
+A .forgecad.zip bundle carries the canonical project JSON, frozen purchased-component
+snapshots, and every local CAD asset needed to reproduce component geometry on a
+second workstation. Paths inside project state are content-addressed / relative.
+"""
+import io,json,shutil,tempfile,zipfile
+from copy import deepcopy
+from pathlib import Path
+from typing import Any
+from . import component_registry as registry
+
+BUNDLE_VERSION=1
+
+
+def _asset_path(asset:dict[str,Any])->Path|None:
+    rel=asset.get("relative_path")
+    if rel:
+        p=(registry.ASSET_DIR/str(rel)).resolve()
+        try:p.relative_to(registry.ASSET_DIR.resolve())
+        except ValueError:return None
+        return p
+    old=asset.get("path")
+    if old:
+        p=Path(str(old))
+        return p if p.is_file() else None
+    return None
+
+def _sanitize_component(component:dict[str,Any])->dict[str,Any]:
+    c=deepcopy(component)
+    for asset in c.get("geometry",{}).get("assets",[]):asset.pop("path",None)
+    return c
+
+def _component_snapshots(project:dict[str,Any])->list[dict[str,Any]]:
+    seen={};
+    for obj in project.get("objects",[]):
+        snap=obj.get("component_snapshot")
+        if isinstance(snap,dict) and snap.get("id"):seen[str(snap["id"])]=_sanitize_component(snap)
+    return list(seen.values())
+
+def export_bundle_bytes(project:dict[str,Any])->bytes:
+    p=deepcopy(project);assets={}
+    for obj in p.get("objects",[]):
+        snap=obj.get("component_snapshot")
+        if not isinstance(snap,dict):continue
+        snap=_sanitize_component(snap);obj["component_snapshot"]=snap
+        for asset in snap.get("geometry",{}).get("assets",[]):
+            path=_asset_path(asset)
+            if path and path.is_file():
+                rel=str(asset.get("relative_path") or f"{asset.get('sha256','asset')[:16]}_{Path(asset.get('filename','asset.step')).name}")
+                assets[rel]=path
+    manifest={"bundle_version":BUNDLE_VERSION,"project_file":"project.json","component_file":"components.json","asset_count":len(assets),"component_count":len(_component_snapshots(p))}
+    out=io.BytesIO()
+    with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED) as z:
+        z.writestr("manifest.json",json.dumps(manifest,indent=2));z.writestr("project.json",json.dumps(p,indent=2));z.writestr("components.json",json.dumps({"schema_version":registry.SCHEMA_VERSION,"components":_component_snapshots(p)},indent=2))
+        for rel,path in assets.items():z.writestr("assets/"+rel.replace("\\","/"),path.read_bytes())
+    return out.getvalue()
+
+def _safe_extract(z:zipfile.ZipFile,root:Path)->None:
+    root=root.resolve()
+    for info in z.infolist():
+        target=(root/info.filename).resolve()
+        try:target.relative_to(root)
+        except ValueError:raise ValueError("Project bundle contains unsafe path")
+    z.extractall(root)
+
+def import_bundle_bytes(data:bytes)->dict[str,Any]:
+    if len(data)>600*1024*1024:raise ValueError("ForgeCAD project bundle exceeds 600 MB")
+    with tempfile.TemporaryDirectory() as td:
+        root=Path(td)
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:_safe_extract(z,root)
+        except zipfile.BadZipFile as e:raise ValueError("Invalid ForgeCAD project bundle") from e
+        manifest_path=root/"manifest.json";project_path=root/"project.json"
+        if not manifest_path.is_file() or not project_path.is_file():raise ValueError("Bundle requires manifest.json and project.json")
+        manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
+        if int(manifest.get("bundle_version",0))!=BUNDLE_VERSION:raise ValueError(f"Unsupported bundle version {manifest.get('bundle_version')}")
+        project=json.loads(project_path.read_text(encoding="utf-8"))
+        if not isinstance(project,dict) or not isinstance(project.get("objects"),list):raise ValueError("Bundle project is malformed")
+        components_path=root/"components.json";installed=[]
+        if components_path.is_file():
+            payload=json.loads(components_path.read_text(encoding="utf-8"))
+            for component in payload.get("components",[]):
+                cid=str(component.get("id") or "")
+                if not cid:continue
+                try:registry.component_by_id(cid)
+                except KeyError:
+                    registry.import_components(component,replace=False,source_kind="user_supplied");installed.append(cid)
+        copied=[];asset_root=root/"assets"
+        if asset_root.is_dir():
+            for source in asset_root.rglob("*"):
+                if not source.is_file():continue
+                rel=source.relative_to(asset_root);dest=(registry.ASSET_DIR/rel).resolve()
+                try:dest.relative_to(registry.ASSET_DIR.resolve())
+                except ValueError:raise ValueError("Unsafe component asset path in bundle")
+                dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,dest);copied.append(str(rel))
+        return {"ok":True,"project":project,"components_installed":installed,"assets_restored":copied,"manifest":manifest}
