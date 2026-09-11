@@ -36,20 +36,45 @@ export class SceneController {
   private selectedId: string | null = null;
   private explode = 0;
 
+  private static detectSoftwareRenderer(): boolean {
+    try {
+      // A canvas can only ever bind one rendering context, and its attributes (antialias,
+      // alpha, powerPreference) are fixed by whichever getContext() call wins - so probe on a
+      // throwaway, never-attached canvas rather than the real one the WebGLRenderer below owns.
+      const probe = document.createElement('canvas').getContext('webgl2') ?? document.createElement('canvas').getContext('webgl');
+      if (!probe) return false;
+      const info = probe.getExtension('WEBGL_debug_renderer_info');
+      const rendererString = String(info ? probe.getParameter(info.UNMASKED_RENDERER_WEBGL) : probe.getParameter(probe.RENDERER));
+      return /swiftshader|llvmpipe|software|basic render/i.test(rendererString);
+    } catch {
+      return false;
+    }
+  }
+
   constructor(private readonly canvas: HTMLCanvasElement, private readonly events: SceneControllerEvents = {}) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
+    // A software GL rasterizer (SwiftShader/llvmpipe - what headless/GPU-less CI runners and
+    // some real Windows machines without a working GPU driver fall back to) cannot keep up with
+    // per-frame MSAA resolve + soft shadow map passes on this scene: each becomes a blocking
+    // "GPU stall due to ReadPixels" that recurs every single animation frame indefinitely,
+    // starving the whole tab's main thread (timers, React commits, everything) for minutes at a
+    // time. Detect that case and drop to a cheap-but-correct render path; real, hardware-
+    // accelerated GPUs (the overwhelming majority of real users) are unaffected.
+    const isSoftwareRenderer = SceneController.detectSoftwareRenderer();
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !isSoftwareRenderer, alpha: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !isSoftwareRenderer;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.scene.background = new THREE.Color(0x071017);
     this.scene.fog = new THREE.FogExp2(0x071017, 0.012);
 
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
+    if (!isSoftwareRenderer) {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+    }
 
     this.camera.position.set(8.8, 5.6, 9.8);
     this.orbit = new OrbitControls(this.camera, canvas);
