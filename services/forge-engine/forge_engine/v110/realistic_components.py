@@ -9,6 +9,7 @@ module never labels a generic bounding box as a realistic purchased part.
 """
 
 import argparse
+import threading
 import shutil
 import tempfile
 import urllib.request
@@ -23,6 +24,8 @@ from . import component_registry as registry
 
 PACKAGE_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "manufacturer"
 CACHE_ASSET_DIR = registry.ASSET_DIR / "manufacturer"
+_DOWNLOAD_LOCK = threading.RLock()
+_DOWNLOAD_FAILURES: set[str] = set()
 
 # Manufacturer/authorized-distributor engineering files.  These URLs are also
 # recorded in component provenance.  Release builds prefetch them so the normal
@@ -138,7 +141,7 @@ def download_step(component_id: str, *, force: bool = False) -> Path:
     )
     with tempfile.TemporaryDirectory(prefix="forgecad-cad-") as tmp:
         raw_path = Path(tmp) / ("asset.zip" if spec.get("archive") == "zip" else "asset.step")
-        with urllib.request.urlopen(request, timeout=60) as response, raw_path.open("wb") as handle:
+        with urllib.request.urlopen(request, timeout=15) as response, raw_path.open("wb") as handle:
             shutil.copyfileobj(response, handle)
         if spec.get("archive") == "zip":
             _extract_step(raw_path, destination)
@@ -155,10 +158,18 @@ def resolve_step(component_id: str, *, allow_download: bool = False) -> Path | N
         if _looks_like_step(candidate):
             return candidate
     if allow_download and component_id in CAD_ASSETS:
-        try:
-            return download_step(component_id)
-        except Exception:
-            return None
+        with _DOWNLOAD_LOCK:
+            if component_id in _DOWNLOAD_FAILURES:
+                return None
+            # Another geometry request may have populated the cache while this one waited.
+            for candidate in _step_candidates(component_id):
+                if _looks_like_step(candidate):
+                    return candidate
+            try:
+                return download_step(component_id)
+            except Exception:
+                _DOWNLOAD_FAILURES.add(component_id)
+                return None
     return None
 
 

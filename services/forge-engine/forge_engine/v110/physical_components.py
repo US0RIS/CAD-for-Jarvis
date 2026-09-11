@@ -161,7 +161,12 @@ _legacy_component_parts = component_parts
 
 def component_parts(obj):
     component = component_definition(obj)
-    realistic = _realistic_components.component_parts(obj, component, allow_download=False) if component else None
+    # Normal desktop sessions resolve published manufacturer CAD once and cache it.
+    # CI remains deterministic/offline and exercises the detailed parametric fallback.
+    import os as _os
+    explicit = _os.environ.get("FORGECAD_ALLOW_CAD_DOWNLOADS")
+    allow_download = (explicit.strip().lower() in {"1", "true", "yes"}) if explicit is not None else not bool(_os.environ.get("CI"))
+    realistic = _realistic_components.component_parts(obj, component, allow_download=allow_download) if component else None
     return realistic if realistic else _legacy_component_parts(obj)
 
 def component_geometry_status(obj):
