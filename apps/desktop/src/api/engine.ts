@@ -95,6 +95,7 @@ export interface ScenePayload {
     name: string;
     semantic_role: string;
     explode_vector: number[];
+    base_transform: { position: number[]; rotation_deg: number[]; scale: number[] };
     programmable_workspace_id?: string | null;
     mesh: SceneMeshPayload;
   }>;

@@ -207,7 +207,7 @@ export class SceneController {
         object.castShadow = true;
         object.receiveShadow = true;
         object.userData.partId = part.id;
-        object.userData.authoritativeBase = { position: [0, 0, 0], rotation_deg: [0, 0, 0], scale: [1, 1, 1] };
+        object.userData.authoritativeBase = part.base_transform;
         this.assemblyRoot.add(object);
         const explodeVector = new THREE.Vector3(
           Number(part.explode_vector?.[0] ?? 0),
@@ -268,11 +268,15 @@ export class SceneController {
     const record = this.parts.get(this.selectedId);
     if (!record) return;
     const object = record.object;
+    const base = object.userData.authoritativeBase as { position?: number[]; rotation_deg?: number[]; scale?: number[] } | undefined;
+    const basePosition = base?.position ?? [0, 0, 0];
+    const baseRotation = base?.rotation_deg ?? [0, 0, 0];
+    const baseScale = base?.scale ?? [1, 1, 1];
     const args = {
       id: this.selectedId,
-      position: [object.position.x, object.position.y, object.position.z],
-      rotation_deg: [THREE.MathUtils.radToDeg(object.rotation.x), THREE.MathUtils.radToDeg(object.rotation.y), THREE.MathUtils.radToDeg(object.rotation.z)],
-      scale: [object.scale.x, object.scale.y, object.scale.z],
+      position: [Number(basePosition[0] ?? 0) + object.position.x, Number(basePosition[1] ?? 0) + object.position.y, Number(basePosition[2] ?? 0) + object.position.z],
+      rotation_deg: [Number(baseRotation[0] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.x), Number(baseRotation[1] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.y), Number(baseRotation[2] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.z)],
+      scale: [Number(baseScale[0] ?? 1) * object.scale.x, Number(baseScale[1] ?? 1) * object.scale.y, Number(baseScale[2] ?? 1) * object.scale.z],
     };
     try {
       await executeOperation('transform', args, 'Viewport transform');

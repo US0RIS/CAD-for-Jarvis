@@ -33,10 +33,11 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/catalog/).first()).toBeVisible();
   await search.fill('stepper');
-  const firstAdd = page.locator('.component-card .add-button:not([disabled])').first();
+  const firstAdd = page.locator('.component-card .add-button').first();
   await expect(firstAdd).toBeVisible({ timeout: 20_000 });
+  await expect(firstAdd).toBeEnabled();
   await firstAdd.click();
-  await expect(firstAdd).toContainText('Added', { timeout: 20_000 });
+  await expect(page.locator('.component-card .add-button').first()).toContainText('Added', { timeout: 20_000 });
 
   // Design workbench exposes project bundles, STEP import, BOM, branch status and real diffs.
   await page.getByRole('button', { name: 'Design', exact: true }).click();

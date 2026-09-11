@@ -59,6 +59,13 @@ def main() -> None:
     search = PROJECT.search_components("raspberry", limit=5)
     assert any(item["id"] == "compute.raspberry_pi_5_8gb" for item in search)
 
+    with tempfile.TemporaryDirectory() as temp_dir:
+        step_path = Path(temp_dir) / "selftest.step"
+        cq.exporters.export(cq.Workplane("XY").box(10, 20, 5), str(step_path))
+        imported = PROJECT.import_step_part(step_path.name, step_path.read_bytes())
+        imported_id = str(imported["object"]["id"])
+        assert any(part["id"] == imported_id for part in PROJECT.scene_manifest()["parts"])
+
     print(json.dumps({
         "full_scope_selftest": "PASS",
         "registry_total": stats["total"],

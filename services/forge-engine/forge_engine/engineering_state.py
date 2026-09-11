@@ -203,6 +203,7 @@ class EngineeringProject:
                 "semantic_role": str((obj.get("semantic") or {}).get("role") or obj.get("kind") or "part"),
                 "mesh": mesh,
                 "explode_vector": explode,
+                "base_transform": deepcopy(obj.get("transform") or {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]}),
                 "programmable_workspace_id": str(obj["id"]) if isinstance(obj.get("code"), dict) else None,
             })
         return {"revision": str(len(core.PROJECT.get("ledger", [])) + 1), "branch": core.ACTIVE_DESIGN, "parts": meshes, "authoritative": True}
