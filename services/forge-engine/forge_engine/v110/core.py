@@ -260,9 +260,19 @@ def object_metrics(obj: dict[str, Any]) -> dict[str, Any]:
         if definition and definition.get("mass_g") is not None:mass=float(definition["mass_g"])/1000.0
     return {"volume_mm3":vol,"area_mm2":float(sh.Area()),"mass_kg":mass,"bounds_mm":{"x":bb.xlen,"y":bb.ylen,"z":bb.zlen},"centroid_mm":[c.x,c.y,c.z],"material":mat["name"],"geometry_fidelity":obj.get("component_snapshot",{}).get("geometry",{}).get("fidelity") if obj.get("kind")=="component" else "exact_brep"}
 
+def _summary_mass_kg(obj: dict[str, Any]) -> float:
+    if obj.get("kind") == "component":
+        snapshot = obj.get("component_snapshot") or {}
+        if snapshot.get("mass_g") is not None:
+            return float(snapshot["mass_g"]) / 1000.0
+        definition = physical_components.component_definition(obj)
+        if definition and definition.get("mass_g") is not None:
+            return float(definition["mass_g"]) / 1000.0
+    return float(object_metrics(obj)["mass_kg"])
+
 def project_metrics() -> dict[str, Any]:
-    vals=[object_metrics(o) for o in PROJECT["objects"] if o.get("visible",True)]; purchased=sum(o.get("kind")=="component" for o in PROJECT["objects"]); custom=len(PROJECT["objects"])-purchased
-    return {"object_count":len(PROJECT["objects"]),"purchased_component_count":purchased,"custom_part_count":custom,"connection_count":len(PROJECT.get("connections",[])),"mass_kg":sum(x["mass_kg"] for x in vals),"bom_cost_usd":sum(float(x.get("unit_cost_usd",0) or 0)*float(x.get("qty",1) or 1) for x in PROJECT.get("bom",[])),"active_design":ACTIVE_DESIGN}
+    visible=[o for o in PROJECT["objects"] if o.get("visible",True)]; purchased=sum(o.get("kind")=="component" for o in PROJECT["objects"]); custom=len(PROJECT["objects"])-purchased
+    return {"object_count":len(PROJECT["objects"]),"purchased_component_count":purchased,"custom_part_count":custom,"connection_count":len(PROJECT.get("connections",[])),"mass_kg":sum(_summary_mass_kg(o) for o in visible),"bom_cost_usd":sum(float(x.get("unit_cost_usd",0) or 0)*float(x.get("qty",1) or 1) for x in PROJECT.get("bom",[])),"active_design":ACTIVE_DESIGN}
 
 def tessellate(obj: dict[str, Any], tolerance: float=.35) -> dict[str, Any]:
     parts=_component_parts(obj) if obj.get("kind")=="component" else None

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 
 import cadquery as cq
 
@@ -63,6 +64,14 @@ def main() -> None:
     search = PROJECT.search_components("raspberry", limit=5)
     assert any(item["id"] == "compute.raspberry_pi_5_8gb" for item in search)
 
+    # UI mutations return a project snapshot; summary metrics must stay lightweight and
+    # must not rebuild every purchased component's B-rep merely to total authoritative mass.
+    summary_started = time.perf_counter()
+    summary = PROJECT.snapshot()
+    summary_seconds = time.perf_counter() - summary_started
+    assert summary["metrics"]["object_count"] >= 6
+    assert summary_seconds < 10.0, summary_seconds
+
     protected_branch = PROJECT.active_branch
     protected_object_count = int(PROJECT.snapshot()["metrics"]["object_count"])
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -91,6 +100,7 @@ def main() -> None:
         "step_import_forked_from": protected_branch,
         "step_import_branch": imported_branch,
         "protected_baseline_unchanged": True,
+        "snapshot_seconds": round(summary_seconds, 3),
     }, indent=2))
 
 
