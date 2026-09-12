@@ -192,11 +192,6 @@ export class SceneController {
       geometry.setIndex(mesh.triangles.flat().map(Number));
     }
 
-    // Forge Engine tessellates the authoritative model in world coordinates. Three's
-    // transform gizmo expects local-space geometry attached to an object transform.
-    // Undo the authoritative transform here, then apply it to the Three object below.
-    // This puts the gizmo at the part origin and makes move/rotate/scale operate on the
-    // selected part instead of rotating world-baked vertices around (0, 0, 0).
     const { position, rotation, scale } = transformVectors(part);
     const quaternion = new THREE.Quaternion().setFromEuler(rotation);
     const worldMatrix = new THREE.Matrix4().compose(position, quaternion, scale);
@@ -252,10 +247,7 @@ export class SceneController {
       this.setExplode(this.explode);
       if (this.parts.size) this.setCameraPreset('fit');
       if (previousSelected && this.parts.has(previousSelected)) this.select(previousSelected);
-      else {
-        this.selectedId = null;
-        this.events.onSelectionChange?.(null);
-      }
+      else this.selectedId = null;
       this.events.onReady?.();
     } catch (error) {
       this.events.onError?.(error instanceof Error ? error : new Error(String(error)));
@@ -265,9 +257,6 @@ export class SceneController {
   private installEvents() {
     this.pointerDownHandler = (event: PointerEvent) => {
       if (event.button !== 0) return;
-      // TransformControls receives the same pointer event before this listener. If it
-      // has an active axis, the user clicked the gizmo; do not raycast the scene and
-      // detach the very control they are trying to drag.
       if (this.transform.dragging || this.transform.axis) return;
       const rect = this.canvas.getBoundingClientRect();
       this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
