@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test';
 
-test('ForgeCAD production workbench starts blank, searches the expanded catalog, renders components, and moves parts', async ({ page, request }) => {
+test('ForgeCAD production workbench starts blank, exposes the full catalog, renders components, and moves parts', async ({ page, request }) => {
   // Each browser attempt gets a deterministic blank document. The engine process is
   // intentionally reused by CI, so a failed/retried browser test must not inherit CAD state.
+  const headers = { 'X-ForgeCAD-Session': 'test-session', 'Content-Type': 'application/json' };
   const reset = await request.post('http://127.0.0.1:8765/v2/operations', {
-    headers: { 'X-ForgeCAD-Session': 'test-session', 'Content-Type': 'application/json' },
+    headers,
     data: { op: 'new_project', args: {}, reason: 'Reset Windows browser acceptance workspace' },
   });
   expect(reset.ok()).toBeTruthy();
@@ -19,9 +20,23 @@ test('ForgeCAD production workbench starts blank, searches the expanded catalog,
   await expect(page.getByText('0 objects').first()).toBeVisible();
   await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 20_000 });
 
+  // Regression for the release bug where the registry contained >1,000 parts but the
+  // workbench/API silently exposed only the first 30. The unfiltered library must expose
+  // every locally registered component, and the UI count must match the registry count.
+  const statsResponse = await request.get('http://127.0.0.1:8765/v2/component-registry/stats', { headers });
+  expect(statsResponse.ok()).toBeTruthy();
+  const stats = await statsResponse.json() as { total: number };
+  expect(stats.total).toBeGreaterThan(30);
+  const catalogResponse = await request.get('http://127.0.0.1:8765/v2/components?q=', { headers });
+  expect(catalogResponse.ok()).toBeTruthy();
+  const catalog = await catalogResponse.json() as { items: unknown[] };
+  expect(catalog.items.length).toBe(stats.total);
+
   await page.getByRole('button', { name: 'Components', exact: true }).click();
   const search = page.getByPlaceholder('Search manufacturer, model, category…');
   await expect(search).toBeVisible();
+  await expect(page.locator('.result-count')).toHaveText(`${stats.total} results`, { timeout: 30_000 });
+
   await search.fill('raspberry');
   const raspberry = page.getByTestId('component-compute.raspberry_pi_5_8gb');
   await expect(raspberry).toBeVisible({ timeout: 20_000 });
