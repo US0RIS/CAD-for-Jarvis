@@ -75,7 +75,7 @@ export class EngineSupervisor {
       : ['-m', 'uvicorn', 'forge_engine.main:app', '--host', '127.0.0.1', '--port', String(port), '--log-level', 'warning'];
 
     this.logs.length = 0;
-    let spawnError: Error | null = null;
+    const launchState: { error: Error | null } = { error: null };
     const child = spawn(command, args, {
       cwd: packagedEngine ? path.dirname(packagedEngine) : serviceRoot,
       env: {
@@ -108,7 +108,7 @@ export class EngineSupervisor {
       this.process = null;
     });
     child.once('error', (error) => {
-      spawnError = error;
+      launchState.error = error;
       this.logs.push(`[supervisor] Forge Engine process error: ${error.message}`);
       if (this.process === child) this.connection = null;
     });
@@ -119,9 +119,10 @@ export class EngineSupervisor {
     let lastError: unknown;
 
     while (Date.now() < deadline) {
-      if (spawnError) {
+      const launchError = launchState.error;
+      if (launchError) {
         this.stop();
-        throw new Error(`Forge Engine could not launch: ${spawnError.message}\nExecutable: ${command}\n${this.logTail.join('\n')}`);
+        throw new Error(`Forge Engine could not launch: ${launchError.message}\nExecutable: ${command}\n${this.logTail.join('\n')}`);
       }
       if (child.exitCode !== null) {
         this.stop();
