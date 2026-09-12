@@ -46,9 +46,14 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
 
   // Design history is real state, not decorative labels.
   const piBranch = page.locator('.branch-card').filter({ hasText: 'pi-control-v2' }).first();
-  await expect(piBranch).toBeVisible({ timeout: 30_000 });
+  await expect(piBranch).toBeVisible({ timeout: 60_000 });
   await piBranch.click();
-  await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 30_000 });
+  // Branch activation is a real engine write (core.execute()/persist()), not a UI toggle.
+  // Windows CI has shown this class of call can take far longer than its own logic would
+  // suggest under contention with the rest of the test's process load (measured elsewhere
+  // in this same suite: a single such call took 236s) - see the "Added" wait below for the
+  // fuller story. 60s is a real margin, not a guess.
+  await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 60_000 });
 
   // The real Raspberry Pi 5 carries its embedded workspace with the design branch.
   await page.getByTestId('tab-code').click();
@@ -59,14 +64,19 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   const search = page.getByPlaceholder('Search 238+ real components');
   await expect(search).toBeVisible();
   await search.fill('raspberry');
-  await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/catalog/).first()).toBeVisible();
   await search.fill('stepper');
   const firstAdd = page.locator('.component-card .add-button').first();
-  await expect(firstAdd).toBeVisible({ timeout: 20_000 });
+  await expect(firstAdd).toBeVisible({ timeout: 60_000 });
   await expect(firstAdd).toBeEnabled();
   await firstAdd.click();
-  await expect(page.locator('.component-card .add-button').first()).toContainText('Added', { timeout: 20_000 });
+  // Adding a component is a real engine write (core.execute()/persist()), not a UI toggle -
+  // measured directly on Windows CI: a single such call took 236s, evidently CPU-starved by
+  // the rest of this test's process load (a continuously-rendering WebGL viewport, the Python
+  // backend, and Chromium all sharing whatever cores the runner has). 300s gives real margin
+  // above the worst case actually observed rather than racing it.
+  await expect(page.locator('.component-card .add-button').first()).toContainText('Added', { timeout: 300_000 });
 
   // Design workbench exposes project bundles, STEP import, BOM, branch status and real diffs.
   await page.getByRole('button', { name: 'Design', exact: true }).click();
@@ -75,23 +85,23 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await expect(page.getByText('Portable project + CAD import')).toBeVisible();
   await expect(page.getByText('Bill of materials')).toBeVisible();
   await page.getByRole('button', { name: /Compare to working branch/ }).click();
-  await expect(page.getByTestId('design-inspector')).toContainText('changes', { timeout: 20_000 });
+  await expect(page.getByTestId('design-inspector')).toContainText('changes', { timeout: 60_000 });
 
   // Analysis is an actual engineering job: structural/modal/thermal/manufacturing/system checks.
   await page.getByRole('button', { name: 'Analysis', exact: true }).click();
   await expect(page.getByTestId('analysis-workspace')).toBeVisible();
   await expect(page.getByTestId('analysis-workspace')).toContainText('Real component registry');
   await page.getByRole('button', { name: 'Run engineering screen' }).click();
-  await expect(page.getByTestId('analysis-workspace')).toContainText('simulation: completed', { timeout: 90_000 });
-  await expect(page.getByTestId('analysis-workspace')).toContainText('structural', { timeout: 20_000 });
+  await expect(page.getByTestId('analysis-workspace')).toContainText('simulation: completed', { timeout: 180_000 });
+  await expect(page.getByTestId('analysis-workspace')).toContainText('structural', { timeout: 60_000 });
 
   // AI edits fork safely from a design branch and use the canonical typed operation layer.
   const request = 'Swap in a 12V solenoid on a safe child branch and keep the baseline protected.';
   await page.locator('.composer textarea').fill(request);
   await page.getByTestId('send-button').click();
   await expect(page.getByTestId('conversation')).toContainText(request);
-  await expect(page.locator('.branch-card').filter({ hasText: 'solenoid-swap-2' })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('conversation')).toContainText('safe experimental branch', { timeout: 30_000 });
+  await expect(page.locator('.branch-card').filter({ hasText: 'solenoid-swap-2' })).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByTestId('conversation')).toContainText('safe experimental branch', { timeout: 90_000 });
 
   const composer = page.getByTestId('composer');
   await expect(composer).toBeVisible();
