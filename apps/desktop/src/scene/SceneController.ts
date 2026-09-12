@@ -30,6 +30,27 @@ function colorForRole(role: string) {
   return 0x687985;
 }
 
+function transformVectors(part: ScenePayload['parts'][number]) {
+  const base = part.base_transform ?? { position: [0, 0, 0], rotation_deg: [0, 0, 0], scale: [1, 1, 1] };
+  const position = new THREE.Vector3(
+    Number(base.position?.[0] ?? 0),
+    Number(base.position?.[1] ?? 0),
+    Number(base.position?.[2] ?? 0),
+  );
+  const rotation = new THREE.Euler(
+    THREE.MathUtils.degToRad(Number(base.rotation_deg?.[0] ?? 0)),
+    THREE.MathUtils.degToRad(Number(base.rotation_deg?.[1] ?? 0)),
+    THREE.MathUtils.degToRad(Number(base.rotation_deg?.[2] ?? 0)),
+    'XYZ',
+  );
+  const scale = new THREE.Vector3(
+    Number(base.scale?.[0] ?? 1) || 1,
+    Number(base.scale?.[1] ?? 1) || 1,
+    Number(base.scale?.[2] ?? 1) || 1,
+  );
+  return { position, rotation, scale };
+}
+
 export class SceneController {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(38, 1, 0.1, 10000);
@@ -47,6 +68,8 @@ export class SceneController {
   private explode = 0;
   private disposed = false;
   private authoritative = false;
+  private pointerDownHandler?: (event: PointerEvent) => void;
+  private contextMenuHandler?: (event: Event) => void;
 
   private static detectSoftwareRenderer(): boolean {
     try {
@@ -168,6 +191,16 @@ export class SceneController {
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(mesh.positions.flat().map(Number), 3));
       geometry.setIndex(mesh.triangles.flat().map(Number));
     }
+
+    // Forge Engine tessellates the authoritative model in world coordinates. Three's
+    // transform gizmo expects local-space geometry attached to an object transform.
+    // Undo the authoritative transform here, then apply it to the Three object below.
+    // This puts the gizmo at the part origin and makes move/rotate/scale operate on the
+    // selected part instead of rotating world-baked vertices around (0, 0, 0).
+    const { position, rotation, scale } = transformVectors(part);
+    const quaternion = new THREE.Quaternion().setFromEuler(rotation);
+    const worldMatrix = new THREE.Matrix4().compose(position, quaternion, scale);
+    geometry.applyMatrix4(worldMatrix.clone().invert());
     geometry.computeVertexNormals();
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
@@ -178,9 +211,9 @@ export class SceneController {
     try {
       const payload = await fetchScene();
       if (this.disposed) return;
+      const previousSelected = this.selectedId;
       this.authoritative = Boolean(payload.authoritative);
       this.transform.detach();
-      this.selectedId = null;
       this.parts.clear();
       while (this.assemblyRoot.children.length) {
         const child = this.assemblyRoot.children.pop();
@@ -200,10 +233,13 @@ export class SceneController {
         if (!geometry) continue;
         const vertexColors = Boolean(part.mesh.triangle_colors?.length);
         const object = new THREE.Mesh(geometry, this.material(part.semantic_role, vertexColors));
+        const { position, rotation, scale } = transformVectors(part);
+        object.position.copy(position);
+        object.rotation.copy(rotation);
+        object.scale.copy(scale);
         object.castShadow = true;
         object.receiveShadow = true;
         object.userData.partId = part.id;
-        object.userData.authoritativeBase = part.base_transform;
         this.assemblyRoot.add(object);
         const explodeVector = new THREE.Vector3(
           Number(part.explode_vector?.[0] ?? 0),
@@ -215,7 +251,11 @@ export class SceneController {
       }
       this.setExplode(this.explode);
       if (this.parts.size) this.setCameraPreset('fit');
-      this.events.onSelectionChange?.(null);
+      if (previousSelected && this.parts.has(previousSelected)) this.select(previousSelected);
+      else {
+        this.selectedId = null;
+        this.events.onSelectionChange?.(null);
+      }
       this.events.onReady?.();
     } catch (error) {
       this.events.onError?.(error instanceof Error ? error : new Error(String(error)));
@@ -223,7 +263,12 @@ export class SceneController {
   }
 
   private installEvents() {
-    const onPointerDown = (event: PointerEvent) => {
+    this.pointerDownHandler = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      // TransformControls receives the same pointer event before this listener. If it
+      // has an active axis, the user clicked the gizmo; do not raycast the scene and
+      // detach the very control they are trying to drag.
+      if (this.transform.dragging || this.transform.axis) return;
       const rect = this.canvas.getBoundingClientRect();
       this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -232,11 +277,12 @@ export class SceneController {
       const id = hits[0]?.object.userData.partId as string | undefined;
       this.select(id ?? null);
     };
-    this.canvas.addEventListener('pointerdown', onPointerDown);
+    this.canvas.addEventListener('pointerdown', this.pointerDownHandler);
     this.canvas.dataset.listenerInstalled = 'true';
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.canvas.parentElement ?? this.canvas);
-    this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+    this.contextMenuHandler = (event: Event) => event.preventDefault();
+    this.canvas.addEventListener('contextmenu', this.contextMenuHandler);
   }
 
   private select(id: string | null) {
@@ -244,7 +290,7 @@ export class SceneController {
     this.transform.detach();
     if (id) {
       const part = this.parts.get(id);
-      if (part) this.transform.attach(part.object);
+      if (part && this.explode === 0) this.transform.attach(part.object);
     }
     for (const part of this.parts.values()) {
       const selected = part.id === id;
@@ -266,26 +312,28 @@ export class SceneController {
 
   private async commitTransform() {
     if (!this.selectedId || !this.authoritative || this.explode !== 0) return;
-    const record = this.parts.get(this.selectedId);
+    const selectedId = this.selectedId;
+    const record = this.parts.get(selectedId);
     if (!record) return;
     const object = record.object;
-    const base = object.userData.authoritativeBase as { position?: number[]; rotation_deg?: number[]; scale?: number[] } | undefined;
-    const basePosition = base?.position ?? [0, 0, 0];
-    const baseRotation = base?.rotation_deg ?? [0, 0, 0];
-    const baseScale = base?.scale ?? [1, 1, 1];
     const args = {
-      id: this.selectedId,
-      position: [Number(basePosition[0] ?? 0) + object.position.x, Number(basePosition[1] ?? 0) + object.position.y, Number(basePosition[2] ?? 0) + object.position.z],
-      rotation_deg: [Number(baseRotation[0] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.x), Number(baseRotation[1] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.y), Number(baseRotation[2] ?? 0) + THREE.MathUtils.radToDeg(object.rotation.z)],
-      scale: [Number(baseScale[0] ?? 1) * object.scale.x, Number(baseScale[1] ?? 1) * object.scale.y, Number(baseScale[2] ?? 1) * object.scale.z],
+      id: selectedId,
+      position: [object.position.x, object.position.y, object.position.z],
+      rotation_deg: [
+        THREE.MathUtils.radToDeg(object.rotation.x),
+        THREE.MathUtils.radToDeg(object.rotation.y),
+        THREE.MathUtils.radToDeg(object.rotation.z),
+      ],
+      scale: [object.scale.x, object.scale.y, object.scale.z],
     };
     try {
       await executeOperation('transform', args, 'Viewport transform');
       await this.reload();
-      this.selectPart(this.selectedId);
+      this.selectPart(selectedId);
     } catch (error) {
       this.events.onError?.(error instanceof Error ? error : new Error(String(error)));
       await this.reload();
+      this.selectPart(selectedId);
     }
   }
 
@@ -353,6 +401,8 @@ export class SceneController {
     this.disposed = true;
     cancelAnimationFrame(this.frameHandle);
     this.resizeObserver?.disconnect();
+    if (this.pointerDownHandler) this.canvas.removeEventListener('pointerdown', this.pointerDownHandler);
+    if (this.contextMenuHandler) this.canvas.removeEventListener('contextmenu', this.contextMenuHandler);
     this.transform.detach();
     this.transform.dispose();
     this.orbit.dispose();
