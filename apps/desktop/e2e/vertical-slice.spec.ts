@@ -75,8 +75,12 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   // `.first()` after that resolved to a fresh, never-clicked "Add" button instead, so the
   // assertion polled the wrong element forever. Capture the specific card's testid before
   // clicking and assert against that same card, immune to any reordering after the click.
+  // The card's own button swaps class from add-button to added-button the instant the add
+  // succeeds (same render as the text flipping to "Added") - scoping by `.add-button` breaks
+  // at exactly the moment of success, which is indistinguishable from "element removed" to a
+  // waiting assertion. There is exactly one button per card, so select it generically instead.
   const firstCard = page.locator('.component-card').first();
-  const firstAdd = firstCard.locator('.add-button');
+  const firstAdd = firstCard.locator('button');
   await expect(firstAdd).toBeVisible({ timeout: 60_000 });
   await expect(firstAdd).toBeEnabled();
   const cardTestId = await firstCard.getAttribute('data-testid');
@@ -87,7 +91,7 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   // backend, and Chromium all sharing whatever cores the runner has). 300s gives real margin
   // above the worst case actually observed rather than racing it.
   const addedCard = cardTestId ? page.getByTestId(cardTestId) : firstCard;
-  await expect(addedCard.locator('.add-button')).toContainText('Added', { timeout: 300_000 });
+  await expect(addedCard.locator('button')).toContainText('Added', { timeout: 300_000 });
 
   // Design workbench exposes project bundles, STEP import, BOM, branch status and real diffs.
   await page.getByRole('button', { name: 'Design', exact: true }).click();
