@@ -50,10 +50,11 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await piBranch.click();
   // Branch activation is a real engine write (core.execute()/persist()), not a UI toggle.
   // Windows CI has shown this class of call can take far longer than its own logic would
-  // suggest under contention with the rest of the test's process load (measured elsewhere
-  // in this same suite: a single such call took 236s) - see the "Added" wait below for the
-  // fuller story. 60s is a real margin, not a guess.
-  await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 60_000 });
+  // suggest under contention with the rest of the test's process load - measured directly on
+  // this runner: 836s for this exact call. 900s gives real margin above that observed worst
+  // case rather than a guess; the global test timeout is the real backstop against this
+  // consuming the whole run.
+  await expect(piBranch).toHaveAttribute('aria-pressed', 'true', { timeout: 900_000 });
 
   // The real Raspberry Pi 5 carries its embedded workspace with the design branch.
   await page.getByTestId('tab-code').click();

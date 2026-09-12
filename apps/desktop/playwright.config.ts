@@ -3,16 +3,21 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   // Real measurements on Windows CI (see vertical-slice.spec.ts) show individual engine writes
-  // taking minutes under this suite's process load, not seconds - a single add-component call
-  // was measured at 236s. The sum of this suite's own per-assertion timeouts alone can approach
-  // 900s in the worst case; give it real room rather than let the global timeout become the
-  // thing that fails instead of a specific, diagnosable assertion. The job-level CI timeout
-  // (currently 50 minutes) is the outer bound this still needs to fit under, twice over (one
-  // retry).
-  timeout: 900_000,
+  // taking minutes under this suite's process load, not seconds - add-component was measured at
+  // 236s, branch activation at 836s. The sum of this suite's own per-assertion timeouts is ~22
+  // minutes in the worst observed case; 30 minutes gives that real room without racing it,
+  // comfortably inside the job-level CI timeout (currently 50 minutes) minus setup.
+  timeout: 1_800_000,
   expect: { timeout: 12_000 },
   fullyParallel: false,
-  retries: process.env.CI ? 1 : 0,
+  // Retries don't help the failure mode actually seen here: every attempt runs against the same
+  // long-lived, equally-contended backend process on the same runner, so a retry pays the same
+  // CPU-starvation cost again rather than avoiding it - and can inherit confusing mutated state
+  // from the failed attempt (a component search that already shows "Added" because the first
+  // attempt got that far before failing somewhere else). With retries:1, a single slow-but-real
+  // attempt plus a doomed-to-repeat retry risks exceeding the job timeout outright. A genuinely
+  // transient, non-contention failure just fails once here instead of being masked by a retry.
+  retries: 0,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
   use: {
     baseURL: 'http://127.0.0.1:4173',
