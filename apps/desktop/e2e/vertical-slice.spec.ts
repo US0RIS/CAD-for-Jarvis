@@ -22,9 +22,17 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await expect(page.getByTestId('runtime-banner')).toBeVisible();
   await expect(page.getByTestId('scene-canvas')).toBeVisible();
   try {
-    await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 60_000 });
+    // Real BREP tessellation of dense component geometry (measured: up to ~12s for a single
+    // cold request locally, and Windows CI hardware has shown itself to be substantially
+    // slower still) - 120s gives real margin instead of racing the exact cost of that work.
+    await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 120_000 });
   } catch (error) {
-    const startupErrorText = await page.locator('.runtime-banner.error, [data-testid="startup-error"]').allTextContents().catch(() => []);
+    // Bounded manually: allTextContents() has no timeout option of its own, and a hung page
+    // must not silently inflate the test's wall time past what's actually being diagnosed.
+    const startupErrorText = await Promise.race([
+      page.locator('.runtime-banner.error, [data-testid="startup-error"]').allTextContents(),
+      new Promise<string[]>((resolve) => setTimeout(() => resolve(['<diag: allTextContents timed out>']), 5_000)),
+    ]).catch(() => []);
     console.log(`[diag ${since()}] scene-health timed out. Visible error banner text: ${JSON.stringify(startupErrorText)}`);
     throw error;
   }

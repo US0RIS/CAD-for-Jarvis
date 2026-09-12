@@ -94,6 +94,16 @@ async def publish_jarvis_bridge() -> None:
         pass
 
 
+@app.on_event("startup")
+async def prewarm_scene_cache() -> None:
+    # BREP tessellation is the most expensive thing this process does (multiple seconds per
+    # part for real component geometry) and PROJECT.scene_manifest() caches by content, so
+    # doing this once here means the first real GET /v2/scene from a freshly-loaded viewport
+    # is served from a warm cache instead of paying that cost on the user-facing request path.
+    # Fire-and-forget: does not block startup or the /v2/health readiness check.
+    asyncio.create_task(asyncio.to_thread(PROJECT.scene_manifest))
+
+
 @app.on_event("shutdown")
 async def clear_jarvis_bridge() -> None:
     jarvis_bridge.clear_discovery()
