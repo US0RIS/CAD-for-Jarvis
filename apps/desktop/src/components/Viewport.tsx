@@ -7,12 +7,17 @@ interface ViewportProps {
   onExplode: (value: number) => void;
   onSelectionChange: (id: string | null) => void;
   onReady: () => void;
+  onLoading: () => void;
   onError: (error: Error) => void;
+  sceneRevision: string;
+  selectedId: string | null;
+  empty: boolean;
 }
 
-export function Viewport({ explode, onExplode, onSelectionChange, onReady, onError }: ViewportProps) {
+export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoading, onError, sceneRevision, selectedId, empty }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controllerRef = useRef<SceneController | null>(null);
+  const mountedRevision = useRef<string | null>(null);
   const [mode, setMode] = useState<TransformMode>('move');
   const [autoRotate, setAutoRotate] = useState(false);
 
@@ -23,6 +28,9 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onErr
       const controller = new SceneController(canvas, { onSelectionChange, onReady, onError });
       controllerRef.current = controller;
       controller.setExplode(explode);
+      mountedRevision.current = sceneRevision;
+      onLoading();
+      void controller.reload().then(() => controller.selectPart(selectedId));
       return () => {
         controller.dispose();
         controllerRef.current = null;
@@ -30,45 +38,56 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onErr
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));
     }
-  }, []); // one renderer per canvas lifetime
+  }, []);
+
+  useEffect(() => {
+    const controller = controllerRef.current;
+    if (!controller || mountedRevision.current === sceneRevision) return;
+    mountedRevision.current = sceneRevision;
+    onLoading();
+    void controller.reload().then(() => controller.selectPart(selectedId));
+  }, [sceneRevision]);
 
   useEffect(() => controllerRef.current?.setExplode(explode), [explode]);
+  useEffect(() => controllerRef.current?.selectPart(selectedId), [selectedId]);
 
   function transform(next: TransformMode) {
     setMode(next);
     controllerRef.current?.setTransformMode(next);
   }
+  function preset(next: CameraPreset) { controllerRef.current?.setCameraPreset(next); }
 
-  function preset(next: CameraPreset) {
-    controllerRef.current?.setCameraPreset(next);
-  }
-
-  return (
-    <div className="viewport-panel" data-testid="viewport-panel">
-      <div className="viewport-toolbar">
-        <button className={mode === 'move' ? 'active' : ''} onClick={() => transform('move')}><Move3d size={14}/>Move</button>
-        <button className={mode === 'rotate' ? 'active' : ''} onClick={() => transform('rotate')}><Rotate3d size={14}/>Rotate</button>
-        <button className={mode === 'scale' ? 'active' : ''} onClick={() => transform('scale')}><Scaling size={14}/>Scale</button>
-        <span className="sep"/>
-        <button onClick={() => preset('fit')}><Scan size={14}/>Fit</button>
-        <button onClick={() => preset('iso')}><View size={14}/>Iso</button>
-        <button onClick={() => preset('top')}><Square size={14}/>Top</button>
-        <button onClick={() => preset('front')}><Square size={14}/>Front</button>
-        <button onClick={() => preset('right')}><Square size={14}/>Right</button>
-        <span className="sep"/>
-        <button className={autoRotate ? 'active' : ''} onClick={() => { const value = !autoRotate; setAutoRotate(value); controllerRef.current?.setAutoRotate(value); }}><Orbit size={14}/>Auto rotate</button>
-        <button onClick={() => controllerRef.current?.isolateSelected()}><Focus size={14}/>Isolate</button>
-        <button onClick={() => controllerRef.current?.hideSelected()}><EyeOff size={14}/>Hide</button>
-        <button onClick={() => controllerRef.current?.showAll()}><Eye size={14}/>Show all</button>
+  return <div className="viewport-panel" data-testid="viewport-panel">
+    <div className="viewport-toolbar">
+      <div className="viewport-tool-group">
+        <button className={mode === 'move' ? 'active' : ''} onClick={() => transform('move')} title="Move"><Move3d size={14}/><span>Move</span></button>
+        <button className={mode === 'rotate' ? 'active' : ''} onClick={() => transform('rotate')} title="Rotate"><Rotate3d size={14}/><span>Rotate</span></button>
+        <button className={mode === 'scale' ? 'active' : ''} onClick={() => transform('scale')} title="Scale"><Scaling size={14}/><span>Scale</span></button>
       </div>
-      <div className="scene-host">
-        <canvas ref={canvasRef} className="scene-canvas" data-testid="scene-canvas"/>
-        <div className="axis-gizmo"><b>Z</b><span>X</span><i>Y</i></div>
-        <div className="explode-control">
-          <div><span>Explode</span><b data-testid="explode-percent">{explode}%</b></div>
-          <input aria-label="Explode assembly" data-testid="explode-slider" type="range" min="0" max="100" value={explode} onChange={(event) => onExplode(Number(event.target.value))}/>
-        </div>
+      <span className="toolbar-separator"/>
+      <div className="viewport-tool-group">
+        <button onClick={() => preset('fit')} title="Fit"><Scan size={14}/><span>Fit</span></button>
+        <button onClick={() => preset('iso')} title="Isometric"><View size={14}/><span>Iso</span></button>
+        <button onClick={() => preset('top')} title="Top"><Square size={14}/><span>Top</span></button>
+        <button onClick={() => preset('front')} title="Front"><Square size={14}/><span>Front</span></button>
+        <button onClick={() => preset('right')} title="Right"><Square size={14}/><span>Right</span></button>
+      </div>
+      <span className="toolbar-separator"/>
+      <div className="viewport-tool-group compact-tools">
+        <button className={autoRotate ? 'active' : ''} onClick={() => { const value = !autoRotate; setAutoRotate(value); controllerRef.current?.setAutoRotate(value); }} title="Auto rotate"><Orbit size={14}/></button>
+        <button onClick={() => controllerRef.current?.isolateSelected()} disabled={!selectedId} title="Isolate"><Focus size={14}/></button>
+        <button onClick={() => controllerRef.current?.hideSelected()} disabled={!selectedId} title="Hide"><EyeOff size={14}/></button>
+        <button onClick={() => controllerRef.current?.showAll()} title="Show all"><Eye size={14}/></button>
       </div>
     </div>
-  );
+    <div className="scene-host">
+      <canvas ref={canvasRef} className="scene-canvas" data-testid="scene-canvas"/>
+      <div className="axis-gizmo"><b>Z</b><span>X</span><i>Y</i></div>
+      {!empty ? <div className="explode-control">
+        <span>Explode</span>
+        <input aria-label="Explode assembly" data-testid="explode-slider" type="range" min="0" max="100" value={explode} onChange={(event) => onExplode(Number(event.target.value))}/>
+        <b data-testid="explode-percent">{explode}%</b>
+      </div> : <input className="hidden-slider" aria-label="Explode assembly" data-testid="explode-slider" type="range" min="0" max="100" value="0" readOnly/>}
+    </div>
+  </div>;
 }
