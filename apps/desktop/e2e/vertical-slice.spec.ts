@@ -93,7 +93,20 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   // backend, and Chromium all sharing whatever cores the runner has). 300s gives real margin
   // above the worst case actually observed rather than racing it.
   const addedCard = cardTestId ? page.getByTestId(cardTestId) : addableCard;
-  await expect(addedCard.locator('button')).toContainText('Added', { timeout: 300_000 });
+  try {
+    await expect(addedCard.locator('button')).toContainText('Added', { timeout: 300_000 });
+  } catch (error) {
+    // TEMPORARY DIAGNOSTIC: the add POST has been observed to succeed (200, <1s) while this
+    // wait still times out with "element(s) not found" - i.e. the specific testid vanishes
+    // from the DOM entirely, not just its class/text. No console error, no extra /v2/components
+    // refetch, and no page navigation has shown up in the network/console diagnostics around
+    // it. Dump the actual DOM state at the moment of failure instead of guessing further.
+    const cardCount = await page.locator('.component-card').count();
+    const testIds = await page.locator('[data-testid^="component-"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')));
+    const stillPresent = cardTestId ? await page.getByTestId(cardTestId).count() : -1;
+    console.log(`[diag ${since()}] "Added" wait failed. cardTestId=${cardTestId} stillPresentCount=${stillPresent} totalCards=${cardCount} allComponentTestIds=${JSON.stringify(testIds)}`);
+    throw error;
+  }
 
   // Design workbench exposes project bundles, STEP import, BOM, branch status and real diffs.
   await page.getByRole('button', { name: 'Design', exact: true }).click();
