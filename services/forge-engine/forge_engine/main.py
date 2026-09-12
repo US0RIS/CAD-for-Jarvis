@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .engineering_state import PROJECT
 from .models import CreateJobRequest, EngineeringJob, JobState, OllamaState, RuntimeState, RuntimeStatus
-from .v110 import jarvis_bridge
+from .v110 import jarvis_bridge, project_bundle
 
 API_VERSION = "2"
 SESSION_TOKEN = os.environ.get("FORGECAD_SESSION_TOKEN", "")
@@ -159,8 +159,11 @@ async def components(q: str = "", category: str | None = None, voltage_v: float 
     constraints: dict[str, Any] = {}
     if voltage_v is not None:
         constraints["voltage_v"] = voltage_v
-    items = PROJECT.search_components(q, category=category, constraints=constraints, limit=30)
-    return {"items": items, "query": q, "stats": PROJECT.registry_stats()}
+    stats = PROJECT.registry_stats()
+    # This route backs an interactive library browser, not an AI recommendation list.
+    # Return every matching component so a search never silently becomes a top-30 list.
+    items = PROJECT.search_components(q, category=category, constraints=constraints, limit=int(stats.get("total", 10000)))
+    return {"items": items, "query": q, "stats": stats}
 
 
 def _fallback_svg(component: dict[str, Any]) -> bytes:
@@ -184,7 +187,7 @@ async def component_image(component_id: str) -> Response:
         component = PROJECT.component(component_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Component not found") from exc
-    # The registry is intentionally offline-first.  The fallback is generated from the
+    # The registry is intentionally offline-first. The fallback is generated from the
     # authoritative component identity rather than hotlinking arbitrary supplier media.
     return Response(_fallback_svg(component), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
 
@@ -298,7 +301,11 @@ async def validation() -> dict[str, Any]:
 @app.get("/v2/project/export", dependencies=[Depends(require_session)])
 async def export_project() -> Response:
     data = await asyncio.to_thread(PROJECT.export_bundle)
-    return Response(data, media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="ForgeCAD-Project.forgecad.zip"'})
+    return Response(
+        data,
+        media_type=project_bundle.MIME_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="ForgeCAD-Design.focad"'},
+    )
 
 
 @app.post("/v2/project/import", dependencies=[Depends(require_session)])
