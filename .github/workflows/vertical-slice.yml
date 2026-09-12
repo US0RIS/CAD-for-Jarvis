@@ -44,7 +44,7 @@ jobs:
           pnpm --filter @forgecad/desktop build
       - name: Install Chromium acceptance runtime
         run: pnpm --filter @forgecad/desktop exec playwright install chromium
-      - name: Start deterministic Forge Engine test service
+      - name: Start production-like Forge Engine test service
         shell: pwsh
         run: |
           $env:PYTHONPATH = "$env:GITHUB_WORKSPACE/services/forge-engine"
@@ -52,6 +52,8 @@ jobs:
           $env:FORGECAD_OLLAMA_MODEL = 'qwen3.8:27b'
           $env:FORGECAD_DEMO_AGENT = '1'
           $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-e2e-state"
+          $env:CI = 'false'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '0'
           $p = Start-Process -FilePath "$env:GITHUB_WORKSPACE/services/forge-engine/.venv/Scripts/python.exe" -ArgumentList '-m','uvicorn','forge_engine.main:app','--host','127.0.0.1','--port','8765','--log-level','warning' -WorkingDirectory "$env:GITHUB_WORKSPACE/services/forge-engine" -PassThru
           $p.Id | Set-Content "$env:RUNNER_TEMP/forge-engine.pid"
           $deadline = (Get-Date).AddSeconds(45)
