@@ -47,7 +47,12 @@ export class EngineSupervisor {
   get logTail(): string[] { return this.logs.slice(-120); }
 
   async start(): Promise<EngineConnection> {
-    if (this.connection && this.process && !this.process.killed) return this.connection;
+    // ChildProcess.killed only means kill() was called; it remains false when a child
+    // crashes on its own. Use exitCode to decide whether the existing engine is alive.
+    if (this.connection && this.process && this.process.exitCode === null && !this.process.killed) return this.connection;
+
+    this.connection = null;
+    this.process = null;
 
     const port = await freePort();
     const sessionToken = randomBytes(32).toString('hex');
@@ -92,6 +97,20 @@ export class EngineSupervisor {
     child.stdout?.on('data', (chunk: Buffer) => record('', chunk));
     child.stderr?.on('data', (chunk: Buffer) => record('[stderr] ', chunk));
 
+    // If the native engine exits after startup, invalidate the connection immediately.
+    // The renderer can then ask for a fresh connection and this supervisor will restart it.
+    child.once('exit', (code, signal) => {
+      if (this.process !== child) return;
+      this.logs.push(`[supervisor] Forge Engine exited code=${String(code)} signal=${String(signal)}`);
+      this.connection = null;
+      this.process = null;
+    });
+    child.once('error', (error) => {
+      if (this.process !== child) return;
+      this.logs.push(`[supervisor] Forge Engine process error: ${error.message}`);
+      this.connection = null;
+    });
+
     const baseUrl = `http://127.0.0.1:${port}`;
     const deadline = Date.now() + 45_000;
     let lastError: unknown;
@@ -126,7 +145,8 @@ export class EngineSupervisor {
 
   stop(): void {
     this.connection = null;
-    if (this.process && !this.process.killed) this.process.kill();
+    const child = this.process;
     this.process = null;
+    if (child && child.exitCode === null && !child.killed) child.kill();
   }
 }
