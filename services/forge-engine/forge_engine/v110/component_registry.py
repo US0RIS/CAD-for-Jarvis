@@ -211,7 +211,7 @@ def search_components(query:str="",category:str|None=None,constraints:dict[str,A
         if not feasible and not include_infeasible:continue
         text_score=sum(blob.count(tok) for tok in tokens) if tokens else 0;rank=(1000 if feasible else 0)-penalty*100+text_score*4+int(c.get("trust_score",0))/100*3+geom_rank/100*2;rows.append((-rank,c["name"],c,feasible,penalty,reasons))
     rows.sort(key=lambda x:(x[0],x[1]));results=[]
-    for _,_,c,feasible,penalty,reasons in rows[:max(1,min(int(limit),200))]:results.append(deepcopy(c)|{"feasible":feasible,"constraint_penalty":penalty,"constraint_failures":reasons})
+    for _,_,c,feasible,penalty,reasons in rows[:max(1,min(int(limit),5000))]:results.append(deepcopy(c)|{"feasible":feasible,"constraint_penalty":penalty,"constraint_failures":reasons})
     return {"query":query,"category":category,"count":len(results),"total_registry":len(_all_map()),"results":results}
 
 def select_component(requirements:dict[str,Any],*,category:str|None=None,query:str="",limit:int=8):
