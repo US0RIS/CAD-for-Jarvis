@@ -529,6 +529,13 @@ async def run_agent_job(job: EngineeringJob, request: CreateJobRequest) -> None:
             if request.apply_edits:
                 await update_job(job, state=JobState.APPLYING, progress=0.62, message="Forking protected baseline and applying typed operation")
                 result.update(await asyncio.to_thread(PROJECT.apply_demo_change, request.text or "AI engineering change"))
+                # The fork/edit is real, already-persisted engine state the instant the call above
+                # returns - push it to clients now rather than making them wait for the VERIFYING
+                # stage below. validate_assembly() there does first-touch build_shape()/intersect()
+                # on whatever geometry this branch now holds (e.g. a component added earlier in the
+                # same session, never previously tessellated) and can take minutes on Windows CI;
+                # none of that has any bearing on whether the new branch itself exists yet.
+                await broadcast({"type": "project.updated", "project": PROJECT.snapshot()})
         elif request.apply_edits:
             plan = await qwen_plan(request.text or "Review and improve the design")
             answer = str(plan.get("summary") or "Applied the planned engineering change through Forge Engine typed operations.")
@@ -537,6 +544,9 @@ async def run_agent_job(job: EngineeringJob, request: CreateJobRequest) -> None:
             await update_job(job, state=JobState.APPLYING, progress=0.62, message="Applying typed engineering operations")
             result = {"assistant_text": answer, "plan": plan}
             result.update(await asyncio.to_thread(PROJECT.apply_agent_plan, plan, request.text or "AI engineering change"))
+            # Same reasoning as the demo-agent path above: don't make the new branch's own
+            # visibility wait on the slow validation pass that follows.
+            await broadcast({"type": "project.updated", "project": PROJECT.snapshot()})
         else:
             answer = await qwen_reply(request.text or "Review the active design", job)
             result = {"assistant_text": answer}
