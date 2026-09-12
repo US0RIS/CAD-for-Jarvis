@@ -275,6 +275,10 @@ def project_metrics() -> dict[str, Any]:
     return {"object_count":len(PROJECT["objects"]),"purchased_component_count":purchased,"custom_part_count":custom,"connection_count":len(PROJECT.get("connections",[])),"mass_kg":sum(_summary_mass_kg(o) for o in visible),"bom_cost_usd":sum(float(x.get("unit_cost_usd",0) or 0)*float(x.get("qty",1) or 1) for x in PROJECT.get("bom",[])),"active_design":ACTIVE_DESIGN}
 
 def tessellate(obj: dict[str, Any], tolerance: float=.35) -> dict[str, Any]:
+    # The desktop scene asks for a 0.65 mm interactive mesh.  Keep the tighter
+    # 0.1-radian angular deflection for engineering/export callers, but avoid
+    # massively over-tessellating curved purchased components in the viewport.
+    angular_tolerance=0.30 if float(tolerance)>=0.60 else 0.10
     parts=_component_parts(obj) if obj.get("kind")=="component" else None
     if parts and not obj.get("features"):
         t=obj.get("transform") or {}; pos=t.get("position",[0,0,0]); rot=t.get("rotation_deg",[0,0,0]); scl=t.get("scale",[1,1,1]); positions=[]; indices=[]; tri_colors=[]; offset=0
@@ -283,9 +287,9 @@ def tessellate(obj: dict[str, Any], tolerance: float=.35) -> dict[str, Any]:
             if float(rot[0]): sh=sh.rotate((0,0,0),(1,0,0),float(rot[0]))
             if float(rot[1]): sh=sh.rotate((0,0,0),(0,1,0),float(rot[1]))
             if float(rot[2]): sh=sh.rotate((0,0,0),(0,0,1),float(rot[2]))
-            sh=sh.translate(tuple(float(v) for v in pos)); verts,tris=sh.tessellate(float(tolerance)); positions.extend([[v.x,v.y,v.z] for v in verts]); indices.extend([[int(a)+offset,int(b)+offset,int(c)+offset] for a,b,c in tris]); tri_colors.extend([color]*len(tris)); offset+=len(verts)
+            sh=sh.translate(tuple(float(v) for v in pos)); verts,tris=sh.tessellate(float(tolerance),angular_tolerance); positions.extend([[v.x,v.y,v.z] for v in verts]); indices.extend([[int(a)+offset,int(b)+offset,int(c)+offset] for a,b,c in tris]); tri_colors.extend([color]*len(tris)); offset+=len(verts)
         return {"id":obj["id"],"positions":positions,"triangles":indices,"triangle_colors":tri_colors,"material":obj.get("material"),"color":"#ffffff","geometry_fidelity":"component-specific"}
-    sh=build_shape(obj); verts,tris=sh.tessellate(float(tolerance)); positions=[[v.x,v.y,v.z] for v in verts]; indices=[list(map(int,t)) for t in tris]
+    sh=build_shape(obj); verts,tris=sh.tessellate(float(tolerance),angular_tolerance); positions=[[v.x,v.y,v.z] for v in verts]; indices=[list(map(int,t)) for t in tris]
     return {"id":obj["id"],"positions":positions,"triangles":indices,"material":obj.get("material"),"color":MATERIALS.get(obj.get("material"),{}).get("color","#8aa0b6")}
 
 def import_step_bytes(filename: str, data: bytes) -> dict[str, Any]:
@@ -393,7 +397,6 @@ def reality_check() -> dict[str,Any]:
         assembly={"ok":True,"counts":{"error":0,"warning":1,"info":0},"risks":[{"severity":"warning","code":"assembly_check_unavailable","message":str(e)}],"collisions":[],"low_clearances":[]}
     risks=list(system.get("risks",[]))+list(assembly.get("risks",[]));counts={s:sum(r.get("severity")==s for r in risks) for s in ("error","warning","info")}
     return {**system,"ok":counts["error"]==0,"counts":counts,"risks":risks,"assembly":assembly}
-
 def execute(op: str, args: dict[str,Any]|None=None, actor: str="human", reason: str="") -> dict[str,Any]:
     args=deepcopy(args or {})
     with LOCK:
