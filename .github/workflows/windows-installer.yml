@@ -124,8 +124,8 @@ jobs:
       - name: Verify installer exists
         shell: pwsh
         run: |
-          $installer = Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-1.1.2.exe' | Select-Object -First 1
-          if (-not $installer) { throw 'ForgeCAD 1.1.2 installer was not produced.' }
+          $installer = Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-1.1.3.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'ForgeCAD 1.1.3 installer was not produced.' }
           Write-Host "Installer: $($installer.FullName)"
           Write-Host "Size: $([math]::Round($installer.Length / 1MB, 1)) MB"
 
@@ -133,7 +133,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-1.1.2.exe' | Select-Object -First 1).FullName
+          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-1.1.3.exe' | Select-Object -First 1).FullName
           if (-not $installer) { throw 'ForgeCAD installer was not produced.' }
           $installDir = Join-Path $env:RUNNER_TEMP 'ForgeCAD-Installed-Copy'
           if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
@@ -149,7 +149,7 @@ jobs:
           if (-not (Test-Path $engine)) { throw "Installed Forge Engine executable missing: $engine" }
           $version = (Get-Item $app).VersionInfo.ProductVersion
           Write-Host "Installed ProductVersion: $version"
-          if (-not $version.StartsWith('1.1.2')) { throw "Expected installed ProductVersion 1.1.2, got $version" }
+          if (-not $version.StartsWith('1.1.3')) { throw "Expected installed ProductVersion 1.1.3, got $version" }
 
           $env:FORGECAD_PORT = '8878'
           $env:FORGECAD_SESSION_TOKEN = 'installed-copy-smoke'
@@ -217,6 +217,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ForgeCAD-Windows-Installer
-          path: apps/desktop/release/ForgeCAD-Setup-1.1.2.exe
+          path: apps/desktop/release/ForgeCAD-Setup-1.1.3.exe
           if-no-files-found: error
           compression-level: 0
