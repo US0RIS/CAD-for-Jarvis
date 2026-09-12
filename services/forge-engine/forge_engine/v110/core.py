@@ -239,7 +239,49 @@ def _apply_feature(shape, f: dict[str, Any]):
     return shape
 
 
+# Same rationale as the tessellation cache below: build_shape() constructs a real BREP via
+# OpenCascade, and it's called unconditionally by object_metrics(), the custom-part branch of
+# tessellate(), and - expensively, repeatedly, per pair of objects - assembly_validation's
+# collision/clearance screening, which additionally runs a real boolean intersect() on any
+# overlapping pair. validate_assembly() (and therefore /v2/validation) reruns this for every
+# visible object on every call, and the frontend refetches validation on every project mutation.
+# Cache by content: callers only ever read from the returned shape (bounding box, volume,
+# tessellate, intersect - all of which return new objects rather than mutating in place in this
+# CAD kernel), so sharing one instance across calls for byte-identical objects is safe.
+_SHAPE_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_SHAPE_CACHE_MAX = 256
+_SHAPE_LOCKS: dict[str, threading.Lock] = {}
+_SHAPE_LOCKS_GUARD = threading.Lock()
+
+
+def _shape_cache_key(obj: dict[str, Any]) -> str:
+    return json.dumps(obj, sort_keys=True, default=str)
+
+
 def build_shape(obj: dict[str, Any]):
+    cache_key = _shape_cache_key(obj)
+    cached = _SHAPE_CACHE.get(cache_key)
+    if cached is not None:
+        _SHAPE_CACHE.move_to_end(cache_key)
+        return cached
+    with _SHAPE_LOCKS_GUARD:
+        lock = _SHAPE_LOCKS.setdefault(cache_key, threading.Lock())
+    with lock:
+        cached = _SHAPE_CACHE.get(cache_key)
+        if cached is not None:
+            _SHAPE_CACHE.move_to_end(cache_key)
+            return cached
+        result = _build_shape_uncached(obj)
+        _SHAPE_CACHE[cache_key] = result
+        _SHAPE_CACHE.move_to_end(cache_key)
+        while len(_SHAPE_CACHE) > _SHAPE_CACHE_MAX:
+            evicted_key, _ = _SHAPE_CACHE.popitem(last=False)
+            with _SHAPE_LOCKS_GUARD:
+                _SHAPE_LOCKS.pop(evicted_key, None)
+    return result
+
+
+def _build_shape_uncached(obj: dict[str, Any]):
     shape=_base_shape(obj)
     for f in obj.get("features",[]): shape=_apply_feature(shape,f)
     t=obj.get("transform") or {}; s=t.get("scale",[1,1,1]);
