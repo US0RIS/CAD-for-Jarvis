@@ -130,6 +130,7 @@ export type EngineEvent =
   | { type: 'project.updated'; project: ProjectPayload };
 
 let cachedConnection: ForgeEngineConnection | null = null;
+let runtimeRequest: Promise<RuntimePayload> | null = null;
 let projectRequest: Promise<ProjectPayload> | null = null;
 let sceneRequest: Promise<ScenePayload> | null = null;
 
@@ -172,7 +173,16 @@ export async function engineFetch<T>(path: string, init: RequestInit = {}): Prom
   return response.json() as Promise<T>;
 }
 
-export const fetchRuntime = () => engineFetch<RuntimePayload>('/v2/runtime');
+export function fetchRuntime(): Promise<RuntimePayload> {
+  if (runtimeRequest) return runtimeRequest;
+  const request = engineFetch<RuntimePayload>('/v2/runtime');
+  runtimeRequest = request;
+  request.then(
+    () => { if (runtimeRequest === request) runtimeRequest = null; },
+    () => { if (runtimeRequest === request) runtimeRequest = null; },
+  );
+  return request;
+}
 
 export function fetchProject(): Promise<ProjectPayload> {
   if (projectRequest) return projectRequest;

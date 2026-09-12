@@ -10,7 +10,7 @@ test('ForgeCAD production workbench starts blank and component insertion renders
   // Production startup must be genuinely blank: no acceptance fixture, sample assembly,
   // or pre-rendered component should appear in a fresh workspace.
   await expect(page.getByText('Untitled Design').first()).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText('No geometry')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('No geometry').first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('0 objects').first()).toBeVisible();
   await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 20_000 });
 
@@ -39,7 +39,7 @@ test('ForgeCAD production workbench starts blank and component insertion renders
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'New', exact: true }).click();
   await expect(page.getByText('Untitled Design').first()).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText('No geometry')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('No geometry').first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('0 objects').first()).toBeVisible();
   await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 20_000 });
 });
