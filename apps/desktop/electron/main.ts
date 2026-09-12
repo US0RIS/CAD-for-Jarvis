@@ -13,7 +13,7 @@ const SERVICE_ROOT = process.env.FORGECAD_ENGINE_ROOT ?? (app.isPackaged
 const PACKAGED_ENGINE = app.isPackaged
   ? path.join(process.resourcesPath, 'forge-engine', process.platform === 'win32' ? 'forge-engine.exe' : 'forge-engine')
   : undefined;
-const CONFIGURED_MODEL = process.env.FORGECAD_OLLAMA_MODEL ?? 'qwen3.8:27b';
+const CONFIGURED_MODEL = process.env.FORGECAD_OLLAMA_MODEL ?? 'qwen3:8b';
 
 const engine = new EngineSupervisor({
   serviceRoot: SERVICE_ROOT,
@@ -22,10 +22,13 @@ const engine = new EngineSupervisor({
 });
 let mainWindow: BrowserWindow | null = null;
 
+// Always resolve the current engine connection dynamically. If the native engine exits,
+// EngineSupervisor.start() creates a fresh process/port/session and the renderer can recover
+// without being stranded on the stale connection captured when the window first opened.
+ipcMain.handle('forgecad:connection', () => engine.start());
+
 async function createMainWindow() {
-  const connection = await engine.start();
-  ipcMain.removeHandler('forgecad:connection');
-  ipcMain.handle('forgecad:connection', () => connection);
+  await engine.start();
 
   mainWindow = new BrowserWindow({
     width: 1586,
