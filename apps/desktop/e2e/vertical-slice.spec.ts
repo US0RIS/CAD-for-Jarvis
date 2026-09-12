@@ -1,41 +1,15 @@
 import { expect, test } from '@playwright/test';
 
 test('full ForgeCAD engineering workbench stays interactive end to end', async ({ page }) => {
-  // TEMPORARY DIAGNOSTICS: root-causing the Windows-only scene-health timeout.
-  // Azure Blob artifact hosting (Playwright's HTML report/trace host) is unreachable from
-  // where these logs are analyzed, so print directly to CI's plain-text stdout instead.
-  const t0 = Date.now();
-  const since = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
-  page.on('console', (msg) => console.log(`[diag ${since()}] console.${msg.type()}: ${msg.text()}`));
-  page.on('pageerror', (err) => console.log(`[diag ${since()}] pageerror: ${err.stack ?? err.message}`));
-  page.on('requestfailed', (req) => console.log(`[diag ${since()}] requestfailed: ${req.method()} ${req.url()} :: ${req.failure()?.errorText}`));
-  page.on('request', (req) => {
-    if (req.url().includes('/v2/')) console.log(`[diag ${since()}] request start: ${req.method()} ${req.url()}`);
-  });
-  page.on('response', (res) => {
-    if (res.url().includes('/v2/')) console.log(`[diag ${since()}] response: ${res.status()} ${res.url()}`);
-  });
-
   await page.goto('/');
 
   await expect(page.getByText('ForgeCAD').first()).toBeVisible();
   await expect(page.getByTestId('runtime-banner')).toBeVisible();
   await expect(page.getByTestId('scene-canvas')).toBeVisible();
-  try {
-    // Real BREP tessellation of dense component geometry (measured: up to ~12s for a single
-    // cold request locally, and Windows CI hardware has shown itself to be substantially
-    // slower still) - 120s gives real margin instead of racing the exact cost of that work.
-    await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 120_000 });
-  } catch (error) {
-    // Bounded manually: allTextContents() has no timeout option of its own, and a hung page
-    // must not silently inflate the test's wall time past what's actually being diagnosed.
-    const startupErrorText = await Promise.race([
-      page.locator('.runtime-banner.error, [data-testid="startup-error"]').allTextContents(),
-      new Promise<string[]>((resolve) => setTimeout(() => resolve(['<diag: allTextContents timed out>']), 5_000)),
-    ]).catch(() => []);
-    console.log(`[diag ${since()}] scene-health timed out. Visible error banner text: ${JSON.stringify(startupErrorText)}`);
-    throw error;
-  }
+  // Real BREP tessellation of dense component geometry (measured: up to ~12s for a single cold
+  // request locally, and Windows CI hardware has shown itself to be substantially slower still) -
+  // 120s gives real margin instead of racing the exact cost of that work.
+  await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 120_000 });
 
   // The canonical OpenCascade scene opens assembled and the viewport remains interactive.
   const slider = page.getByTestId('explode-slider');
@@ -68,48 +42,30 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/catalog/).first()).toBeVisible();
   await search.fill('stepper');
-  // Root-caused via a targeted DOM-state dump on a real failure: the search-results fetch is
-  // debounced (~220ms) and its own latency is highly variable under CI load - as slow as ~39s
-  // in one observed run. Nothing here waited for that fetch to actually land before treating
-  // the list as reflecting "stepper" results, so the test could act on the *previous* query's
-  // still-rendered results (here, "raspberry" - which itself fuzzy-matches unrelated
-  // accessories like a cooling fan). When the real "stepper" response finally arrived and
-  // replaced the array, whatever had just been clicked from the stale list vanished from the
-  // DOM entirely, which is exactly the "element(s) not found" failure seen repeatedly. Wait for
-  // the previous query's known result to actually disappear before trusting the list has
-  // switched over.
+  // The search-results fetch is debounced (~220ms) and its own latency is highly variable under
+  // CI load - as slow as ~39s in one observed run. Wait for the *previous* query's known result
+  // to actually disappear before trusting the list reflects "stepper", rather than racing that
+  // fetch: otherwise the still-rendered "raspberry" results (which themselves fuzzy-match
+  // unrelated accessories) get treated as the new query's results.
   await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeHidden({ timeout: 60_000 });
+  // Select the first *addable* card rather than assuming position 0 is always fresh, and select
+  // its button generically rather than by a class name that isn't stable across the add/added
+  // transition (the button swaps class from add-button to added-button in the same render where
+  // its text flips to "Added").
   const addableCard = page.locator('.component-card').filter({ has: page.locator('button:not([disabled])') }).first();
   const firstAdd = addableCard.locator('button');
   await expect(firstAdd).toBeVisible({ timeout: 60_000 });
-  // TEMPORARY DIAGNOSTIC: dump what the page actually sees, in case the above still doesn't
-  // explain the full picture on the next run.
-  const diagCardCount = await page.locator('.component-card').count();
   const cardTestId = await addableCard.getAttribute('data-testid');
-  const diagButtonHtml = await firstAdd.evaluate((el) => el.outerHTML).catch((e) => String(e));
-  console.log(`[diag ${since()}] stepper search: ${diagCardCount} card(s), first addable testid=${cardTestId}, button=${diagButtonHtml}`);
   await expect(firstAdd).toBeEnabled();
   await firstAdd.click();
   // Adding a component is a real engine write (core.execute()/persist()), not a UI toggle -
   // measured directly on Windows CI: a single such call took 236s, evidently CPU-starved by
   // the rest of this test's process load (a continuously-rendering WebGL viewport, the Python
   // backend, and Chromium all sharing whatever cores the runner has). 300s gives real margin
-  // above the worst case actually observed rather than racing it.
+  // above the worst case actually observed rather than racing it. Assert against the same card
+  // identified above (by testid), immune to the results list reordering or refetching under it.
   const addedCard = cardTestId ? page.getByTestId(cardTestId) : addableCard;
-  try {
-    await expect(addedCard.locator('button')).toContainText('Added', { timeout: 300_000 });
-  } catch (error) {
-    // TEMPORARY DIAGNOSTIC: the add POST has been observed to succeed (200, <1s) while this
-    // wait still times out with "element(s) not found" - i.e. the specific testid vanishes
-    // from the DOM entirely, not just its class/text. No console error, no extra /v2/components
-    // refetch, and no page navigation has shown up in the network/console diagnostics around
-    // it. Dump the actual DOM state at the moment of failure instead of guessing further.
-    const cardCount = await page.locator('.component-card').count();
-    const testIds = await page.locator('[data-testid^="component-"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')));
-    const stillPresent = cardTestId ? await page.getByTestId(cardTestId).count() : -1;
-    console.log(`[diag ${since()}] "Added" wait failed. cardTestId=${cardTestId} stillPresentCount=${stillPresent} totalCards=${cardCount} allComponentTestIds=${JSON.stringify(testIds)}`);
-    throw error;
-  }
+  await expect(addedCard.locator('button')).toContainText('Added', { timeout: 300_000 });
 
   // Design workbench exposes project bundles, STEP import, BOM, branch status and real diffs.
   await page.getByRole('button', { name: 'Design', exact: true }).click();
