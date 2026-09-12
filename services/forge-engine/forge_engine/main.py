@@ -104,6 +104,19 @@ async def prewarm_scene_cache() -> None:
     asyncio.create_task(asyncio.to_thread(PROJECT.scene_manifest))
 
 
+@app.on_event("startup")
+async def prewarm_validation_cache() -> None:
+    # PROJECT.validation() exercises core.build_shape() (now cached, same pattern as
+    # scene_manifest above) plus a real OpenCascade boolean intersect() for any pair of parts
+    # whose bounding boxes overlap - a different native code path than tessellation, and one
+    # this process otherwise wouldn't touch until a client actually opens the Design/Analysis
+    # tab. On Windows CI a first touch of a given native code path has been observed to cost far
+    # more than the operation's own logic would suggest (real-time antivirus scanning newly
+    # loaded/executed code, cold page faults, JIT-ish warm-up in the native extension) - warm it
+    # here instead of on that first real request.
+    asyncio.create_task(asyncio.to_thread(PROJECT.validation))
+
+
 @app.on_event("shutdown")
 async def clear_jarvis_bridge() -> None:
     jarvis_bridge.clear_discovery()
