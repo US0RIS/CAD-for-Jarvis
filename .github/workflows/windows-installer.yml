@@ -146,7 +146,7 @@ jobs:
           Write-Host "Installed engine: $engine"
           $version = (Get-Item $app).VersionInfo.ProductVersion
           Write-Host "Installed ProductVersion: $version"
-          if (-not $version.StartsWith('2.1.0')) { throw "Expected installed ProductVersion 2.1.0, got $version" }
+          if (-not $version.StartsWith('1.1.1')) { throw "Expected installed ProductVersion 1.1.1, got $version" }
 
           $env:FORGECAD_PORT = '8878'
           $env:FORGECAD_SESSION_TOKEN = 'installed-copy-smoke'

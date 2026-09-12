@@ -101,7 +101,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          DMG="apps/desktop/release/ForgeCAD-2.1.0-${{ matrix.arch }}.dmg"
+          DMG="apps/desktop/release/ForgeCAD-1.1.1-${{ matrix.arch }}.dmg"
           test -f "$DMG"
 
           MOUNT="$RUNNER_TEMP/forgecad-mount"
@@ -115,7 +115,7 @@ jobs:
           test -d "$INSTALLED"
 
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INSTALLED/Contents/Info.plist")
-          test "$VERSION" = "2.1.0"
+          test "$VERSION" = "1.1.1"
           echo "Installed app version: $VERSION"
 
           ENGINE="$INSTALLED/Contents/Resources/forge-engine/forge-engine"
@@ -152,7 +152,7 @@ jobs:
           fi
 
           cat "$RUNNER_TEMP/dmg-health.json"
-          grep -q '"engine_version":"2.1.0"' "$RUNNER_TEMP/dmg-health.json"
+          grep -q '"engine_version":"1.1.1"' "$RUNNER_TEMP/dmg-health.json"
           grep -q 'v1.1-full-scope' "$RUNNER_TEMP/dmg-health.json"
 
           curl --fail --silent -H 'X-ForgeCAD-Session: dmg-smoke' http://127.0.0.1:8879/v2/component-registry/stats > "$RUNNER_TEMP/dmg-stats.json"
@@ -171,6 +171,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ForgeCAD-macOS-${{ matrix.arch }}-Installer
-          path: apps/desktop/release/ForgeCAD-2.1.0-${{ matrix.arch }}.dmg
+          path: apps/desktop/release/ForgeCAD-1.1.1-${{ matrix.arch }}.dmg
           if-no-files-found: error
           retention-days: 30
