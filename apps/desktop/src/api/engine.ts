@@ -57,6 +57,7 @@ export interface ComponentPayload {
   geometry_fidelity: string;
   trust_score?: number;
   added?: boolean;
+  instance_id?: string | null;
 }
 
 export interface RegistryStatsPayload {
@@ -132,6 +133,11 @@ let cachedConnection: ForgeEngineConnection | null = null;
 let projectRequest: Promise<ProjectPayload> | null = null;
 let sceneRequest: Promise<ScenePayload> | null = null;
 
+function invalidateProjectRequests() {
+  projectRequest = null;
+  sceneRequest = null;
+}
+
 export async function engineConnection(): Promise<ForgeEngineConnection> {
   if (cachedConnection) return cachedConnection;
   if (window.forgeDesktop?.getEngineConnection) {
@@ -181,14 +187,7 @@ export function fetchProject(): Promise<ProjectPayload> {
 
 export function fetchScene(): Promise<ScenePayload> {
   if (sceneRequest) return sceneRequest;
-  // Project snapshots include exact CAD mass/metrics for fabricated parts.  Let that
-  // OpenCascade work finish before tessellating the viewport, and collapse React
-  // StrictMode's duplicate mount into one scene request.  Concurrent OpenCascade
-  // calls can otherwise wedge the local engine and leave the UI at STARTING 3D.
-  const request = (async () => {
-    await fetchProject();
-    return engineFetch<ScenePayload>('/v2/scene');
-  })();
+  const request = engineFetch<ScenePayload>('/v2/scene', { signal: AbortSignal.timeout(90_000) });
   sceneRequest = request;
   request.then(
     () => { if (sceneRequest === request) sceneRequest = null; },
@@ -209,25 +208,62 @@ export const fetchWorkspace = (id: string) => engineFetch<WorkspacePayload>(`/v2
 export const fetchCodeFile = (workspaceId: string, path: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`);
 export const saveCodeFile = (workspaceId: string, path: string, content: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`, { method: 'PUT', body: JSON.stringify({ content }) });
 export const fetchJob = (id: string) => engineFetch<JobPayload>(`/v2/jobs/${encodeURIComponent(id)}`);
-export const activateBranch = (name: string) => engineFetch<ProjectPayload>(`/v2/branches/${encodeURIComponent(name)}/activate`, { method: 'POST' });
-export const createBranch = (name: string, reason = '') => engineFetch<ProjectPayload>('/v2/branches', { method: 'POST', body: JSON.stringify({ name, reason }) });
+
+export async function activateBranch(name: string) {
+  const result = await engineFetch<ProjectPayload>(`/v2/branches/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+  invalidateProjectRequests();
+  return result;
+}
+export async function createBranch(name: string, reason = '') {
+  const result = await engineFetch<ProjectPayload>('/v2/branches', { method: 'POST', body: JSON.stringify({ name, reason }) });
+  invalidateProjectRequests();
+  return result;
+}
 export const compareBranch = (name: string) => engineFetch<{ source: string; target: string; changes: Array<Record<string, unknown>>; count: number }>(`/v2/branches/${encodeURIComponent(name)}/compare`);
-export const setBranchStatus = (name: string, status: BranchPayload['status'], note = '', physicalVerified = false) => engineFetch<{ branch: Record<string, unknown>; project: ProjectPayload }>(`/v2/branches/${encodeURIComponent(name)}/status`, { method: 'PUT', body: JSON.stringify({ status, note, physical_verified: physicalVerified }) });
-export const addComponent = (id: string) => engineFetch<{ component: ComponentPayload; project: ProjectPayload }>(`/v2/components/${encodeURIComponent(id)}/add`, { method: 'POST' });
-export const executeOperation = (op: string, args: Record<string, unknown>, reason = '') => engineFetch<{ operation: Record<string, unknown>; project: ProjectPayload }>('/v2/operations', { method: 'POST', body: JSON.stringify({ op, args, reason }) });
-export const undoHistory = () => engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/undo', { method: 'POST' });
-export const redoHistory = () => engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/redo', { method: 'POST' });
+export async function setBranchStatus(name: string, status: BranchPayload['status'], note = '', physicalVerified = false) {
+  const result = await engineFetch<{ branch: Record<string, unknown>; project: ProjectPayload }>(`/v2/branches/${encodeURIComponent(name)}/status`, { method: 'PUT', body: JSON.stringify({ status, note, physical_verified: physicalVerified }) });
+  invalidateProjectRequests();
+  return result;
+}
+export async function addComponent(id: string) {
+  const result = await engineFetch<{ component: ComponentPayload; project: ProjectPayload }>(`/v2/components/${encodeURIComponent(id)}/add`, { method: 'POST' });
+  invalidateProjectRequests();
+  return result;
+}
+export async function executeOperation(op: string, args: Record<string, unknown>, reason = '') {
+  const result = await engineFetch<{ operation: Record<string, unknown>; project: ProjectPayload }>('/v2/operations', { method: 'POST', body: JSON.stringify({ op, args, reason }) });
+  invalidateProjectRequests();
+  return result;
+}
+export async function newProject() {
+  const result = await executeOperation('new_project', {}, 'Create blank design');
+  return result.project;
+}
+export async function undoHistory() {
+  const result = await engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/undo', { method: 'POST' });
+  invalidateProjectRequests();
+  return result;
+}
+export async function redoHistory() {
+  const result = await engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/redo', { method: 'POST' });
+  invalidateProjectRequests();
+  return result;
+}
 
 export async function importStepFile(file: File) {
   const body = new FormData();
   body.set('file', file);
-  return engineFetch<{ object: Record<string, unknown>; project: ProjectPayload }>('/v2/import/step', { method: 'POST', body });
+  const result = await engineFetch<{ object: Record<string, unknown>; project: ProjectPayload }>('/v2/import/step', { method: 'POST', body });
+  invalidateProjectRequests();
+  return result;
 }
 
 export async function importProjectBundle(file: File) {
   const body = new FormData();
   body.set('file', file);
-  return engineFetch<{ project: ProjectPayload }>('/v2/project/import', { method: 'POST', body });
+  const result = await engineFetch<{ project: ProjectPayload }>('/v2/project/import', { method: 'POST', body });
+  invalidateProjectRequests();
+  return result;
 }
 
 export async function downloadProjectBundle(): Promise<Blob> {
@@ -244,7 +280,11 @@ export async function subscribeEngineEvents(onEvent: (event: EngineEvent) => voi
   const wsBase = connection.baseUrl.replace(/^http/, 'ws');
   const socket = new WebSocket(`${wsBase}/v2/events?token=${encodeURIComponent(connection.sessionToken)}`);
   socket.addEventListener('message', (event) => {
-    try { onEvent(JSON.parse(String(event.data)) as EngineEvent); } catch { /* ignore malformed local event */ }
+    try {
+      const parsed = JSON.parse(String(event.data)) as EngineEvent;
+      if (parsed.type === 'project.updated') invalidateProjectRequests();
+      onEvent(parsed);
+    } catch { /* ignore malformed local event */ }
   });
   const heartbeat = window.setInterval(() => {
     if (socket.readyState === WebSocket.OPEN) socket.send('ping');
