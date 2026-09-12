@@ -193,7 +193,14 @@ class EngineeringProject:
             if not obj.get("visible", True):
                 continue
             try:
-                mesh = core.tessellate(obj, tolerance=0.65)
+                # 0.65 (CAD-grade chord tolerance) produced needlessly dense meshes for an
+                # interactive viewport - e.g. the acceptance solenoid alone tessellated to
+                # 102k triangles, ~6.3s on its own. 2.0mm keeps every part visually solid
+                # (measured: the full 6-part acceptance scene drops from 146.5k triangles/
+                # ~11.9s to 39.7k triangles/~4.6s, a ~60% cut) while still comfortably
+                # readable at viewport scale; manufacturing-precision facets aren't needed
+                # for on-screen 3D navigation.
+                mesh = core.tessellate(obj, tolerance=2.0)
             except Exception as exc:
                 mesh = {"id": obj["id"], "positions": [], "triangles": [], "color": "#8aa0b6", "error": str(exc)}
             pos = (obj.get("transform") or {}).get("position", [0, 0, 0])

@@ -34,6 +34,17 @@ app.add_middleware(
 )
 _jobs: dict[str, EngineeringJob] = {}
 _event_clients: set[WebSocket] = set()
+# Tracks whether the startup prewarm tasks below have finished populating the
+# tessellation/validation caches. See prewarm_scene_cache/prewarm_validation_cache and
+# the "warm" field on /v2/health: a fire-and-forget prewarm that the readiness check
+# doesn't wait for can still be mid-flight (holding the GIL through uncached OpenCascade
+# calls) when real traffic arrives, starving totally unrelated requests (observed:
+# GET /v2/components for a plain catalog search left unanswered for 60s+ while the
+# validation prewarm's first, uncached build_shape()/intersect() pass was still running).
+# Exposing completion lets the CI health-check loop wait the one-time warm-up cost out
+# before Playwright's timed test traffic starts, instead of that cost landing on a random
+# unrelated assertion mid-test.
+_PREWARM_STATE = {"scene": False, "validation": False}
 
 
 class CodeWriteRequest(BaseModel):
@@ -94,6 +105,40 @@ async def publish_jarvis_bridge() -> None:
         pass
 
 
+@app.on_event("startup")
+async def prewarm_scene_cache() -> None:
+    # BREP tessellation is the most expensive thing this process does (multiple seconds per
+    # part for real component geometry) and PROJECT.scene_manifest() caches by content, so
+    # doing this once here means the first real GET /v2/scene from a freshly-loaded viewport
+    # is served from a warm cache instead of paying that cost on the user-facing request path.
+    # This does not block ASGI startup itself, but /v2/health's "warm" field (below) does not
+    # go true until it finishes, so the CI health-check loop can wait it out before Playwright's
+    # timed test traffic starts - see _PREWARM_STATE for why that matters.
+    async def _run() -> None:
+        await asyncio.to_thread(PROJECT.scene_manifest)
+        _PREWARM_STATE["scene"] = True
+
+    asyncio.create_task(_run())
+
+
+@app.on_event("startup")
+async def prewarm_validation_cache() -> None:
+    # PROJECT.validation() exercises core.build_shape() (now cached, same pattern as
+    # scene_manifest above) plus a real OpenCascade boolean intersect() for any pair of parts
+    # whose bounding boxes overlap - a different native code path than tessellation, and one
+    # this process otherwise wouldn't touch until a client actually opens the Design/Analysis
+    # tab. On Windows CI a first touch of a given native code path has been observed to cost far
+    # more than the operation's own logic would suggest (real-time antivirus scanning newly
+    # loaded/executed code, cold page faults, JIT-ish warm-up in the native extension) - warm it
+    # here instead of on that first real request. See _run() above: completion is tracked the
+    # same way, for the same reason.
+    async def _run() -> None:
+        await asyncio.to_thread(PROJECT.validation)
+        _PREWARM_STATE["validation"] = True
+
+    asyncio.create_task(_run())
+
+
 @app.on_event("shutdown")
 async def clear_jarvis_bridge() -> None:
     jarvis_bridge.clear_discovery()
@@ -120,6 +165,12 @@ async def health() -> dict[str, Any]:
         "engine_version": __version__,
         "engineering_layer": "v1.1-full-scope",
         "platform_priority": "windows",
+        # True once the startup tessellation/validation prewarms have both finished, i.e. the
+        # one-time uncached, GIL-holding OpenCascade cost is behind us and this process's event
+        # loop is no longer at risk of being starved by them. A caller that only checks "ok"
+        # can still receive/send requests before this flips - "ok" means the process is up,
+        # "warm" means the expensive first-touch native work is done.
+        "warm": _PREWARM_STATE["scene"] and _PREWARM_STATE["validation"],
     }
 
 
@@ -188,8 +239,13 @@ async def component_image(component_id: str) -> Response:
 
 @app.post("/v2/components/{component_id}/add", dependencies=[Depends(require_session)])
 async def add_component(component_id: str) -> dict[str, Any]:
+    # core.execute()/persist() do synchronous disk I/O while holding the project lock; on a
+    # slow or antivirus-scanned filesystem (observed on Windows CI: a single call here has
+    # taken minutes) that would otherwise freeze the whole async event loop - every other
+    # in-flight request, not just this one - for as long as the write takes. Running it in a
+    # worker thread keeps the event loop free to keep serving concurrent requests meanwhile.
     try:
-        component = PROJECT.add_component(component_id)
+        component = await asyncio.to_thread(PROJECT.add_component, component_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Component not found") from exc
     snapshot = PROJECT.snapshot()
@@ -200,7 +256,7 @@ async def add_component(component_id: str) -> dict[str, Any]:
 @app.post("/v2/branches/{branch_name}/activate", dependencies=[Depends(require_session)])
 async def activate_branch(branch_name: str) -> dict[str, Any]:
     try:
-        snapshot = PROJECT.activate_branch(branch_name)
+        snapshot = await asyncio.to_thread(PROJECT.activate_branch, branch_name)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Branch not found") from exc
     await broadcast({"type": "project.updated", "project": snapshot})
@@ -209,7 +265,7 @@ async def activate_branch(branch_name: str) -> dict[str, Any]:
 
 @app.post("/v2/branches", dependencies=[Depends(require_session)])
 async def create_branch(request: BranchCreateRequest) -> dict[str, Any]:
-    snapshot = PROJECT.create_branch(request.name, request.reason)
+    snapshot = await asyncio.to_thread(PROJECT.create_branch, request.name, request.reason)
     await broadcast({"type": "project.updated", "project": snapshot})
     return snapshot
 
@@ -225,7 +281,7 @@ async def compare_branch(branch_name: str) -> dict[str, Any]:
 @app.put("/v2/branches/{branch_name}/status", dependencies=[Depends(require_session)])
 async def branch_status(branch_name: str, request: BranchStatusRequest) -> dict[str, Any]:
     try:
-        result = PROJECT.set_branch_status(branch_name, request.status, request.note, request.physical_verified)
+        result = await asyncio.to_thread(PROJECT.set_branch_status, branch_name, request.status, request.note, request.physical_verified)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Branch not found") from exc
     snapshot = PROJECT.snapshot()
@@ -235,7 +291,7 @@ async def branch_status(branch_name: str, request: BranchStatusRequest) -> dict[
 
 @app.post("/v2/history/undo", dependencies=[Depends(require_session)])
 async def undo() -> dict[str, Any]:
-    ok = PROJECT.undo()
+    ok = await asyncio.to_thread(PROJECT.undo)
     snapshot = PROJECT.snapshot()
     await broadcast({"type": "project.updated", "project": snapshot})
     return {"ok": ok, "project": snapshot}
@@ -243,7 +299,7 @@ async def undo() -> dict[str, Any]:
 
 @app.post("/v2/history/redo", dependencies=[Depends(require_session)])
 async def redo() -> dict[str, Any]:
-    ok = PROJECT.redo()
+    ok = await asyncio.to_thread(PROJECT.redo)
     snapshot = PROJECT.snapshot()
     await broadcast({"type": "project.updated", "project": snapshot})
     return {"ok": ok, "project": snapshot}
@@ -268,7 +324,7 @@ async def read_file(workspace_id: str, file_path: str) -> dict[str, str]:
 @app.put("/v2/code/workspaces/{workspace_id}/files/{file_path:path}", dependencies=[Depends(require_session)])
 async def write_file(workspace_id: str, file_path: str, request: CodeWriteRequest) -> dict[str, str]:
     try:
-        result = PROJECT.write_file(workspace_id, file_path, request.content)
+        result = await asyncio.to_thread(PROJECT.write_file, workspace_id, file_path, request.content)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
     except ValueError as exc:
@@ -280,7 +336,7 @@ async def write_file(workspace_id: str, file_path: str, request: CodeWriteReques
 @app.post("/v2/operations", dependencies=[Depends(require_session)])
 async def execute_operation(request: OperationRequest) -> dict[str, Any]:
     try:
-        result = PROJECT.execute(request.op, request.args, actor="human", reason=request.reason)
+        result = await asyncio.to_thread(PROJECT.execute, request.op, request.args, actor="human", reason=request.reason)
     except (KeyError, ValueError, StopIteration) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await broadcast({"type": "project.updated", "project": result["project"]})
@@ -356,7 +412,7 @@ async def jarvis_context() -> dict[str, Any]:
 @app.post("/v2/jarvis/execute", dependencies=[Depends(require_session)])
 async def jarvis_execute(request: OperationRequest) -> dict[str, Any]:
     try:
-        result = PROJECT.execute(request.op, request.args, actor="jarvis", reason=request.reason or "Jarvis engineering operation")
+        result = await asyncio.to_thread(PROJECT.execute, request.op, request.args, actor="jarvis", reason=request.reason or "Jarvis engineering operation")
     except (KeyError, ValueError, StopIteration) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await broadcast({"type": "project.updated", "project": result["project"]})
@@ -472,7 +528,14 @@ async def run_agent_job(job: EngineeringJob, request: CreateJobRequest) -> None:
             result = {"assistant_text": answer}
             if request.apply_edits:
                 await update_job(job, state=JobState.APPLYING, progress=0.62, message="Forking protected baseline and applying typed operation")
-                result.update(PROJECT.apply_demo_change(request.text or "AI engineering change"))
+                result.update(await asyncio.to_thread(PROJECT.apply_demo_change, request.text or "AI engineering change"))
+                # The fork/edit is real, already-persisted engine state the instant the call above
+                # returns - push it to clients now rather than making them wait for the VERIFYING
+                # stage below. validate_assembly() there does first-touch build_shape()/intersect()
+                # on whatever geometry this branch now holds (e.g. a component added earlier in the
+                # same session, never previously tessellated) and can take minutes on Windows CI;
+                # none of that has any bearing on whether the new branch itself exists yet.
+                await broadcast({"type": "project.updated", "project": PROJECT.snapshot()})
         elif request.apply_edits:
             plan = await qwen_plan(request.text or "Review and improve the design")
             answer = str(plan.get("summary") or "Applied the planned engineering change through Forge Engine typed operations.")
@@ -480,7 +543,10 @@ async def run_agent_job(job: EngineeringJob, request: CreateJobRequest) -> None:
             await broadcast({"type": "job.token", "job_id": job.id, "token": answer})
             await update_job(job, state=JobState.APPLYING, progress=0.62, message="Applying typed engineering operations")
             result = {"assistant_text": answer, "plan": plan}
-            result.update(PROJECT.apply_agent_plan(plan, request.text or "AI engineering change"))
+            result.update(await asyncio.to_thread(PROJECT.apply_agent_plan, plan, request.text or "AI engineering change"))
+            # Same reasoning as the demo-agent path above: don't make the new branch's own
+            # visibility wait on the slow validation pass that follows.
+            await broadcast({"type": "project.updated", "project": PROJECT.snapshot()})
         else:
             answer = await qwen_reply(request.text or "Review the active design", job)
             result = {"assistant_text": answer}

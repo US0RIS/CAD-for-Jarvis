@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json, math, os, re, threading, uuid
+from collections import OrderedDict
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -238,7 +239,49 @@ def _apply_feature(shape, f: dict[str, Any]):
     return shape
 
 
+# Same rationale as the tessellation cache below: build_shape() constructs a real BREP via
+# OpenCascade, and it's called unconditionally by object_metrics(), the custom-part branch of
+# tessellate(), and - expensively, repeatedly, per pair of objects - assembly_validation's
+# collision/clearance screening, which additionally runs a real boolean intersect() on any
+# overlapping pair. validate_assembly() (and therefore /v2/validation) reruns this for every
+# visible object on every call, and the frontend refetches validation on every project mutation.
+# Cache by content: callers only ever read from the returned shape (bounding box, volume,
+# tessellate, intersect - all of which return new objects rather than mutating in place in this
+# CAD kernel), so sharing one instance across calls for byte-identical objects is safe.
+_SHAPE_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_SHAPE_CACHE_MAX = 256
+_SHAPE_LOCKS: dict[str, threading.Lock] = {}
+_SHAPE_LOCKS_GUARD = threading.Lock()
+
+
+def _shape_cache_key(obj: dict[str, Any]) -> str:
+    return json.dumps(obj, sort_keys=True, default=str)
+
+
 def build_shape(obj: dict[str, Any]):
+    cache_key = _shape_cache_key(obj)
+    cached = _SHAPE_CACHE.get(cache_key)
+    if cached is not None:
+        _SHAPE_CACHE.move_to_end(cache_key)
+        return cached
+    with _SHAPE_LOCKS_GUARD:
+        lock = _SHAPE_LOCKS.setdefault(cache_key, threading.Lock())
+    with lock:
+        cached = _SHAPE_CACHE.get(cache_key)
+        if cached is not None:
+            _SHAPE_CACHE.move_to_end(cache_key)
+            return cached
+        result = _build_shape_uncached(obj)
+        _SHAPE_CACHE[cache_key] = result
+        _SHAPE_CACHE.move_to_end(cache_key)
+        while len(_SHAPE_CACHE) > _SHAPE_CACHE_MAX:
+            evicted_key, _ = _SHAPE_CACHE.popitem(last=False)
+            with _SHAPE_LOCKS_GUARD:
+                _SHAPE_LOCKS.pop(evicted_key, None)
+    return result
+
+
+def _build_shape_uncached(obj: dict[str, Any]):
     shape=_base_shape(obj)
     for f in obj.get("features",[]): shape=_apply_feature(shape,f)
     t=obj.get("transform") or {}; s=t.get("scale",[1,1,1]);
@@ -274,7 +317,54 @@ def project_metrics() -> dict[str, Any]:
     visible=[o for o in PROJECT["objects"] if o.get("visible",True)]; purchased=sum(o.get("kind")=="component" for o in PROJECT["objects"]); custom=len(PROJECT["objects"])-purchased
     return {"object_count":len(PROJECT["objects"]),"purchased_component_count":purchased,"custom_part_count":custom,"connection_count":len(PROJECT.get("connections",[])),"mass_kg":sum(_summary_mass_kg(o) for o in visible),"bom_cost_usd":sum(float(x.get("unit_cost_usd",0) or 0)*float(x.get("qty",1) or 1) for x in PROJECT.get("bom",[])),"active_design":ACTIVE_DESIGN}
 
+# BREP tessellation (via OCP/OpenCascade) is the single most expensive operation in the
+# engine: real component/part geometry at `/v2/scene`-quality tolerances takes multiple
+# seconds per object, and the same object is re-tessellated on every scene fetch even when
+# nothing about it has changed (repeated polling, React re-mounts, undo/redo landing back on
+# an identical state, multiple viewport instances). Cache by the object's own content plus the
+# requested tolerance so identical requests are free; any real change to the object (transform,
+# component, features, material, ...) naturally produces a different key and recomputes.
+_TESSELLATION_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+_TESSELLATION_CACHE_MAX = 256
+# Guards against the "thundering herd" case where two callers race to tessellate the exact
+# same object+tolerance before either has populated the cache (e.g. React StrictMode mounting
+# a viewport twice in development, firing two concurrent /v2/scene requests): without this,
+# both requests independently pay the full OCP tessellation cost at the same time, and since
+# that work is CPU-bound Python/C-extension code serialized by the GIL, running it twice
+# concurrently roughly doubles wall-clock latency for both instead of merely duplicating work.
+_TESSELLATION_LOCKS: dict[str, threading.Lock] = {}
+_TESSELLATION_LOCKS_GUARD = threading.Lock()
+
+
+def _tessellation_cache_key(obj: dict[str, Any], tolerance: float) -> str:
+    return json.dumps({"obj": obj, "tolerance": float(tolerance)}, sort_keys=True, default=str)
+
+
 def tessellate(obj: dict[str, Any], tolerance: float=.35) -> dict[str, Any]:
+    cache_key = _tessellation_cache_key(obj, tolerance)
+    cached = _TESSELLATION_CACHE.get(cache_key)
+    if cached is not None:
+        _TESSELLATION_CACHE.move_to_end(cache_key)
+        return deepcopy(cached)
+    with _TESSELLATION_LOCKS_GUARD:
+        lock = _TESSELLATION_LOCKS.setdefault(cache_key, threading.Lock())
+    with lock:
+        # Re-check: whoever held the lock first may have already computed and cached this.
+        cached = _TESSELLATION_CACHE.get(cache_key)
+        if cached is not None:
+            _TESSELLATION_CACHE.move_to_end(cache_key)
+            return deepcopy(cached)
+        result = _tessellate_uncached(obj, tolerance)
+        _TESSELLATION_CACHE[cache_key] = deepcopy(result)
+        _TESSELLATION_CACHE.move_to_end(cache_key)
+        while len(_TESSELLATION_CACHE) > _TESSELLATION_CACHE_MAX:
+            evicted_key, _ = _TESSELLATION_CACHE.popitem(last=False)
+            with _TESSELLATION_LOCKS_GUARD:
+                _TESSELLATION_LOCKS.pop(evicted_key, None)
+    return result
+
+
+def _tessellate_uncached(obj: dict[str, Any], tolerance: float) -> dict[str, Any]:
     parts=_component_parts(obj) if obj.get("kind")=="component" else None
     if parts and not obj.get("features"):
         t=obj.get("transform") or {}; pos=t.get("position",[0,0,0]); rot=t.get("rotation_deg",[0,0,0]); scl=t.get("scale",[1,1,1]); positions=[]; indices=[]; tri_colors=[]; offset=0
