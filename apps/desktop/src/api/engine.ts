@@ -129,10 +129,14 @@ export type EngineEvent =
   | { type: 'job.token'; job_id: string; token: string }
   | { type: 'project.updated'; project: ProjectPayload };
 
+type ComponentSearchResult = { items: ComponentPayload[]; stats?: RegistryStatsPayload };
+
 let cachedConnection: ForgeEngineConnection | null = null;
 let runtimeRequest: Promise<RuntimePayload> | null = null;
 let projectRequest: Promise<ProjectPayload> | null = null;
 let sceneRequest: Promise<ScenePayload> | null = null;
+let componentRequestSerial = 0;
+let latestComponentRequest: Promise<ComponentSearchResult> | null = null;
 
 function invalidateProjectRequests() {
   projectRequest = null;
@@ -208,12 +212,26 @@ export function fetchScene(): Promise<ScenePayload> {
 
 export const fetchRegistryStats = () => engineFetch<RegistryStatsPayload>('/v2/component-registry/stats');
 export const fetchValidation = () => engineFetch<ValidationPayload>('/v2/validation');
-export const fetchComponents = (query = '', category?: string, voltage?: number) => {
+
+export function fetchComponents(query = '', category?: string, voltage?: number): Promise<ComponentSearchResult> {
   const params = new URLSearchParams({ q: query });
   if (category) params.set('category', category);
   if (voltage != null) params.set('voltage_v', String(voltage));
-  return engineFetch<{ items: ComponentPayload[]; stats?: RegistryStatsPayload }>(`/v2/components?${params.toString()}`);
-};
+
+  const serial = ++componentRequestSerial;
+  const request = engineFetch<ComponentSearchResult>(`/v2/components?${params.toString()}`, { signal: AbortSignal.timeout(20_000) });
+  latestComponentRequest = request;
+
+  return request.then(async (result) => {
+    // A slower, older query must never overwrite a newer search in the component panel.
+    // This matters on Windows while the local CAD engine is also servicing scene work.
+    if (serial === componentRequestSerial) return result;
+    const latest = latestComponentRequest;
+    if (latest && latest !== request) return latest;
+    return result;
+  });
+}
+
 export const fetchWorkspace = (id: string) => engineFetch<WorkspacePayload>(`/v2/code/workspaces/${encodeURIComponent(id)}`);
 export const fetchCodeFile = (workspaceId: string, path: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`);
 export const saveCodeFile = (workspaceId: string, path: string, content: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`, { method: 'PUT', body: JSON.stringify({ content }) });
