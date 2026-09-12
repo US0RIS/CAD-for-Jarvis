@@ -289,7 +289,12 @@ class EngineeringProject:
         return {"revision": self.snapshot()["revision"], "branch": core.ACTIVE_DESIGN, "parts": meshes, "authoritative": True}
 
     def search_components(self, query: str = "", *, category: str | None = None, constraints: dict[str, Any] | None = None, limit: int = 30) -> list[dict[str, Any]]:
-        result = registry.search_components(query, category, constraints or {}, limit=limit, include_infeasible=True)
+        constraints = constraints or {}
+        # The component panel is a library browser, not a top-30 recommender. When no
+        # filter is active, return the complete local catalog so the UI does not imply
+        # that only 30 components exist. Filtered searches can keep their requested cap.
+        effective_limit = int(registry.registry_stats().get("total", limit)) if not query.strip() and not category and not constraints else limit
+        result = registry.search_components(query, category, constraints, limit=effective_limit, include_infeasible=True)
         added_refs = {str(o.get("component_ref")) for o in core.PROJECT.get("objects", []) if o.get("component_ref")}
         return [_ui_component(row, added_refs=added_refs) for row in result["results"]]
 
