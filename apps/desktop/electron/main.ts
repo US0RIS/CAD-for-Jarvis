@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { EngineSupervisor } from './engineSupervisor';
@@ -10,14 +11,29 @@ const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const SERVICE_ROOT = process.env.FORGECAD_ENGINE_ROOT ?? (app.isPackaged
   ? path.join(process.resourcesPath, 'forge-engine')
   : path.resolve(APP_ROOT, '../../services/forge-engine'));
-const PACKAGED_ENGINE = app.isPackaged
-  ? path.join(process.resourcesPath, 'forge-engine', process.platform === 'win32' ? 'forge-engine.exe' : 'forge-engine')
-  : undefined;
+
+function packagedEnginePath(): string | undefined {
+  if (!app.isPackaged) return undefined;
+  const root = path.join(process.resourcesPath, 'forge-engine');
+  const candidates = process.platform === 'win32'
+    ? [path.join(root, 'forge-engine.exe')]
+    : [
+        // macOS 1.1.2+ uses PyInstaller onedir so CAD/OCP/VTK libraries do not need to
+        // unpack from a giant one-file executable on every launch. Keep the legacy path
+        // as a fallback so development and older packages remain diagnosable.
+        path.join(root, 'forge-engine', 'forge-engine'),
+        path.join(root, 'forge-engine'),
+      ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
+const PACKAGED_ENGINE = packagedEnginePath();
 const CONFIGURED_MODEL = process.env.FORGECAD_OLLAMA_MODEL ?? 'qwen3:8b';
 
 const engine = new EngineSupervisor({
   serviceRoot: SERVICE_ROOT,
   configuredModel: CONFIGURED_MODEL,
+  startupTimeoutMs: app.isPackaged ? 120_000 : 45_000,
   ...(PACKAGED_ENGINE ? { engineExecutable: PACKAGED_ENGINE } : {}),
 });
 let mainWindow: BrowserWindow | null = null;

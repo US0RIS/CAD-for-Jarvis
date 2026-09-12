@@ -10,6 +10,7 @@ export interface EngineSupervisorOptions {
   configuredModel: string;
   pythonExecutable?: string;
   engineExecutable?: string;
+  startupTimeoutMs?: number;
 }
 
 async function freePort(): Promise<number> {
@@ -74,6 +75,7 @@ export class EngineSupervisor {
       : ['-m', 'uvicorn', 'forge_engine.main:app', '--host', '127.0.0.1', '--port', String(port), '--log-level', 'warning'];
 
     this.logs.length = 0;
+    let spawnError: Error | null = null;
     const child = spawn(command, args, {
       cwd: packagedEngine ? path.dirname(packagedEngine) : serviceRoot,
       env: {
@@ -106,18 +108,24 @@ export class EngineSupervisor {
       this.process = null;
     });
     child.once('error', (error) => {
-      if (this.process !== child) return;
+      spawnError = error;
       this.logs.push(`[supervisor] Forge Engine process error: ${error.message}`);
-      this.connection = null;
+      if (this.process === child) this.connection = null;
     });
 
     const baseUrl = `http://127.0.0.1:${port}`;
-    const deadline = Date.now() + 45_000;
+    const startupTimeoutMs = this.options.startupTimeoutMs ?? (packagedEngine ? 120_000 : 45_000);
+    const deadline = Date.now() + startupTimeoutMs;
     let lastError: unknown;
 
     while (Date.now() < deadline) {
+      if (spawnError) {
+        this.stop();
+        throw new Error(`Forge Engine could not launch: ${spawnError.message}\nExecutable: ${command}\n${this.logTail.join('\n')}`);
+      }
       if (child.exitCode !== null) {
-        throw new Error(`Forge Engine exited with status ${child.exitCode}.\n${this.logTail.join('\n')}`);
+        this.stop();
+        throw new Error(`Forge Engine exited with status ${child.exitCode}.\nExecutable: ${command}\n${this.logTail.join('\n')}`);
       }
       try {
         const response = await fetch(`${baseUrl}/v2/health`, { signal: AbortSignal.timeout(1_000) });
@@ -140,7 +148,8 @@ export class EngineSupervisor {
       : process.platform === 'win32'
         ? 'Run scripts\\bootstrap-windows.ps1 to create the managed Forge Engine runtime.'
         : 'Run scripts/bootstrap-macos.sh to create the managed Forge Engine runtime.';
-    throw new Error(`Forge Engine did not become healthy within 45 seconds. ${String(lastError ?? '')}\n${bootstrapHint}\n${this.logTail.join('\n')}`);
+    const timeoutSeconds = Math.round(startupTimeoutMs / 1000);
+    throw new Error(`Forge Engine did not become healthy within ${timeoutSeconds} seconds. ${String(lastError ?? '')}\nExecutable: ${command}\n${bootstrapHint}\n${this.logTail.join('\n')}`);
   }
 
   stop(): void {

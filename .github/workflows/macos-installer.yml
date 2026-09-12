@@ -52,7 +52,8 @@ jobs:
 
       - name: Build standalone Forge Engine
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name forge-engine \
+          rm -rf services/forge-engine/dist services/forge-engine/build/pyinstaller
+          python -m PyInstaller --noconfirm --clean --onedir --name forge-engine \
             --collect-all cadquery \
             --collect-all OCP \
             --collect-all vtkmodules \
@@ -61,8 +62,8 @@ jobs:
             --workpath services/forge-engine/build/pyinstaller \
             --specpath services/forge-engine/build \
             services/forge-engine/forge_engine/desktop_entry.py
-          chmod +x services/forge-engine/dist/forge-engine
-          file services/forge-engine/dist/forge-engine
+          chmod +x services/forge-engine/dist/forge-engine/forge-engine
+          file services/forge-engine/dist/forge-engine/forge-engine
 
       - name: Smoke bundled Forge Engine full scope
         shell: bash
@@ -72,13 +73,25 @@ jobs:
           export FORGECAD_SESSION_TOKEN=installer-smoke
           export FORGECAD_OLLAMA_MODEL=qwen3:8b
           export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-bundled-smoke"
-          services/forge-engine/dist/forge-engine > "$RUNNER_TEMP/forge-engine.log" 2>&1 &
+          ENGINE="services/forge-engine/dist/forge-engine/forge-engine"
+          START_TS=$(date +%s)
+          "$ENGINE" > "$RUNNER_TEMP/forge-engine.log" 2>&1 &
           ENGINE_PID=$!
           trap 'kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true' EXIT
-          for i in {1..160}; do
-            if curl --fail --silent http://127.0.0.1:8878/v2/health > "$RUNNER_TEMP/health.json"; then break; fi
+          HEALTH_OK=0
+          for i in {1..240}; do
+            if curl --fail --silent http://127.0.0.1:8878/v2/health > "$RUNNER_TEMP/health.json"; then
+              HEALTH_OK=1
+              break
+            fi
             sleep 0.25
           done
+          if [ "$HEALTH_OK" -ne 1 ]; then
+            cat "$RUNNER_TEMP/forge-engine.log" || true
+            exit 1
+          fi
+          STARTUP_SECONDS=$(( $(date +%s) - START_TS ))
+          echo "Forge Engine onedir startup: ${STARTUP_SECONDS}s"
           cat "$RUNNER_TEMP/health.json"
           grep -q 'v1.1-full-scope' "$RUNNER_TEMP/health.json"
           curl --fail --silent -H 'X-ForgeCAD-Session: installer-smoke' http://127.0.0.1:8878/v2/component-registry/stats > "$RUNNER_TEMP/stats.json"
@@ -128,7 +141,7 @@ jobs:
           codesign -dv --verbose=4 "$INSTALLED" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
           grep -q 'Signature=adhoc' "$RUNNER_TEMP/codesign.txt"
 
-          ENGINE="$INSTALLED/Contents/Resources/forge-engine/forge-engine"
+          ENGINE="$INSTALLED/Contents/Resources/forge-engine/forge-engine/forge-engine"
           test -x "$ENGINE"
           file "$ENGINE"
           case "${{ matrix.arch }}" in
@@ -144,12 +157,13 @@ jobs:
           export FORGECAD_PORT=8879
           export FORGECAD_SESSION_TOKEN=dmg-smoke
           export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-dmg-state"
+          START_TS=$(date +%s)
           "$ENGINE" > "$RUNNER_TEMP/dmg-engine.log" 2>&1 &
           ENGINE_PID=$!
           trap 'kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true' EXIT
 
           HEALTH_OK=0
-          for i in {1..200}; do
+          for i in {1..240}; do
             if curl --fail --silent http://127.0.0.1:8879/v2/health > "$RUNNER_TEMP/dmg-health.json"; then
               HEALTH_OK=1
               break
@@ -160,6 +174,8 @@ jobs:
             cat "$RUNNER_TEMP/dmg-engine.log" || true
             exit 1
           fi
+          STARTUP_SECONDS=$(( $(date +%s) - START_TS ))
+          echo "Installed Forge Engine startup: ${STARTUP_SECONDS}s"
 
           cat "$RUNNER_TEMP/dmg-health.json"
           grep -q '"engine_version":"1.1.2"' "$RUNNER_TEMP/dmg-health.json"
