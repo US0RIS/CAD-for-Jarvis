@@ -1,12 +1,33 @@
 import { expect, test } from '@playwright/test';
 
 test('full ForgeCAD engineering workbench stays interactive end to end', async ({ page }) => {
+  // TEMPORARY DIAGNOSTICS: root-causing the Windows-only scene-health timeout.
+  // Azure Blob artifact hosting (Playwright's HTML report/trace host) is unreachable from
+  // where these logs are analyzed, so print directly to CI's plain-text stdout instead.
+  const t0 = Date.now();
+  const since = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
+  page.on('console', (msg) => console.log(`[diag ${since()}] console.${msg.type()}: ${msg.text()}`));
+  page.on('pageerror', (err) => console.log(`[diag ${since()}] pageerror: ${err.stack ?? err.message}`));
+  page.on('requestfailed', (req) => console.log(`[diag ${since()}] requestfailed: ${req.method()} ${req.url()} :: ${req.failure()?.errorText}`));
+  page.on('request', (req) => {
+    if (req.url().includes('/v2/')) console.log(`[diag ${since()}] request start: ${req.method()} ${req.url()}`);
+  });
+  page.on('response', (res) => {
+    if (res.url().includes('/v2/')) console.log(`[diag ${since()}] response: ${res.status()} ${res.url()}`);
+  });
+
   await page.goto('/');
 
   await expect(page.getByText('ForgeCAD').first()).toBeVisible();
   await expect(page.getByTestId('runtime-banner')).toBeVisible();
   await expect(page.getByTestId('scene-canvas')).toBeVisible();
-  await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 60_000 });
+  try {
+    await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 60_000 });
+  } catch (error) {
+    const startupErrorText = await page.locator('.runtime-banner.error, [data-testid="startup-error"]').allTextContents().catch(() => []);
+    console.log(`[diag ${since()}] scene-health timed out. Visible error banner text: ${JSON.stringify(startupErrorText)}`);
+    throw error;
+  }
 
   // The canonical OpenCascade scene opens assembled and the viewport remains interactive.
   const slider = page.getByTestId('explode-slider');
