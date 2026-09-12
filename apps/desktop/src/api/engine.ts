@@ -143,6 +143,13 @@ function invalidateProjectRequests() {
   sceneRequest = null;
 }
 
+function invalidateConnection() {
+  cachedConnection = null;
+  runtimeRequest = null;
+  projectRequest = null;
+  sceneRequest = null;
+}
+
 export async function engineConnection(): Promise<ForgeEngineConnection> {
   if (cachedConnection) return cachedConnection;
   if (window.forgeDesktop?.getEngineConnection) {
@@ -159,8 +166,7 @@ export async function engineConnection(): Promise<ForgeEngineConnection> {
   return cachedConnection;
 }
 
-export async function engineRawFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const connection = await engineConnection();
+async function rawFetchWithConnection(connection: ForgeEngineConnection, path: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('X-ForgeCAD-Session', connection.sessionToken);
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
@@ -170,6 +176,29 @@ export async function engineRawFetch(path: string, init: RequestInit = {}): Prom
     throw new Error(`Forge Engine ${response.status}: ${detail}`);
   }
   return response;
+}
+
+function isConnectionFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
+    return error.name === 'AbortError' || error.name === 'TimeoutError' || error.name === 'NetworkError';
+  }
+  return false;
+}
+
+export async function engineRawFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const connection = await engineConnection();
+  try {
+    return await rawFetchWithConnection(connection, path, init);
+  } catch (error) {
+    // A rendered Three.js scene can outlive the native process that produced it. If the
+    // engine dies, don't leave ForgeCAD showing stale geometry plus a permanent error.
+    // Ask Electron for a fresh supervised engine and retry the request exactly once.
+    if (!window.forgeDesktop?.getEngineConnection || !isConnectionFailure(error)) throw error;
+    invalidateConnection();
+    const replacement = await engineConnection();
+    return rawFetchWithConnection(replacement, path, init);
+  }
 }
 
 export async function engineFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -223,8 +252,6 @@ export function fetchComponents(query = '', category?: string, voltage?: number)
   latestComponentRequest = request;
 
   return request.then(async (result) => {
-    // A slower, older query must never overwrite a newer search in the component panel.
-    // This matters on Windows while the local CAD engine is also servicing scene work.
     if (serial === componentRequestSerial) return result;
     const latest = latestComponentRequest;
     if (latest && latest !== request) return latest;
