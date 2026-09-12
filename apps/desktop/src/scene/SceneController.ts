@@ -22,12 +22,12 @@ export interface SceneControllerEvents {
 
 function colorForRole(role: string) {
   const value = role.toLowerCase();
-  if (value.includes('compute') || value.includes('controller')) return 0x2f9f66;
-  if (value.includes('power')) return 0xd0a43b;
-  if (value.includes('solenoid') || value.includes('actuator')) return 0x3b75a6;
-  if (value.includes('driver')) return 0x8b68ba;
-  if (value.includes('structure') || value.includes('mount')) return 0x8a949c;
-  return 0x6f8492;
+  if (value.includes('compute') || value.includes('controller')) return 0x4f7f6d;
+  if (value.includes('power')) return 0x9a7c43;
+  if (value.includes('solenoid') || value.includes('actuator')) return 0x4c6f92;
+  if (value.includes('driver')) return 0x6d6087;
+  if (value.includes('structure') || value.includes('mount')) return 0x8b9096;
+  return 0x687985;
 }
 
 export class SceneController {
@@ -67,11 +67,10 @@ export class SceneController {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = !software;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.scene.background = new THREE.Color(0x071017);
-    this.scene.fog = new THREE.FogExp2(0x071017, 0.0023);
+    this.scene.background = new THREE.Color(0x1b1e23);
 
     if (!software) {
       const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -79,8 +78,6 @@ export class SceneController {
       pmrem.dispose();
     }
 
-    // ForgeCAD's canonical engineering coordinate system is Z-up.  Three.js supports
-    // this directly; no lossy axis remapping is needed between CAD and viewport.
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(260, -300, 240);
     this.orbit = new OrbitControls(this.camera, canvas);
@@ -103,11 +100,10 @@ export class SceneController {
     this.installEvents();
     this.resize();
     this.animate();
-    void this.loadAssembly();
   }
 
   private installLightingAndGround() {
-    const key = new THREE.DirectionalLight(0xffffff, 3.0);
+    const key = new THREE.DirectionalLight(0xffffff, 2.6);
     key.position.set(260, -190, 360);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
@@ -115,25 +111,25 @@ export class SceneController {
     key.shadow.camera.far = 1400;
     this.scene.add(key);
 
-    const fill = new THREE.DirectionalLight(0x7bd6ff, 1.6);
+    const fill = new THREE.DirectionalLight(0xb8d4e8, 1.2);
     fill.position.set(-260, 160, 190);
     this.scene.add(fill);
 
-    const ambient = new THREE.HemisphereLight(0xbcd9e8, 0x17242b, 1.8);
+    const ambient = new THREE.HemisphereLight(0xd7e1e8, 0x202329, 1.45);
     this.scene.add(ambient);
 
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(1400, 1400),
-      new THREE.MeshPhysicalMaterial({ color: 0x081118, roughness: 0.92, metalness: 0.06 }),
+      new THREE.PlaneGeometry(1600, 1600),
+      new THREE.MeshPhysicalMaterial({ color: 0x1a1d22, roughness: 0.96, metalness: 0.02 }),
     );
     floor.position.z = -4;
     floor.receiveShadow = true;
     this.scene.add(floor);
 
-    const grid = new THREE.GridHelper(1400, 70, 0x244653, 0x132a33);
+    const grid = new THREE.GridHelper(1600, 80, 0x535b65, 0x343a42);
     grid.rotation.x = Math.PI / 2;
     grid.position.z = -3.8;
-    (grid.material as THREE.Material).opacity = 0.27;
+    (grid.material as THREE.Material).opacity = 0.46;
     (grid.material as THREE.Material).transparent = true;
     this.scene.add(grid);
   }
@@ -141,9 +137,9 @@ export class SceneController {
   private material(role: string, vertexColors: boolean) {
     return new THREE.MeshPhysicalMaterial({
       color: vertexColors ? 0xffffff : colorForRole(role),
-      metalness: role.includes('structure') || role.includes('mount') ? 0.72 : 0.28,
-      roughness: 0.38,
-      clearcoat: 0.08,
+      metalness: role.includes('structure') || role.includes('mount') ? 0.64 : 0.22,
+      roughness: 0.42,
+      clearcoat: 0.04,
       vertexColors,
       side: THREE.DoubleSide,
     });
@@ -158,7 +154,7 @@ export class SceneController {
       const positions: number[] = [];
       const colors: number[] = [];
       mesh.triangles.forEach((triangle, index) => {
-        const color = new THREE.Color(mesh.triangle_colors?.[index] ?? '#8aa0b6');
+        const color = new THREE.Color(mesh.triangle_colors?.[index] ?? '#7f8b94');
         triangle.forEach((vertexIndex) => {
           const vertex = mesh.positions[vertexIndex];
           if (!vertex) return;
@@ -178,7 +174,7 @@ export class SceneController {
     return geometry;
   }
 
-  private async loadAssembly() {
+  async reload(): Promise<void> {
     try {
       const payload = await fetchScene();
       if (this.disposed) return;
@@ -218,7 +214,7 @@ export class SceneController {
         this.parts.set(part.id, { id: part.id, object, basePosition: object.position.clone(), explodeVector: explodeVector.normalize() });
       }
       this.setExplode(this.explode);
-      this.setCameraPreset('fit');
+      if (this.parts.size) this.setCameraPreset('fit');
       this.events.onSelectionChange?.(null);
       this.events.onReady?.();
     } catch (error) {
@@ -256,11 +252,16 @@ export class SceneController {
         if (!(node instanceof THREE.Mesh)) return;
         const materials = Array.isArray(node.material) ? node.material : [node.material];
         for (const material of materials) {
-          if (material instanceof THREE.MeshPhysicalMaterial) material.emissive.setHex(selected ? 0x123f31 : 0x000000);
+          if (material instanceof THREE.MeshPhysicalMaterial) material.emissive.setHex(selected ? 0x17324d : 0x000000);
         }
       });
     }
     this.events.onSelectionChange?.(id);
+  }
+
+  selectPart(id: string | null) {
+    if (id && !this.parts.has(id)) return;
+    this.select(id);
   }
 
   private async commitTransform() {
@@ -280,10 +281,11 @@ export class SceneController {
     };
     try {
       await executeOperation('transform', args, 'Viewport transform');
-      await this.loadAssembly();
+      await this.reload();
+      this.selectPart(this.selectedId);
     } catch (error) {
       this.events.onError?.(error instanceof Error ? error : new Error(String(error)));
-      await this.loadAssembly();
+      await this.reload();
     }
   }
 
@@ -300,30 +302,11 @@ export class SceneController {
     }
   }
 
-  setTransformMode(mode: TransformMode) {
-    this.transform.setMode(mode === 'move' ? 'translate' : mode);
-  }
-
-  setAutoRotate(enabled: boolean) {
-    this.orbit.autoRotate = enabled;
-    this.orbit.autoRotateSpeed = 1.0;
-  }
-
-  isolateSelected() {
-    if (!this.selectedId) return;
-    for (const part of this.parts.values()) part.object.visible = part.id === this.selectedId;
-  }
-
-  hideSelected() {
-    if (!this.selectedId) return;
-    const part = this.parts.get(this.selectedId);
-    if (part) part.object.visible = false;
-    this.transform.detach();
-  }
-
-  showAll() {
-    for (const part of this.parts.values()) part.object.visible = true;
-  }
+  setTransformMode(mode: TransformMode) { this.transform.setMode(mode === 'move' ? 'translate' : mode); }
+  setAutoRotate(enabled: boolean) { this.orbit.autoRotate = enabled; this.orbit.autoRotateSpeed = 1.0; }
+  isolateSelected() { if (this.selectedId) for (const part of this.parts.values()) part.object.visible = part.id === this.selectedId; }
+  hideSelected() { if (this.selectedId) { const part = this.parts.get(this.selectedId); if (part) part.object.visible = false; this.transform.detach(); } }
+  showAll() { for (const part of this.parts.values()) part.object.visible = true; }
 
   setCameraPreset(preset: CameraPreset) {
     if (preset === 'fit') {
