@@ -18,8 +18,14 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controllerRef = useRef<SceneController | null>(null);
   const mountedRevision = useRef<string | null>(null);
+  const selectedIdRef = useRef<string | null>(selectedId);
   const [mode, setMode] = useState<TransformMode>('move');
   const [autoRotate, setAutoRotate] = useState(false);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+    controllerRef.current?.selectPart(selectedId);
+  }, [selectedId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -30,7 +36,7 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
       controller.setExplode(explode);
       mountedRevision.current = sceneRevision;
       onLoading();
-      void controller.reload().then(() => controller.selectPart(selectedId));
+      void controller.reload().then(() => controller.selectPart(selectedIdRef.current));
       return () => {
         controller.dispose();
         controllerRef.current = null;
@@ -45,11 +51,10 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
     if (!controller || mountedRevision.current === sceneRevision) return;
     mountedRevision.current = sceneRevision;
     onLoading();
-    void controller.reload().then(() => controller.selectPart(selectedId));
+    void controller.reload().then(() => controller.selectPart(selectedIdRef.current));
   }, [sceneRevision]);
 
   useEffect(() => controllerRef.current?.setExplode(explode), [explode]);
-  useEffect(() => controllerRef.current?.selectPart(selectedId), [selectedId]);
 
   function transform(next: TransformMode) {
     setMode(next);
