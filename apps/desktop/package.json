@@ -1,7 +1,7 @@
 {
   "name": "@forgecad/desktop",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.1.2",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -61,6 +61,15 @@
         "filter": ["**/*"]
       }
     ],
+    "fileAssociations": [
+      {
+        "ext": "focad",
+        "name": "ForgeCAD Design",
+        "description": "Portable ForgeCAD design",
+        "role": "Editor",
+        "mimeType": "application/vnd.forgecad.project+zip"
+      }
+    ],
     "win": {
       "target": [
         {
@@ -81,7 +90,7 @@
     "mac": {
       "target": ["dmg"],
       "category": "public.app-category.developer-tools",
-      "identity": null,
+      "identity": "-",
       "artifactName": "ForgeCAD-${version}-${arch}.${ext}"
     }
   }
