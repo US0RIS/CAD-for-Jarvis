@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  Activity, Bot, Box, Check, ChevronDown, ChevronRight, CircleAlert, Code2, FileText,
+  Activity, Bot, Box, Check, ChevronDown, ChevronRight, CircleAlert, Code2, Download, FileText,
   FolderOpen, GitBranch, History, Layers, MessageSquare, MoreHorizontal, Package, Play,
-  Plus, Redo2, Search, Send, Settings, Undo2, X,
+  Plus, Redo2, Search, Send, Settings, Undo2, Upload, X,
 } from 'lucide-react';
 import {
-  activateBranch, addComponent, createJob, fetchComponents, fetchJob, fetchProject, fetchRegistryStats, fetchRuntime,
-  importStepFile, newProject, redoHistory, subscribeEngineEvents, undoHistory,
+  activateBranch, addComponent, createJob, downloadProjectBundle, fetchComponents, fetchJob, fetchProject, fetchRegistryStats, fetchRuntime,
+  importProjectBundle, importStepFile, newProject, redoHistory, subscribeEngineEvents, undoHistory,
   type ComponentPayload, type JobPayload, type ProjectPayload, type RegistryStatsPayload, type RuntimePayload,
 } from './api/engine';
 import { CodeWorkspace } from './components/CodeWorkspace';
@@ -141,6 +141,7 @@ export default function App() {
   const handledJobs = useRef(new Set<string>());
   const conversationRef = useRef<HTMLElement | null>(null);
   const stepInput = useRef<HTMLInputElement | null>(null);
+  const focadInput = useRef<HTMLInputElement | null>(null);
 
   const selectedPart = useMemo(() => project?.parts.find((part) => part.id === selectedId) ?? null, [project, selectedId]);
   const workspaceId = selectedPart?.programmable_workspace_id ?? project?.parts.find((part) => part.programmable_workspace_id)?.programmable_workspace_id ?? null;
@@ -271,7 +272,7 @@ export default function App() {
 
   async function createBlankProject() {
     if (newBusy) return;
-    if (project?.parts.length && !window.confirm('Create a new blank design? The current local design remains in its exported files only.')) return;
+    if (project?.parts.length && !window.confirm('Create a new blank design? Export the current design as .focad first if you want a portable copy.')) return;
     try {
       setNewBusy(true);
       setSceneReady(false);
@@ -282,6 +283,40 @@ export default function App() {
       setRightTab('components');
     } catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }
     finally { setNewBusy(false); }
+  }
+
+  async function importFocad(file?: File) {
+    if (!file) return;
+    try {
+      setSceneReady(false);
+      setSelectedId(null);
+      const result = await importProjectBundle(file);
+      setProject(result.project);
+      setExplode(0);
+      setBottomTab(null);
+      setRightTab('properties');
+      const [nextComponents, nextStats] = await Promise.all([fetchComponents(''), fetchRegistryStats()]);
+      setComponents(nextComponents.items);
+      setRegistryStats(nextStats);
+      setStartupError(null);
+    } catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }
+    finally { if (focadInput.current) focadInput.current.value = ''; }
+  }
+
+  async function exportFocad() {
+    try {
+      const blob = await downloadProjectBundle();
+      const safeName = (project?.name || 'ForgeCAD-Design').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'ForgeCAD-Design';
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${safeName}.focad`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStartupError(null);
+    } catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }
   }
 
   async function importStep(file?: File) {
@@ -324,8 +359,10 @@ export default function App() {
       <div className="app-bar-spacer"/>
       <RuntimeStatus runtime={runtime} error={startupError}/>
       <button className="toolbar-button" onClick={() => void createBlankProject()} disabled={newBusy}><Plus size={14}/>New</button>
-      <button className="toolbar-button" onClick={() => stepInput.current?.click()}><FolderOpen size={14}/>Import</button>
+      <button className="toolbar-button" data-testid="open-focad" onClick={() => focadInput.current?.click()} title="Open a portable ForgeCAD design"><Upload size={14}/>Open .focad</button>
+      <button className="toolbar-button" data-testid="export-focad" onClick={() => void exportFocad()} title="Export this design for ForgeCAD or ChatGPT"><Download size={14}/>Export .focad</button>
       <button className="icon-button" title="Settings"><Settings size={15}/></button>
+      <input ref={focadInput} hidden type="file" accept=".focad,.forgecad.zip,application/vnd.forgecad.project+zip,application/zip" onChange={(event) => void importFocad(event.target.files?.[0])}/>
       <input ref={stepInput} hidden type="file" accept=".step,.stp" onChange={(event) => void importStep(event.target.files?.[0])}/>
     </header>
 
@@ -392,8 +429,8 @@ export default function App() {
             empty={!hasGeometry}
           />
           {!hasGeometry && sceneReady && <div className="empty-canvas">
-            <Box size={24}/><strong>No geometry</strong><span>Insert a catalog component or import a STEP file to begin.</span>
-            <div><button onClick={() => setRightTab('components')}><Package size={13}/>Insert component</button><button onClick={() => stepInput.current?.click()}><FolderOpen size={13}/>Import STEP</button></div>
+            <Box size={24}/><strong>No geometry</strong><span>Insert a component, import STEP, or open a .focad design.</span>
+            <div><button onClick={() => setRightTab('components')}><Package size={13}/>Insert component</button><button onClick={() => focadInput.current?.click()}><Upload size={13}/>Open .focad</button><button onClick={() => stepInput.current?.click()}><FolderOpen size={13}/>Import STEP</button></div>
           </div>}
           {selectedPart && <div className="selection-chip"><span><strong>{selectedPart.name}</strong><small>{selectedPart.role}</small></span><button onClick={() => setSelectedId(null)}><X size={12}/></button></div>}
           <div className={`scene-health ${sceneReady ? 'ready' : ''}`} data-testid="scene-health">{sceneReady ? '3D READY' : 'STARTING 3D'}</div>
