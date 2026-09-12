@@ -129,6 +129,8 @@ export type EngineEvent =
   | { type: 'project.updated'; project: ProjectPayload };
 
 let cachedConnection: ForgeEngineConnection | null = null;
+let projectRequest: Promise<ProjectPayload> | null = null;
+let sceneRequest: Promise<ScenePayload> | null = null;
 
 export async function engineConnection(): Promise<ForgeEngineConnection> {
   if (cachedConnection) return cachedConnection;
@@ -165,8 +167,36 @@ export async function engineFetch<T>(path: string, init: RequestInit = {}): Prom
 }
 
 export const fetchRuntime = () => engineFetch<RuntimePayload>('/v2/runtime');
-export const fetchProject = () => engineFetch<ProjectPayload>('/v2/project');
-export const fetchScene = () => engineFetch<ScenePayload>('/v2/scene');
+
+export function fetchProject(): Promise<ProjectPayload> {
+  if (projectRequest) return projectRequest;
+  const request = engineFetch<ProjectPayload>('/v2/project');
+  projectRequest = request;
+  request.then(
+    () => { if (projectRequest === request) projectRequest = null; },
+    () => { if (projectRequest === request) projectRequest = null; },
+  );
+  return request;
+}
+
+export function fetchScene(): Promise<ScenePayload> {
+  if (sceneRequest) return sceneRequest;
+  // Project snapshots include exact CAD mass/metrics for fabricated parts.  Let that
+  // OpenCascade work finish before tessellating the viewport, and collapse React
+  // StrictMode's duplicate mount into one scene request.  Concurrent OpenCascade
+  // calls can otherwise wedge the local engine and leave the UI at STARTING 3D.
+  const request = (async () => {
+    await fetchProject();
+    return engineFetch<ScenePayload>('/v2/scene');
+  })();
+  sceneRequest = request;
+  request.then(
+    () => { if (sceneRequest === request) sceneRequest = null; },
+    () => { if (sceneRequest === request) sceneRequest = null; },
+  );
+  return request;
+}
+
 export const fetchRegistryStats = () => engineFetch<RegistryStatsPayload>('/v2/component-registry/stats');
 export const fetchValidation = () => engineFetch<ValidationPayload>('/v2/validation');
 export const fetchComponents = (query = '', category?: string, voltage?: number) => {
