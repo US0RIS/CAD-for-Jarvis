@@ -67,16 +67,27 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/catalog/).first()).toBeVisible();
   await search.fill('stepper');
-  const firstAdd = page.locator('.component-card .add-button').first();
+  // `.first()` is positional, not an identity: the search-results list can legitimately
+  // reorder/refetch while an add is in flight (a debounced re-search effect double-fires
+  // under React StrictMode, and/or the server-side result ordering shifts once the added
+  // component's own added:true flag changes its fit score). Observed directly on Windows CI:
+  // the add succeeded and the *original* card correctly flipped to "Added", but re-querying
+  // `.first()` after that resolved to a fresh, never-clicked "Add" button instead, so the
+  // assertion polled the wrong element forever. Capture the specific card's testid before
+  // clicking and assert against that same card, immune to any reordering after the click.
+  const firstCard = page.locator('.component-card').first();
+  const firstAdd = firstCard.locator('.add-button');
   await expect(firstAdd).toBeVisible({ timeout: 60_000 });
   await expect(firstAdd).toBeEnabled();
+  const cardTestId = await firstCard.getAttribute('data-testid');
   await firstAdd.click();
   // Adding a component is a real engine write (core.execute()/persist()), not a UI toggle -
   // measured directly on Windows CI: a single such call took 236s, evidently CPU-starved by
   // the rest of this test's process load (a continuously-rendering WebGL viewport, the Python
   // backend, and Chromium all sharing whatever cores the runner has). 300s gives real margin
   // above the worst case actually observed rather than racing it.
-  await expect(page.locator('.component-card .add-button').first()).toContainText('Added', { timeout: 300_000 });
+  const addedCard = cardTestId ? page.getByTestId(cardTestId) : firstCard;
+  await expect(addedCard.locator('.add-button')).toContainText('Added', { timeout: 300_000 });
 
   // Design workbench exposes project bundles, STEP import, BOM, branch status and real diffs.
   await page.getByRole('button', { name: 'Design', exact: true }).click();
