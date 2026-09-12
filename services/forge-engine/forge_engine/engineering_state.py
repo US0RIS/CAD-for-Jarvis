@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
+import os
 from typing import Any
 
 from .v110 import acceptance_design
@@ -78,19 +80,43 @@ def _ui_component(component: dict[str, Any], *, added_refs: set[str] | None = No
 
 
 class EngineeringProject:
-    """Adapter exposing the validated v1.1 engineering model through the v2 desktop API.
-
-    `v110.core` is authoritative.  The React/Three.js desktop is a client of this state;
-    all human, AI and Jarvis mutations go through the same typed `core.execute` path.
-    """
+    """Authoritative engineering state behind the desktop workbench."""
 
     def __init__(self) -> None:
-        self._seed_acceptance_workspace_if_new()
+        self._mesh_cache: dict[str, tuple[str, dict[str, Any]]] = {}
+        if os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"} or os.environ.get("FORGECAD_ACCEPTANCE_WORKSPACE", "").strip().lower() in {"1", "true", "yes"}:
+            self._load_acceptance_workspace()
+        elif not core.STATE_PATH.exists() or self._is_synthetic_acceptance_workspace():
+            self.new_project()
 
-    def _seed_acceptance_workspace_if_new(self) -> None:
-        if core.STATE_PATH.exists():
-            return
-        project = core.upgrade_project(acceptance_design.build_project())
+    def _is_synthetic_acceptance_workspace(self) -> bool:
+        if str(core.PROJECT.get("name") or "") != "ForgeCAD v1.1 Real-System Acceptance Assembly":
+            return False
+        known_ids = set(acceptance_design.IDS.values())
+        object_ids = {str(obj.get("id")) for obj in core.PROJECT.get("objects", [])}
+        return len(object_ids) >= 5 and object_ids <= known_ids
+
+    def _blank_project(self) -> dict[str, Any]:
+        project = core.upgrade_project(core.default_project())
+        stamp = _now()
+        project.update({
+            "name": "Untitled Design",
+            "created_at": stamp,
+            "updated_at": stamp,
+            "objects": [],
+            "joints": [],
+            "loads": [],
+            "constraints": [],
+            "requirements": [],
+            "bom": [],
+            "connections": [],
+            "simulations": [],
+            "notebook": [],
+            "ledger": [],
+        })
+        return project
+
+    def _install_project(self, project: dict[str, Any], *, branch: str, status: str, note: str, physical_verified: bool) -> None:
         with core.LOCK:
             core.PROJECT.clear()
             core.PROJECT.update(project)
@@ -98,14 +124,41 @@ class EngineeringProject:
             core.DESIGNS.clear()
             core.HISTORY.clear()
             core.REDO.clear()
-            core.ACTIVE_DESIGN = "baseline"
-            core.BRANCHES["baseline"] = deepcopy(core.PROJECT)
-            core.DESIGNS["baseline"] = {
-                "name": "baseline", "parent": None, "status": "working", "note": "Deterministic v1.1 acceptance assembly",
-                "physical_verified": True, "created_at": _now(), "updated_at": _now(),
+            core.ACTIVE_DESIGN = branch
+            core.BRANCHES[branch] = deepcopy(core.PROJECT)
+            core.DESIGNS[branch] = {
+                "name": branch,
+                "parent": None,
+                "status": status,
+                "note": note,
+                "physical_verified": physical_verified,
+                "created_at": _now(),
+                "updated_at": _now(),
             }
-            # Preserve the multi-design workflow immediately on first launch.  These are full
-            # canonical snapshots, not UI-only labels.
+            core.HISTORY.append(deepcopy(core.PROJECT))
+            core.persist()
+        self._mesh_cache.clear()
+
+    def new_project(self) -> dict[str, Any]:
+        self._install_project(
+            self._blank_project(),
+            branch="main",
+            status="unverified",
+            note="New design",
+            physical_verified=False,
+        )
+        return self.snapshot()
+
+    def _load_acceptance_workspace(self) -> None:
+        project = core.upgrade_project(acceptance_design.build_project())
+        self._install_project(
+            project,
+            branch="baseline",
+            status="working",
+            note="Deterministic v1.1 acceptance assembly",
+            physical_verified=True,
+        )
+        with core.LOCK:
             core.BRANCHES["solenoid-swap"] = deepcopy(core.PROJECT)
             core.DESIGNS["solenoid-swap"] = {
                 "name": "solenoid-swap", "parent": "baseline", "status": "not_working", "note": "Example failed actuator experiment",
@@ -116,7 +169,6 @@ class EngineeringProject:
                 "name": "pi-control-v2", "parent": "baseline", "status": "unverified", "note": "Example controller/code experiment",
                 "physical_verified": False, "created_at": _now(), "updated_at": _now(),
             }
-            core.HISTORY.append(deepcopy(core.PROJECT))
             core.PROJECT.setdefault("ledger", []).append({"at": _now(), "actor": "forgecad", "action": "seed_acceptance", "reason": "Full v1.1 engineering acceptance workspace", "design": "baseline"})
             core.persist()
 
@@ -174,8 +226,8 @@ class EngineeringProject:
                 "branch": str(row.get("design") or core.ACTIVE_DESIGN),
             })
         return {
-            "name": str(core.PROJECT.get("name") or "ForgeCAD Project"),
-            "revision": str(len(core.PROJECT.get("ledger", [])) + 1),
+            "name": str(core.PROJECT.get("name") or "Untitled Design"),
+            "revision": f"{core.ACTIVE_DESIGN}:{len(core.PROJECT.get('ledger', [])) + 1}:{core.PROJECT.get('updated_at', '')}",
             "active_branch": core.ACTIVE_DESIGN,
             "branches": branches,
             "parts": parts,
@@ -187,31 +239,54 @@ class EngineeringProject:
             "metrics": core.project_metrics(),
         }
 
+    def _mesh_cache_key(self, obj: dict[str, Any]) -> str:
+        payload = {
+            "kind": obj.get("kind"),
+            "params": obj.get("params"),
+            "material": obj.get("material"),
+            "transform": obj.get("transform"),
+            "features": obj.get("features"),
+            "component_ref": obj.get("component_ref"),
+            "component_geometry": ((obj.get("component_snapshot") or {}).get("geometry") or {}).get("fidelity"),
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
     def scene_manifest(self) -> dict[str, Any]:
         meshes = []
+        live_ids: set[str] = set()
         for obj in core.PROJECT.get("objects", []):
             if not obj.get("visible", True):
                 continue
-            try:
-                mesh = core.tessellate(obj, tolerance=0.65)
-            except Exception as exc:
-                mesh = {"id": obj["id"], "positions": [], "triangles": [], "color": "#8aa0b6", "error": str(exc)}
+            object_id = str(obj["id"])
+            live_ids.add(object_id)
+            cache_key = self._mesh_cache_key(obj)
+            cached = self._mesh_cache.get(object_id)
+            if cached and cached[0] == cache_key:
+                mesh = deepcopy(cached[1])
+            else:
+                try:
+                    mesh = core.tessellate(obj, tolerance=0.65)
+                except Exception as exc:
+                    mesh = {"id": obj["id"], "positions": [], "triangles": [], "color": "#8aa0b6", "error": str(exc)}
+                self._mesh_cache[object_id] = (cache_key, deepcopy(mesh))
             pos = (obj.get("transform") or {}).get("position", [0, 0, 0])
             length = max(sum(float(v) ** 2 for v in pos) ** 0.5, 1.0)
             explode = [float(v) / length for v in pos]
             geometry_status = physical_components.component_geometry_status(obj) if obj.get("kind") == "component" else {"geometry_source": "forgecad_brep", "geometry_fidelity": "exact_brep", "fallback": False}
             meshes.append({
-                "id": str(obj["id"]), "name": str(obj.get("name") or obj["id"]),
+                "id": object_id, "name": str(obj.get("name") or obj["id"]),
                 "semantic_role": str((obj.get("semantic") or {}).get("role") or obj.get("kind") or "part"),
                 "mesh": mesh,
                 "explode_vector": explode,
                 "base_transform": deepcopy(obj.get("transform") or {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]}),
-                "programmable_workspace_id": str(obj["id"]) if isinstance(obj.get("code"), dict) else None,
+                "programmable_workspace_id": object_id if isinstance(obj.get("code"), dict) else None,
                 "geometry_source": geometry_status.get("geometry_source"),
                 "geometry_fidelity": geometry_status.get("geometry_fidelity"),
                 "geometry_fallback": bool(geometry_status.get("fallback")),
             })
-        return {"revision": str(len(core.PROJECT.get("ledger", [])) + 1), "branch": core.ACTIVE_DESIGN, "parts": meshes, "authoritative": True}
+        for stale_id in set(self._mesh_cache) - live_ids:
+            self._mesh_cache.pop(stale_id, None)
+        return {"revision": self.snapshot()["revision"], "branch": core.ACTIVE_DESIGN, "parts": meshes, "authoritative": True}
 
     def search_components(self, query: str = "", *, category: str | None = None, constraints: dict[str, Any] | None = None, limit: int = 30) -> list[dict[str, Any]]:
         result = registry.search_components(query, category, constraints or {}, limit=limit, include_infeasible=True)
@@ -226,8 +301,27 @@ class EngineeringProject:
         return registry.registry_stats()
 
     def add_component(self, component_id: str) -> dict[str, Any]:
-        core.execute("add_component", {"component_id": component_id}, actor="human", reason=f"Add real component {component_id}")
-        return self.component(component_id)
+        component = registry.component_by_id(component_id)
+        dims = component.get("dimensions_mm") or [40.0, 40.0, 20.0]
+        width = float(dims[0]) if len(dims) > 0 else 40.0
+        depth = float(dims[1]) if len(dims) > 1 else 40.0
+        height = float(dims[2]) if len(dims) > 2 else 20.0
+        index = len(core.PROJECT.get("objects", []))
+        column = index % 4
+        row = index // 4
+        spacing_x = max(80.0, min(160.0, width + 35.0))
+        spacing_y = max(75.0, min(150.0, depth + 35.0))
+        transform = {
+            "position": [(column - 1.5) * spacing_x, -row * spacing_y, max(0.0, height * 0.5)],
+            "rotation_deg": [0.0, 0.0, 0.0],
+            "scale": [1.0, 1.0, 1.0],
+        }
+        before = {str(obj.get("id")) for obj in core.PROJECT.get("objects", [])}
+        core.execute("add_component", {"component_id": component_id, "transform": transform}, actor="human", reason=f"Insert real component {component_id}")
+        created = next((obj for obj in reversed(core.PROJECT.get("objects", [])) if str(obj.get("id")) not in before), None)
+        result = self.component(component_id)
+        result["instance_id"] = str(created.get("id")) if created else None
+        return result
 
     def activate_branch(self, branch_name: str) -> dict[str, Any]:
         core.switch_branch(branch_name)
@@ -271,6 +365,8 @@ class EngineeringProject:
         return software.read_file(core.PROJECT, workspace_id, file_path)
 
     def execute(self, op: str, args: dict[str, Any] | None = None, *, actor: str = "human", reason: str = "") -> dict[str, Any]:
+        if op == "new_project":
+            return {"operation": {"ok": True, "op": op}, "project": self.new_project()}
         result = core.execute(op, args or {}, actor=actor, reason=reason or op)
         return {"operation": result, "project": self.snapshot()}
 
@@ -289,6 +385,8 @@ class EngineeringProject:
 
     def run_simulation(self, selected_object_id: str | None = None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
+        if not core.PROJECT.get("objects"):
+            raise ValueError("Add or import geometry before running an engineering simulation")
         obj = None
         if selected_object_id:
             try:
@@ -312,6 +410,8 @@ class EngineeringProject:
 
     def run_campaign(self, selected_object_id: str | None = None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
+        if not core.PROJECT.get("objects"):
+            raise ValueError("Add or import a fabricated part before running optimization")
         obj = None
         if selected_object_id:
             try:
@@ -321,7 +421,9 @@ class EngineeringProject:
             except KeyError:
                 pass
         if obj is None:
-            obj = next(o for o in core.PROJECT.get("objects", []) if o.get("kind") != "component")
+            obj = next((o for o in core.PROJECT.get("objects", []) if o.get("kind") != "component"), None)
+        if obj is None:
+            raise ValueError("Optimization requires at least one fabricated/custom part")
         params = obj.get("params") or {}
         variable = "z" if "z" in params else "thickness" if "thickness" in params else next(iter(params))
         start = float(params[variable])
@@ -366,6 +468,7 @@ class EngineeringProject:
             core.HISTORY.append(deepcopy(core.PROJECT))
             core.REDO.clear()
             core.persist()
+        self._mesh_cache.clear()
         return {**restored, "project": self.snapshot()}
 
     def import_step_part(self, filename: str, data: bytes) -> dict[str, Any]:
@@ -383,8 +486,6 @@ class EngineeringProject:
         return {"branch": core.ACTIVE_DESIGN, "project": self.snapshot()}
 
     def apply_agent_plan(self, plan: dict[str, Any], text: str) -> dict[str, Any]:
-        # A working/physically-verified branch auto-forks on the first mutation through
-        # core.execute.  Every subsequent command therefore lands on the same child branch.
         applied = []
         for command in plan.get("commands", []):
             op = str(command.get("op") or "")
