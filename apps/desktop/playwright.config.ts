@@ -4,11 +4,11 @@ export default defineConfig({
   testDir: './e2e',
   // Real measurements on Windows CI (see vertical-slice.spec.ts) show individual engine calls
   // taking minutes under this suite's process load, not seconds - add-component at 236s, branch
-  // activation at 836s, branch comparison stalling past 60s with no response yet seen. The sum
-  // of this suite's own per-assertion timeouts is ~35 minutes in the worst observed case; 40
-  // minutes gives that real room without racing it, still comfortably inside the job-level CI
-  // timeout (currently 50 minutes) minus setup.
-  timeout: 2_400_000,
+  // activation at 836s, branch comparison and engineering validation/simulation both left
+  // unanswered past their own waits. The sum of this suite's own per-assertion timeouts is ~45
+  // minutes in the worst observed case; 50 minutes gives that real room without racing it, still
+  // inside the job-level CI timeout (raised to 70 minutes alongside this) minus setup.
+  timeout: 3_000_000,
   expect: { timeout: 12_000 },
   fullyParallel: false,
   // Retries don't help the failure mode actually seen here: every attempt runs against the same

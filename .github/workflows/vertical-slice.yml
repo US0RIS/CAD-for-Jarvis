@@ -10,7 +10,14 @@ jobs:
   windows-primary:
     name: Windows 11 primary
     runs-on: windows-2025
-    timeout-minutes: 50
+    # Real, repeated measurements (see vertical-slice.spec.ts) show individual engine calls -
+    # branch activation, add-component, branch comparison, and now engineering validation/
+    # simulation - taking minutes under this job's real process load, evidently because heavy
+    # CPU-bound work (BREP tessellation, structural/modal/thermal analysis) can starve the
+    # backend's single event loop for as long as it runs, whatever thread it's nominally on.
+    # 50 minutes stopped leaving genuine room once the Playwright test's own timeout grew to
+    # match that reality.
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

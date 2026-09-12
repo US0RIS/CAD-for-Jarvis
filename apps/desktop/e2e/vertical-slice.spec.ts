@@ -130,7 +130,14 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await expect(page.getByTestId('analysis-workspace')).toBeVisible();
   await expect(page.getByTestId('analysis-workspace')).toContainText('Real component registry');
   await page.getByRole('button', { name: 'Run engineering screen' }).click();
-  await expect(page.getByTestId('analysis-workspace')).toContainText('simulation: completed', { timeout: 180_000 });
+  // Real structural/modal/thermal computation, not a UI wait - and unlike the branch/component
+  // calls above, this one's own POST /v2/jobs has been observed not even getting a response for
+  // 190s+, alongside a concurrent GET /v2/validation also left hanging: this backend's single
+  // event loop can apparently be starved for minutes by whatever heavy CPU-bound work (BREP
+  // tessellation, this same class of engineering analysis) is running at the time, regardless of
+  // which thread nominally owns it. 600s gives real margin above the worst case actually
+  // observed rather than continuing to raise this number one CI run at a time.
+  await expect(page.getByTestId('analysis-workspace')).toContainText('simulation: completed', { timeout: 600_000 });
   await expect(page.getByTestId('analysis-workspace')).toContainText('structural', { timeout: 60_000 });
 
   // AI edits fork safely from a design branch and use the canonical typed operation layer.
