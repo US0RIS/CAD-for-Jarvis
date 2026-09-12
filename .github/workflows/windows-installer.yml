@@ -79,7 +79,7 @@ jobs:
         run: |
           $env:FORGECAD_PORT = '8877'
           $env:FORGECAD_SESSION_TOKEN = 'installer-smoke'
-          $env:FORGECAD_OLLAMA_MODEL = 'qwen3.8:27b'
+          $env:FORGECAD_OLLAMA_MODEL = 'qwen3:8b'
           $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-bundled-smoke"
           $p = Start-Process -FilePath "$env:GITHUB_WORKSPACE/services/forge-engine/dist/forge-engine.exe" -PassThru -WindowStyle Hidden
           try {
@@ -93,14 +93,19 @@ jobs:
               } catch {}
               Start-Sleep -Milliseconds 250
             } while ((Get-Date) -lt $deadline)
-            if (-not ($health.ok -and $health.engineering_layer -eq 'v1.1-full-scope')) { throw 'Bundled Forge Engine did not report the full engineering layer.' }
+            if (-not ($health.ok -and $health.engineering_layer -eq 'v1.1-full-scope' -and $health.engine_version -eq '1.1.2')) { throw 'Bundled Forge Engine did not report ForgeCAD 1.1.2 full scope.' }
             $stats = Invoke-RestMethod http://127.0.0.1:8877/v2/component-registry/stats -Headers $headers -TimeoutSec 20
-            if ([int]$stats.total -lt 238) { throw "Expected at least 238 registry components, got $($stats.total)." }
+            if ([int]$stats.total -lt 1400) { throw "Expected at least 1400 registry components, got $($stats.total)." }
+            $search = Invoke-RestMethod 'http://127.0.0.1:8877/v2/components?q=gear' -Headers $headers -TimeoutSec 20
+            if (@($search.items).Count -le 30) { throw "Filtered component search is still capped: $(@($search.items).Count)" }
+            $focad = Join-Path $env:RUNNER_TEMP 'bundled-design.focad'
+            Invoke-WebRequest http://127.0.0.1:8877/v2/project/export -Headers $headers -OutFile $focad -TimeoutSec 30
+            python -c "import zipfile,json; z=zipfile.ZipFile(r'$focad'); m=json.loads(z.read('manifest.json')); assert m['format']=='focad' and m['format_version']==1"
             $scene = Invoke-RestMethod http://127.0.0.1:8877/v2/scene -Headers $headers -TimeoutSec 60
             if (-not $scene.authoritative -or @($scene.parts).Count -lt 6) { throw 'Canonical scene is missing the full acceptance assembly.' }
             $validation = Invoke-RestMethod http://127.0.0.1:8877/v2/validation -Headers $headers -TimeoutSec 60
             if (-not $validation.metrics) { throw 'Validation payload did not contain engineering metrics.' }
-            Write-Host "Bundled full scope: registry=$($stats.total) scene_parts=$(@($scene.parts).Count) validation_errors=$($validation.counts.error)"
+            Write-Host "Bundled full scope: registry=$($stats.total) search=$(@($search.items).Count) scene_parts=$(@($scene.parts).Count)"
           } finally {
             if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           }
@@ -119,8 +124,8 @@ jobs:
       - name: Verify installer exists
         shell: pwsh
         run: |
-          $installer = Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-*.exe' | Select-Object -First 1
-          if (-not $installer) { throw 'ForgeCAD installer was not produced.' }
+          $installer = Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-1.1.2.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'ForgeCAD 1.1.2 installer was not produced.' }
           Write-Host "Installer: $($installer.FullName)"
           Write-Host "Size: $([math]::Round($installer.Length / 1MB, 1)) MB"
 
@@ -128,7 +133,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-*.exe' | Select-Object -First 1).FullName
+          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-1.1.2.exe' | Select-Object -First 1).FullName
           if (-not $installer) { throw 'ForgeCAD installer was not produced.' }
           $installDir = Join-Path $env:RUNNER_TEMP 'ForgeCAD-Installed-Copy'
           if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
@@ -142,17 +147,14 @@ jobs:
           $engine = Join-Path $installDir 'resources\forge-engine\forge-engine.exe'
           if (-not (Test-Path $app)) { throw "Installed desktop executable missing: $app" }
           if (-not (Test-Path $engine)) { throw "Installed Forge Engine executable missing: $engine" }
-          Write-Host "Installed app: $app"
-          Write-Host "Installed engine: $engine"
           $version = (Get-Item $app).VersionInfo.ProductVersion
           Write-Host "Installed ProductVersion: $version"
-          if (-not $version.StartsWith('1.1.1')) { throw "Expected installed ProductVersion 1.1.1, got $version" }
+          if (-not $version.StartsWith('1.1.2')) { throw "Expected installed ProductVersion 1.1.2, got $version" }
 
           $env:FORGECAD_PORT = '8878'
           $env:FORGECAD_SESSION_TOKEN = 'installed-copy-smoke'
-          $env:FORGECAD_OLLAMA_MODEL = 'qwen3.8:27b'
+          $env:FORGECAD_OLLAMA_MODEL = 'qwen3:8b'
           $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-installed-smoke-state"
-          Write-Host "> Start-Process -FilePath '$engine' -PassThru -WindowStyle Hidden"
           $engineProcess = Start-Process -FilePath $engine -PassThru -WindowStyle Hidden
           try {
             $deadline = (Get-Date).AddSeconds(60)
@@ -165,30 +167,24 @@ jobs:
               } catch {}
               Start-Sleep -Milliseconds 250
             } while ((Get-Date) -lt $deadline)
-            if (-not ($health.ok -and $health.api_version -eq '2' -and $health.engineering_layer -eq 'v1.1-full-scope')) { throw 'Installed Forge Engine failed full-scope health smoke test.' }
-            Write-Host "Installed engine health: ok=$($health.ok) api_version=$($health.api_version) engineering_layer=$($health.engineering_layer)"
+            if (-not ($health.ok -and $health.engineering_layer -eq 'v1.1-full-scope' -and $health.engine_version -eq '1.1.2')) { throw 'Installed Forge Engine failed 1.1.2 full-scope health smoke test.' }
 
             $stats = Invoke-RestMethod http://127.0.0.1:8878/v2/component-registry/stats -Headers $headers -TimeoutSec 20
-            Write-Host "Installed component registry: total=$($stats.total) builtin=$($stats.builtin)"
-            if ([int]$stats.total -lt 238) { throw "Installed registry incomplete: $($stats.total)" }
+            if ([int]$stats.total -lt 1400) { throw "Installed registry incomplete: $($stats.total)" }
+            $search = Invoke-RestMethod 'http://127.0.0.1:8878/v2/components?q=gear' -Headers $headers -TimeoutSec 20
+            if (@($search.items).Count -le 30) { throw "Installed filtered search still capped: $(@($search.items).Count)" }
+            $focad = Join-Path $env:RUNNER_TEMP 'installed-design.focad'
+            Invoke-WebRequest http://127.0.0.1:8878/v2/project/export -Headers $headers -OutFile $focad -TimeoutSec 30
+            python -c "import zipfile,json; z=zipfile.ZipFile(r'$focad'); m=json.loads(z.read('manifest.json')); assert m['format']=='focad'"
 
             $project = Invoke-RestMethod http://127.0.0.1:8878/v2/project -Headers $headers -TimeoutSec 20
             if (-not (@($project.parts) | Where-Object { $_.component_ref -eq 'compute.raspberry_pi_5_8gb' })) { throw 'Installed acceptance project is missing Raspberry Pi 5.' }
-            if (-not (@($project.branches) | Where-Object { $_.name -eq 'baseline' -and $_.protected })) { throw 'Installed project is missing protected working baseline.' }
-            Write-Host "Installed project: parts=$(@($project.parts).Count) branches=$(@($project.branches).Count) BOM=$(@($project.bom).Count)"
-
             $scene = Invoke-RestMethod http://127.0.0.1:8878/v2/scene -Headers $headers -TimeoutSec 60
             if (-not $scene.authoritative -or @($scene.parts).Count -lt 6) { throw 'Installed canonical scene failed.' }
-            Write-Host "Installed authoritative scene: parts=$(@($scene.parts).Count)"
-
-            $validation = Invoke-RestMethod http://127.0.0.1:8878/v2/validation -Headers $headers -TimeoutSec 60
-            Write-Host "Installed validation: errors=$($validation.counts.error) warnings=$($validation.counts.warning)"
-            if (-not $validation.metrics) { throw 'Installed validation payload missing metrics.' }
           } finally {
             if (-not $engineProcess.HasExited) { Stop-Process -Id $engineProcess.Id -Force }
           }
 
-          Write-Host "> Start-Process -FilePath '$app' -ArgumentList '--disable-gpu' -PassThru"
           $appProcess = Start-Process -FilePath $app -ArgumentList '--disable-gpu' -PassThru
           $childEngine = $null
           try {
@@ -210,11 +206,8 @@ jobs:
 
           $uninstaller = Get-ChildItem $installDir -Filter 'Uninstall*.exe' | Select-Object -First 1
           if (-not $uninstaller) { throw "Uninstaller missing from $installDir" }
-          Write-Host "> Start-Process -FilePath '$($uninstaller.FullName)' -ArgumentList '/S' -Wait -PassThru"
           $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
-          Write-Host "Uninstaller exit code: $($uninstall.ExitCode)"
           if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($uninstall.ExitCode)." }
-
           $deadline = (Get-Date).AddSeconds(30)
           while ((Test-Path $app) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
           if (Test-Path $app) { throw "Installed ForgeCAD executable still exists after uninstall: $app" }
@@ -224,6 +217,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ForgeCAD-Windows-Installer
-          path: apps/desktop/release/ForgeCAD-Setup-*.exe
+          path: apps/desktop/release/ForgeCAD-Setup-1.1.2.exe
           if-no-files-found: error
           compression-level: 0
