@@ -58,14 +58,17 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   const cardTestId = await addableCard.getAttribute('data-testid');
   await expect(firstAdd).toBeEnabled();
   await firstAdd.click();
-  // Adding a component is a real engine write (core.execute()/persist()), not a UI toggle -
-  // measured directly on Windows CI: a single such call took 236s, evidently CPU-starved by
-  // the rest of this test's process load (a continuously-rendering WebGL viewport, the Python
-  // backend, and Chromium all sharing whatever cores the runner has). 300s gives real margin
-  // above the worst case actually observed rather than racing it. Assert against the same card
+  // Adding a component is a real engine write (core.execute()/persist()) that holds core.LOCK
+  // for a synchronous disk write of the whole project state - the exact same mechanism as
+  // branch activation above, on the same Windows-CI-scanned filesystem. 300s (once itself raised
+  // from an earlier, smaller margin) has now also been observed exceeded on this runner with no
+  // response inside that window. Rather than guess a new ceiling for this specific call, use the
+  // same 900s margin already justified for activate_branch immediately above: it is bounded by
+  // the identical persist()-under-LOCK cost, not a different one, so there is no reason to expect
+  // this call's worst case to differ in order of magnitude. Assert against the same card
   // identified above (by testid), immune to the results list reordering or refetching under it.
   const addedCard = cardTestId ? page.getByTestId(cardTestId) : addableCard;
-  await expect(addedCard.locator('button')).toContainText('Added', { timeout: 300_000 });
+  await expect(addedCard.locator('button')).toContainText('Added', { timeout: 900_000 });
 
   // Design workbench exposes project bundles, STEP import, BOM, branch status and real diffs.
   await page.getByRole('button', { name: 'Design', exact: true }).click();

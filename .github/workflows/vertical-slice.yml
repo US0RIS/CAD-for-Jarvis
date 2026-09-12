@@ -15,9 +15,10 @@ jobs:
     # simulation - taking minutes under this job's real process load, evidently because heavy
     # CPU-bound work (BREP tessellation, structural/modal/thermal analysis) can starve the
     # backend's single event loop for as long as it runs, whatever thread it's nominally on.
-    # 50 minutes stopped leaving genuine room once the Playwright test's own timeout grew to
-    # match that reality.
-    timeout-minutes: 70
+    # 70 minutes stopped leaving genuine room once the Playwright test's own timeout grew to
+    # 60 minutes (add-component's margin raised to match branch activation's) plus the health
+    # check's own new up-to-5-minute prewarm wait and the rest of this job's setup steps.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

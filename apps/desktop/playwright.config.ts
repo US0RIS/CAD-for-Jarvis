@@ -3,12 +3,15 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   // Real measurements on Windows CI (see vertical-slice.spec.ts) show individual engine calls
-  // taking minutes under this suite's process load, not seconds - add-component at 236s, branch
-  // activation at 836s, branch comparison and engineering validation/simulation both left
-  // unanswered past their own waits. The sum of this suite's own per-assertion timeouts is ~45
-  // minutes in the worst observed case; 50 minutes gives that real room without racing it, still
-  // inside the job-level CI timeout (raised to 70 minutes alongside this) minus setup.
-  timeout: 3_000_000,
+  // taking minutes under this suite's process load, not seconds - add-component and branch
+  // activation both go through core.execute()/persist() under the same global LOCK doing
+  // synchronous, AV-scanned disk I/O, and both have now individually exceeded their own prior
+  // margins (add-component's 300s ceiling was itself observed exceeded, hence its timeout now
+  // matches activate_branch's already-justified 900s). The sum of this suite's own per-assertion
+  // timeouts is now ~53 minutes in the worst observed case; 60 minutes gives that real room
+  // without racing it, still inside the job-level CI timeout (raised to 90 minutes alongside
+  // this) minus setup.
+  timeout: 3_600_000,
   expect: { timeout: 12_000 },
   fullyParallel: false,
   // Retries don't help the failure mode actually seen here: every attempt runs against the same
