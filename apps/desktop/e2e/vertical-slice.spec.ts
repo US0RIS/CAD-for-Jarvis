@@ -118,7 +118,12 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await expect(page.getByText('Portable project + CAD import')).toBeVisible();
   await expect(page.getByText('Bill of materials')).toBeVisible();
   await page.getByRole('button', { name: /Compare to working branch/ }).click();
-  await expect(page.getByTestId('design-inspector')).toContainText('changes', { timeout: 60_000 });
+  // core.compare_branch() itself is cheap (a handful of small dict diffs), but - like
+  // activate_branch and add_component before it - Windows CI has shown this class of call can
+  // sit unanswered for minutes under this test's process load: this exact GET request was
+  // observed starting and then never getting a response within a 60s window. 300s gives real
+  // margin consistent with the other backend-write/read waits in this suite.
+  await expect(page.getByTestId('design-inspector')).toContainText('changes', { timeout: 300_000 });
 
   // Analysis is an actual engineering job: structural/modal/thermal/manufacturing/system checks.
   await page.getByRole('button', { name: 'Analysis', exact: true }).click();
