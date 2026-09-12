@@ -91,6 +91,7 @@
       "target": ["dmg"],
       "category": "public.app-category.developer-tools",
       "identity": "-",
+      "hardenedRuntime": false,
       "artifactName": "ForgeCAD-${version}-${arch}.${ext}"
     }
   }
