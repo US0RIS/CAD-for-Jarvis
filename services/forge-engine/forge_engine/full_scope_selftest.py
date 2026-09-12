@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import time
+import zipfile
 
 import cadquery as cq
 
@@ -15,7 +17,7 @@ def main() -> None:
     from .v110 import acceptance_design, component_registry, physical_components, project_bundle, realistic_components, software, system_validation
 
     stats = component_registry.registry_stats()
-    assert stats["total"] >= 238, stats
+    assert stats["total"] >= 1400, stats
     required = {
         "compute.raspberry_pi_5_8gb",
         "driver.adafruit.mosfet_5648",
@@ -78,9 +80,20 @@ def main() -> None:
     assert workspace["files"]
     assert PROJECT.deploy_workspace(workspace_id)["validation"]["ok"] is True
 
+    # .focad is the public design exchange contract. It is deliberately a transparent
+    # ZIP container so external engineering agents can inspect and author a design while
+    # ForgeCAD still validates its manifest and canonical project on import.
     bundle = PROJECT.export_bundle()
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        names = set(archive.namelist())
+        assert {"manifest.json", "project.json", "components.json"} <= names, names
+        raw_manifest = json.loads(archive.read("manifest.json"))
+        assert raw_manifest["format"] == "focad", raw_manifest
+        assert raw_manifest["format_version"] == 1, raw_manifest
     restored = project_bundle.import_bundle_bytes(bundle)
     assert restored["project"]["objects"]
+    assert restored["manifest"]["format"] == "focad"
+    assert restored["manifest"]["format_version"] == 1
     assert restored["manifest"]["bundle_version"] == 1
 
     search = PROJECT.search_components("raspberry", limit=5)
@@ -112,6 +125,8 @@ def main() -> None:
     print(json.dumps({
         "full_scope_selftest": "PASS",
         "registry_total": stats["total"],
+        "focad_format": restored["manifest"]["format"],
+        "focad_version": restored["manifest"]["format_version"],
         "acceptance_objects": len(acceptance["objects"]),
         "acceptance_connections": len(acceptance["connections"]),
         "scene_parts": len(scene["parts"]),
