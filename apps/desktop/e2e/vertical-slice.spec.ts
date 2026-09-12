@@ -68,14 +68,17 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/catalog/).first()).toBeVisible();
   await search.fill('stepper');
-  // Select the first *addable* card rather than assuming position 0 is always fresh: a local
-  // reproduction (direct backend query and a live HTTP call against a freshly-seeded
-  // pi-control-v2 branch) both show the top "stepper" match as addable, not already-added -
-  // yet Windows CI has shown this exact assertion finding it already disabled with
-  // class="added-button" with nothing in this test having clicked it yet (cause not yet
-  // confirmed - possibly registry fit-score ties resolving differently run to run). Filtering
-  // on an enabled button sidesteps the question rather than betting the test's determinism on
-  // an ordering guarantee the registry never promised.
+  // Root-caused via a targeted DOM-state dump on a real failure: the search-results fetch is
+  // debounced (~220ms) and its own latency is highly variable under CI load - as slow as ~39s
+  // in one observed run. Nothing here waited for that fetch to actually land before treating
+  // the list as reflecting "stepper" results, so the test could act on the *previous* query's
+  // still-rendered results (here, "raspberry" - which itself fuzzy-matches unrelated
+  // accessories like a cooling fan). When the real "stepper" response finally arrived and
+  // replaced the array, whatever had just been clicked from the stale list vanished from the
+  // DOM entirely, which is exactly the "element(s) not found" failure seen repeatedly. Wait for
+  // the previous query's known result to actually disappear before trusting the list has
+  // switched over.
+  await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeHidden({ timeout: 60_000 });
   const addableCard = page.locator('.component-card').filter({ has: page.locator('button:not([disabled])') }).first();
   const firstAdd = addableCard.locator('button');
   await expect(firstAdd).toBeVisible({ timeout: 60_000 });
