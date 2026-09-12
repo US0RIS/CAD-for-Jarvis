@@ -45,9 +45,11 @@ test('ForgeCAD production workbench starts blank, searches the expanded catalog,
   if (box) {
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
-    await page.mouse.move(cx, cy);
+    // The selected centered shaft puts the TransformControls origin at canvas center.
+    // Grab the visible red X-axis arrow rather than the empty pixel at the exact origin.
+    await page.mouse.move(cx + 48, cy + 7);
     await page.mouse.down();
-    await page.mouse.move(cx + 60, cy + 18, { steps: 12 });
+    await page.mouse.move(cx + 108, cy + 17, { steps: 12 });
     await page.mouse.up();
   }
   await expect.poll(() => transformOperationSeen, { timeout: 20_000 }).toBe(true);
