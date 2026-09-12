@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-"""Portable ForgeCAD project bundles.
+"""Portable ForgeCAD design exchange files.
 
-A .forgecad.zip bundle carries the canonical project JSON, frozen purchased-component
-snapshots, and every local CAD asset needed to reproduce component geometry on a
-second workstation. Paths inside project state are content-addressed / relative.
+A ``.focad`` file is a ZIP container with a stable, inspectable structure intended to
+be authored by ForgeCAD itself *or by an external engineering agent such as ChatGPT*.
+It carries canonical project JSON, frozen purchased-component snapshots, embedded
+code, and every local CAD asset needed to reproduce component geometry on another
+workstation. Paths inside project state are content-addressed / relative.
+
+The extension is deliberately not ``.zip`` even though the container uses ZIP so a
+ForgeCAD design can be handed around as one first-class document. Older
+``.forgecad.zip`` bundles remain import-compatible.
 """
 import io,json,shutil,tempfile,zipfile
 from copy import deepcopy
@@ -12,6 +18,9 @@ from pathlib import Path
 from typing import Any
 from . import component_registry as registry
 
+FORMAT_ID="focad"
+FORMAT_NAME="ForgeCAD Design"
+MIME_TYPE="application/vnd.forgecad.project+zip"
 BUNDLE_VERSION=1
 
 
@@ -51,7 +60,18 @@ def export_bundle_bytes(project:dict[str,Any])->bytes:
             if path and path.is_file():
                 rel=str(asset.get("relative_path") or f"{asset.get('sha256','asset')[:16]}_{Path(asset.get('filename','asset.step')).name}")
                 assets[rel]=path
-    manifest={"bundle_version":BUNDLE_VERSION,"project_file":"project.json","component_file":"components.json","asset_count":len(assets),"component_count":len(_component_snapshots(p))}
+    manifest={
+        "format":FORMAT_ID,
+        "format_name":FORMAT_NAME,
+        "format_version":BUNDLE_VERSION,
+        # bundle_version is retained so v1.1-era importers can still read files created
+        # by newer ForgeCAD builds that otherwise remain schema-compatible.
+        "bundle_version":BUNDLE_VERSION,
+        "project_file":"project.json",
+        "component_file":"components.json",
+        "asset_count":len(assets),
+        "component_count":len(_component_snapshots(p)),
+    }
     out=io.BytesIO()
     with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED) as z:
         z.writestr("manifest.json",json.dumps(manifest,indent=2));z.writestr("project.json",json.dumps(p,indent=2));z.writestr("components.json",json.dumps({"schema_version":registry.SCHEMA_VERSION,"components":_component_snapshots(p)},indent=2))
@@ -63,22 +83,25 @@ def _safe_extract(z:zipfile.ZipFile,root:Path)->None:
     for info in z.infolist():
         target=(root/info.filename).resolve()
         try:target.relative_to(root)
-        except ValueError:raise ValueError("Project bundle contains unsafe path")
+        except ValueError:raise ValueError(".focad file contains unsafe path")
     z.extractall(root)
 
 def import_bundle_bytes(data:bytes)->dict[str,Any]:
-    if len(data)>600*1024*1024:raise ValueError("ForgeCAD project bundle exceeds 600 MB")
+    if len(data)>600*1024*1024:raise ValueError(".focad design exceeds 600 MB")
     with tempfile.TemporaryDirectory() as td:
         root=Path(td)
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:_safe_extract(z,root)
-        except zipfile.BadZipFile as e:raise ValueError("Invalid ForgeCAD project bundle") from e
+        except zipfile.BadZipFile as e:raise ValueError("Invalid .focad design file") from e
         manifest_path=root/"manifest.json";project_path=root/"project.json"
-        if not manifest_path.is_file() or not project_path.is_file():raise ValueError("Bundle requires manifest.json and project.json")
+        if not manifest_path.is_file() or not project_path.is_file():raise ValueError(".focad requires manifest.json and project.json")
         manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
-        if int(manifest.get("bundle_version",0))!=BUNDLE_VERSION:raise ValueError(f"Unsupported bundle version {manifest.get('bundle_version')}")
+        file_format=manifest.get("format")
+        if file_format not in (None,FORMAT_ID):raise ValueError(f"Unsupported design format {file_format!r}")
+        version=int(manifest.get("format_version",manifest.get("bundle_version",0)))
+        if version!=BUNDLE_VERSION:raise ValueError(f"Unsupported .focad version {version}")
         project=json.loads(project_path.read_text(encoding="utf-8"))
-        if not isinstance(project,dict) or not isinstance(project.get("objects"),list):raise ValueError("Bundle project is malformed")
+        if not isinstance(project,dict) or not isinstance(project.get("objects"),list):raise ValueError(".focad project is malformed")
         components_path=root/"components.json";installed=[]
         if components_path.is_file():
             payload=json.loads(components_path.read_text(encoding="utf-8"))
@@ -94,6 +117,9 @@ def import_bundle_bytes(data:bytes)->dict[str,Any]:
                 if not source.is_file():continue
                 rel=source.relative_to(asset_root);dest=(registry.ASSET_DIR/rel).resolve()
                 try:dest.relative_to(registry.ASSET_DIR.resolve())
-                except ValueError:raise ValueError("Unsafe component asset path in bundle")
+                except ValueError:raise ValueError("Unsafe component asset path in .focad file")
                 dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,dest);copied.append(str(rel))
-        return {"ok":True,"project":project,"components_installed":installed,"assets_restored":copied,"manifest":manifest}
+        # Normalize old bundle manifests in the response. Callers can always identify an
+        # imported document as a .focad-compatible design after successful validation.
+        normalized={**manifest,"format":FORMAT_ID,"format_name":FORMAT_NAME,"format_version":version,"bundle_version":version}
+        return {"ok":True,"project":project,"components_installed":installed,"assets_restored":copied,"manifest":normalized}
