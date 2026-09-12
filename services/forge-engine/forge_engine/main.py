@@ -34,6 +34,17 @@ app.add_middleware(
 )
 _jobs: dict[str, EngineeringJob] = {}
 _event_clients: set[WebSocket] = set()
+# Tracks whether the startup prewarm tasks below have finished populating the
+# tessellation/validation caches. See prewarm_scene_cache/prewarm_validation_cache and
+# the "warm" field on /v2/health: a fire-and-forget prewarm that the readiness check
+# doesn't wait for can still be mid-flight (holding the GIL through uncached OpenCascade
+# calls) when real traffic arrives, starving totally unrelated requests (observed:
+# GET /v2/components for a plain catalog search left unanswered for 60s+ while the
+# validation prewarm's first, uncached build_shape()/intersect() pass was still running).
+# Exposing completion lets the CI health-check loop wait the one-time warm-up cost out
+# before Playwright's timed test traffic starts, instead of that cost landing on a random
+# unrelated assertion mid-test.
+_PREWARM_STATE = {"scene": False, "validation": False}
 
 
 class CodeWriteRequest(BaseModel):
@@ -100,8 +111,14 @@ async def prewarm_scene_cache() -> None:
     # part for real component geometry) and PROJECT.scene_manifest() caches by content, so
     # doing this once here means the first real GET /v2/scene from a freshly-loaded viewport
     # is served from a warm cache instead of paying that cost on the user-facing request path.
-    # Fire-and-forget: does not block startup or the /v2/health readiness check.
-    asyncio.create_task(asyncio.to_thread(PROJECT.scene_manifest))
+    # This does not block ASGI startup itself, but /v2/health's "warm" field (below) does not
+    # go true until it finishes, so the CI health-check loop can wait it out before Playwright's
+    # timed test traffic starts - see _PREWARM_STATE for why that matters.
+    async def _run() -> None:
+        await asyncio.to_thread(PROJECT.scene_manifest)
+        _PREWARM_STATE["scene"] = True
+
+    asyncio.create_task(_run())
 
 
 @app.on_event("startup")
@@ -113,8 +130,13 @@ async def prewarm_validation_cache() -> None:
     # tab. On Windows CI a first touch of a given native code path has been observed to cost far
     # more than the operation's own logic would suggest (real-time antivirus scanning newly
     # loaded/executed code, cold page faults, JIT-ish warm-up in the native extension) - warm it
-    # here instead of on that first real request.
-    asyncio.create_task(asyncio.to_thread(PROJECT.validation))
+    # here instead of on that first real request. See _run() above: completion is tracked the
+    # same way, for the same reason.
+    async def _run() -> None:
+        await asyncio.to_thread(PROJECT.validation)
+        _PREWARM_STATE["validation"] = True
+
+    asyncio.create_task(_run())
 
 
 @app.on_event("shutdown")
@@ -143,6 +165,12 @@ async def health() -> dict[str, Any]:
         "engine_version": __version__,
         "engineering_layer": "v1.1-full-scope",
         "platform_priority": "windows",
+        # True once the startup tessellation/validation prewarms have both finished, i.e. the
+        # one-time uncached, GIL-holding OpenCascade cost is behind us and this process's event
+        # loop is no longer at risk of being starved by them. A caller that only checks "ok"
+        # can still receive/send requests before this flips - "ok" means the process is up,
+        # "warm" means the expensive first-touch native work is done.
+        "warm": _PREWARM_STATE["scene"] and _PREWARM_STATE["validation"],
     }
 
 

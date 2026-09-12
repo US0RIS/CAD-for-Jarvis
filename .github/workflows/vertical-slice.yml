@@ -61,13 +61,20 @@ jobs:
           $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-e2e-state"
           $p = Start-Process -FilePath "$env:GITHUB_WORKSPACE/services/forge-engine/.venv/Scripts/python.exe" -ArgumentList '-m','uvicorn','forge_engine.main:app','--host','127.0.0.1','--port','8765','--log-level','warning' -WorkingDirectory "$env:GITHUB_WORKSPACE/services/forge-engine" -PassThru
           $p.Id | Set-Content "$env:RUNNER_TEMP/forge-engine.pid"
-          $deadline = (Get-Date).AddSeconds(45)
+          # Wait for both "ok" (process is up) and "warm" (the startup tessellation/validation
+          # prewarms have finished their one-time, uncached, GIL-holding OpenCascade work - see
+          # main.py's _PREWARM_STATE). Without waiting for "warm" too, Playwright's own timed
+          # test traffic can start while that native work is still in flight and starve an
+          # unrelated request for the rest of its duration: observed directly on this runner -
+          # a plain catalog search (GET /v2/components) left unanswered for 60s+ this way. 300s
+          # gives real margin above the worst uncached validation cost measured here (190s+).
+          $deadline = (Get-Date).AddSeconds(300)
           $healthy = $false
           do {
-            try { $r = Invoke-RestMethod http://127.0.0.1:8765/v2/health; if ($r.ok -and $r.engineering_layer -eq 'v1.1-full-scope') { $healthy = $true; break } } catch {}
+            try { $r = Invoke-RestMethod http://127.0.0.1:8765/v2/health; if ($r.ok -and $r.engineering_layer -eq 'v1.1-full-scope' -and $r.warm) { $healthy = $true; break } } catch {}
             Start-Sleep -Milliseconds 250
           } while ((Get-Date) -lt $deadline)
-          if (-not $healthy) { throw 'Full-scope Forge Engine did not become healthy' }
+          if (-not $healthy) { throw 'Full-scope Forge Engine did not become healthy and warm' }
       - name: Run browser full-scope acceptance
         run: pnpm --filter @forgecad/desktop e2e
       - name: Upload Playwright diagnostics on failure
