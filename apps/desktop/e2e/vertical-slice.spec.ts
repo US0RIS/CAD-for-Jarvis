@@ -68,30 +68,31 @@ test('full ForgeCAD engineering workbench stays interactive end to end', async (
   await expect(page.getByTestId('component-compute.raspberry_pi_5_8gb')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/catalog/).first()).toBeVisible();
   await search.fill('stepper');
-  // `.first()` is positional, not an identity: the search-results list can legitimately
-  // reorder/refetch while an add is in flight (a debounced re-search effect double-fires
-  // under React StrictMode, and/or the server-side result ordering shifts once the added
-  // component's own added:true flag changes its fit score). Observed directly on Windows CI:
-  // the add succeeded and the *original* card correctly flipped to "Added", but re-querying
-  // `.first()` after that resolved to a fresh, never-clicked "Add" button instead, so the
-  // assertion polled the wrong element forever. Capture the specific card's testid before
-  // clicking and assert against that same card, immune to any reordering after the click.
-  // The card's own button swaps class from add-button to added-button the instant the add
-  // succeeds (same render as the text flipping to "Added") - scoping by `.add-button` breaks
-  // at exactly the moment of success, which is indistinguishable from "element removed" to a
-  // waiting assertion. There is exactly one button per card, so select it generically instead.
-  const firstCard = page.locator('.component-card').first();
-  const firstAdd = firstCard.locator('button');
+  // Select the first *addable* card rather than assuming position 0 is always fresh: a local
+  // reproduction (direct backend query and a live HTTP call against a freshly-seeded
+  // pi-control-v2 branch) both show the top "stepper" match as addable, not already-added -
+  // yet Windows CI has shown this exact assertion finding it already disabled with
+  // class="added-button" with nothing in this test having clicked it yet (cause not yet
+  // confirmed - possibly registry fit-score ties resolving differently run to run). Filtering
+  // on an enabled button sidesteps the question rather than betting the test's determinism on
+  // an ordering guarantee the registry never promised.
+  const addableCard = page.locator('.component-card').filter({ has: page.locator('button:not([disabled])') }).first();
+  const firstAdd = addableCard.locator('button');
   await expect(firstAdd).toBeVisible({ timeout: 60_000 });
+  // TEMPORARY DIAGNOSTIC: dump what the page actually sees, in case the above still doesn't
+  // explain the full picture on the next run.
+  const diagCardCount = await page.locator('.component-card').count();
+  const cardTestId = await addableCard.getAttribute('data-testid');
+  const diagButtonHtml = await firstAdd.evaluate((el) => el.outerHTML).catch((e) => String(e));
+  console.log(`[diag ${since()}] stepper search: ${diagCardCount} card(s), first addable testid=${cardTestId}, button=${diagButtonHtml}`);
   await expect(firstAdd).toBeEnabled();
-  const cardTestId = await firstCard.getAttribute('data-testid');
   await firstAdd.click();
   // Adding a component is a real engine write (core.execute()/persist()), not a UI toggle -
   // measured directly on Windows CI: a single such call took 236s, evidently CPU-starved by
   // the rest of this test's process load (a continuously-rendering WebGL viewport, the Python
   // backend, and Chromium all sharing whatever cores the runner has). 300s gives real margin
   // above the worst case actually observed rather than racing it.
-  const addedCard = cardTestId ? page.getByTestId(cardTestId) : firstCard;
+  const addedCard = cardTestId ? page.getByTestId(cardTestId) : addableCard;
   await expect(addedCard.locator('button')).toContainText('Added', { timeout: 300_000 });
 
   // Design workbench exposes project bundles, STEP import, BOM, branch status and real diffs.
