@@ -143,7 +143,10 @@ async def project() -> dict[str, Any]:
 
 @app.get("/v2/scene", dependencies=[Depends(require_session)])
 async def scene() -> dict[str, Any]:
-    return await asyncio.to_thread(PROJECT.scene_manifest)
+    # CadQuery/OpenCascade scene tessellation is not safe to move to a worker thread on
+    # Windows in this process. Running it on the engine's main thread avoids the native
+    # deadlock that left the desktop indefinitely at STARTING 3D.
+    return PROJECT.scene_manifest()
 
 
 @app.get("/v2/component-registry/stats", dependencies=[Depends(require_session)])
