@@ -1,0 +1,214 @@
+name: ForgeCAD 3.0 macOS Release
+
+on:
+  push:
+    branches: [forgecad/3.0.0]
+    paths:
+      - 'apps/desktop/**'
+      - 'services/forge-engine/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/v300-macos-release.yml'
+  workflow_dispatch:
+
+jobs:
+  macos-release:
+    name: Build and validate ForgeCAD 3.0 macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install and test engineering stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine pyinstaller
+          export PYTHONPATH="$GITHUB_WORKSPACE/services/forge-engine"
+          export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v300-release-selftest"
+          export CI=true
+          export FORGECAD_ACCEPTANCE_WORKSPACE=1
+          python -m forge_engine.full_scope_selftest
+          python -m forge_engine.v300.world_model_selftest
+          python -m forge_engine.v300.identity_resolution_selftest
+          python -m forge_engine.v300.planner_world_context_selftest
+          python -m forge_engine.v300.world_event_stream_selftest
+          python -m forge_engine.v300.capability_runtime_selftest
+          python -m forge_engine.v300.api_selftest
+
+      - name: Build native standalone Forge Engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf services/forge-engine/dist services/forge-engine/build/pyinstaller
+          python -m PyInstaller --noconfirm --clean --onedir --name forge-engine \
+            --collect-all cadquery \
+            --collect-all OCP \
+            --collect-all vtkmodules \
+            --collect-submodules forge_engine.v110 \
+            --collect-submodules forge_engine.v200 \
+            --collect-submodules forge_engine.v300 \
+            --distpath services/forge-engine/dist \
+            --workpath services/forge-engine/build/pyinstaller \
+            --specpath services/forge-engine/build \
+            services/forge-engine/forge_engine/desktop_entry.py
+          chmod +x services/forge-engine/dist/forge-engine/forge-engine
+          file services/forge-engine/dist/forge-engine/forge-engine
+          case "${{ matrix.arch }}" in
+            arm64) file services/forge-engine/dist/forge-engine/forge-engine | grep -q 'arm64' ;;
+            x64) file services/forge-engine/dist/forge-engine/forge-engine | grep -q 'x86_64' ;;
+          esac
+
+      - name: Smoke standalone v3 engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          export FORGECAD_PORT=8893
+          export FORGECAD_SESSION_TOKEN=v300-release-smoke
+          export FORGECAD_OLLAMA_MODEL=qwen3:8b
+          export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v300-standalone-state"
+          export CI=true
+          export FORGECAD_ACCEPTANCE_WORKSPACE=1
+          ENGINE="services/forge-engine/dist/forge-engine/forge-engine"
+          "$ENGINE" > "$RUNNER_TEMP/v300-engine.log" 2>&1 &
+          ENGINE_PID=$!
+          trap 'kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true' EXIT
+
+          HEALTH_OK=0
+          for i in {1..300}; do
+            if curl --fail --silent http://127.0.0.1:8893/v3/health > "$RUNNER_TEMP/v300-health.json"; then
+              HEALTH_OK=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$HEALTH_OK" -ne 1 ]; then
+            cat "$RUNNER_TEMP/v300-engine.log" || true
+            exit 1
+          fi
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/v300-health.json')); assert d['ok'] and d['api_version']=='3' and d['engine_version']=='3.0.0' and d['project_sync']['ok']; print('v3 health', d['world'])"
+
+          curl --fail --silent -H 'X-ForgeCAD-Session: v300-release-smoke' http://127.0.0.1:8893/v3/jarvis/context > "$RUNNER_TEMP/v300-context.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/v300-context.json')); assert d['world']['entity_count']>=7; assert any(x.get('source_links',{}).get('component_ref')=='compute.raspberry_pi_5_8gb' for x in d['entities']); print('v3 world entities', d['world']['entity_count'])"
+
+          curl --fail --silent -H 'X-ForgeCAD-Session: v300-release-smoke' http://127.0.0.1:8893/v3/world/events > "$RUNNER_TEMP/v300-events.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/v300-events.json')); assert d['revision']>=1; print('v3 event revision', d['revision'])"
+
+          curl --fail --silent -H 'X-ForgeCAD-Session: v300-release-smoke' -H 'Content-Type: application/json' \
+            -d '{"text":"inspect the Raspberry Pi and detect whether a door is open","use_model":false}' \
+            http://127.0.0.1:8893/v2/design/architecture > "$RUNNER_TEMP/v300-architecture.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/v300-architecture.json')); assert 'physical_world' in d and d['physical_world']['entity_count']>=7; print('world-aware planner: PASS')"
+
+          curl --fail --silent -H 'X-ForgeCAD-Session: v300-release-smoke' http://127.0.0.1:8893/v2/project/export > "$RUNNER_TEMP/v300-design.focad"
+          python -c "import zipfile,json; z=zipfile.ZipFile('$RUNNER_TEMP/v300-design.focad'); m=json.loads(z.read('manifest.json')); assert m['format']=='focad' and m['format_version']==1"
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Typecheck desktop
+        run: pnpm --filter @forgecad/desktop typecheck
+
+      - name: Build native DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @forgecad/desktop build
+          pnpm --filter @forgecad/desktop exec electron-builder --mac dmg --${{ matrix.arch }}
+
+      - name: Validate DMG and installed-copy v3 engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="apps/desktop/release/ForgeCAD-3.0.0-${{ matrix.arch }}.dmg"
+          test -f "$DMG"
+
+          MOUNT="$RUNNER_TEMP/forgecad-v300-mount"
+          INSTALLED="$RUNNER_TEMP/forgecad-v300-installed/ForgeCAD.app"
+          mkdir -p "$MOUNT" "$(dirname "$INSTALLED")"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true' EXIT
+          test -d "$MOUNT/ForgeCAD.app"
+          /usr/bin/ditto "$MOUNT/ForgeCAD.app" "$INSTALLED"
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INSTALLED/Contents/Info.plist")
+          test "$VERSION" = "3.0.0"
+          codesign --verify --deep --strict --verbose=2 "$INSTALLED"
+
+          ENGINE="$INSTALLED/Contents/Resources/forge-engine/forge-engine/forge-engine"
+          test -x "$ENGINE"
+          file "$ENGINE"
+          case "${{ matrix.arch }}" in
+            arm64) file "$ENGINE" | grep -q 'arm64' ;;
+            x64) file "$ENGINE" | grep -q 'x86_64' ;;
+          esac
+
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+
+          export FORGECAD_PORT=8894
+          export FORGECAD_SESSION_TOKEN=v300-installed-smoke
+          export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v300-installed-state"
+          export CI=true
+          export FORGECAD_ACCEPTANCE_WORKSPACE=1
+          "$ENGINE" > "$RUNNER_TEMP/v300-installed-engine.log" 2>&1 &
+          ENGINE_PID=$!
+          trap 'kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true' EXIT
+
+          HEALTH_OK=0
+          for i in {1..300}; do
+            if curl --fail --silent http://127.0.0.1:8894/v3/health > "$RUNNER_TEMP/v300-installed-health.json"; then
+              HEALTH_OK=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$HEALTH_OK" -ne 1 ]; then
+            cat "$RUNNER_TEMP/v300-installed-engine.log" || true
+            exit 1
+          fi
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/v300-installed-health.json')); assert d['ok'] and d['engine_version']=='3.0.0' and d['api_version']=='3'"
+
+          curl --fail --silent -H 'X-ForgeCAD-Session: v300-installed-smoke' http://127.0.0.1:8894/v3/world > "$RUNNER_TEMP/v300-installed-world.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/v300-installed-world.json')); assert len(d['entities'])>=7; print('installed world entities', len(d['entities']))"
+
+          curl --fail --silent -H 'X-ForgeCAD-Session: v300-installed-smoke' -H 'Content-Type: application/json' \
+            -d '{"text":"inspect the current physical system","use_model":false}' \
+            http://127.0.0.1:8894/v2/design/architecture > "$RUNNER_TEMP/v300-installed-architecture.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/v300-installed-architecture.json')); assert 'physical_world' in d"
+
+          kill "$ENGINE_PID" 2>/dev/null || true
+          wait "$ENGINE_PID" 2>/dev/null || true
+          trap - EXIT
+          shasum -a 256 "$DMG"
+
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeCAD-3.0.0-macOS-${{ matrix.arch }}-Installer
+          path: apps/desktop/release/ForgeCAD-3.0.0-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+          retention-days: 30
