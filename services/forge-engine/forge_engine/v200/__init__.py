@@ -7,11 +7,12 @@ a bounded design/validate/repair loop, manufacturing-resource integration includ
 branch-safe oversized-part splitting, constraint-driven parametric sketches, named
 expression-driven design parameters, branch-linked real-world evidence and feedback,
 real 3D solid finite-element screening for supported geometry including canonical
-project loads/supports and parametric load cases, transform-independent canonical mesh
-caching, portable multi-branch workspaces, machine-readable analysis contracts, full
-engineering-state branch diffs, a project API surface for canonical engineering records,
-and branch-safe autonomous multi-variant engineering campaigns whose structural ranking
-uses canonical project SolidFEA when available.
+project loads/supports and parametric load cases, deterministic tolerance-stack
+analysis, transform-independent canonical mesh caching, portable multi-branch
+workspaces, machine-readable analysis contracts, full engineering-state branch diffs,
+a project API surface for canonical engineering records, and branch-safe autonomous
+multi-variant engineering campaigns whose structural ranking uses canonical project
+SolidFEA when available.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -47,6 +48,8 @@ from . import parametric_expressions as _parametric_expressions
 _parametric_expressions.install(_legacy_main)
 from . import project_structural_parametric as _project_structural_parametric
 _project_structural_parametric.install()
+from . import tolerance_analysis as _tolerance_analysis
+_tolerance_analysis.install(_legacy_main)
 from . import workspace_bundle as _workspace_bundle
 _workspace_bundle.install()
 from . import manufacturing_api as _manufacturing_api
