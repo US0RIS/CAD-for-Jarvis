@@ -48,6 +48,7 @@ def run() -> dict[str, object]:
     assert manufacture["branch"] == source_branch
     assert manufacture["package_sha256"] == package_hash
     assert manufacture["changes_design_status"] is False
+    assert len(manufacture["design_fingerprint"]) == 64
 
     verification = physical_evidence.verify_requirement(
         "R-PHYSICAL-1",
@@ -61,15 +62,18 @@ def run() -> dict[str, object]:
     )
     assert verification["branch"] == source_branch
     assert verification["status"] == "passed"
+    assert verification["design_fingerprint"] == manufacture["design_fingerprint"]
     checks = core.requirement_checks()
     requirement = next(row for row in checks if row["id"] == "R-PHYSICAL-1")
     assert requirement["passed"] is True
     assert requirement["verification_status"] == "passed"
     assert requirement["verification_method"] == "physical prototype functional test"
+    assert requirement["physical_verification_current"] is True
 
     evidence = physical_evidence.evidence_rows()
     assert {row["kind"] for row in evidence} == {"manufacturing_evidence", "requirement_verification"}
     assert len(evidence) == 2
+    assert all(row["applies_to_current_design"] for row in evidence)
 
     # Recording evidence must not silently turn an unverified design into a protected
     # known-good branch. That promotion remains an explicit branch-status user action.
@@ -78,6 +82,43 @@ def run() -> dict[str, object]:
     assert branch["status"] == "unverified"
     assert branch["physical_verified"] is False
     assert branch["protected"] is False
+
+    # A branch copied without engineering changes has the exact same design fingerprint,
+    # so its inherited evidence is still valid. The first real CAD/code/electrical change
+    # must stale that evidence automatically rather than letting a modified design inherit
+    # a physical pass from its parent.
+    PROJECT.create_branch("physical-redesign", "Change the tested design")
+    inherited = next(row for row in core.requirement_checks() if row["id"] == "R-PHYSICAL-1")
+    assert inherited["passed"] is True
+    assert inherited["physical_verification_current"] is True
+    PROJECT.execute(
+        "add",
+        {
+            "name": "Changed latch geometry",
+            "kind": "box",
+            "params": {"x": 20.0, "y": 8.0, "z": 3.0},
+            "material": "abs",
+            "semantic": {"role": "latch", "tags": ["fabricated", "redesign"]},
+        },
+        actor="human",
+        reason="Mutate geometry after physical verification",
+    )
+    stale = next(row for row in core.requirement_checks() if row["id"] == "R-PHYSICAL-1")
+    assert stale["passed"] is None
+    assert stale["verification_status"] == "stale"
+    assert stale["verification_method"] is None
+    assert stale["physical_verification_current"] is False
+    assert stale["stale_evidence_count"] == 1
+    child_rows = physical_evidence.evidence_rows()
+    assert len(child_rows) == 2
+    assert not any(row["applies_to_current_design"] for row in child_rows)
+
+    # The source branch still points at the exact tested state and therefore keeps its
+    # evidence current. Evidence staleness is design-content based rather than global.
+    PROJECT.activate_branch(source_branch)
+    restored = next(row for row in core.requirement_checks() if row["id"] == "R-PHYSICAL-1")
+    assert restored["passed"] is True
+    assert restored["physical_verification_current"] is True
 
     # A quantitative deterministic failure cannot be overridden by manual evidence.
     PROJECT.execute(
@@ -98,6 +139,8 @@ def run() -> dict[str, object]:
         "branch": source_branch,
         "evidence_count": len(physical_evidence.evidence_rows()),
         "qualitative_requirement_passed": requirement["passed"],
+        "evidence_stales_after_mutation": stale["verification_status"] == "stale",
+        "source_evidence_survives_child_mutation": restored["passed"] is True,
         "quantitative_override_blocked": mass_check["passed"] is False,
         "physical_auto_verified": branch["physical_verified"],
     }
