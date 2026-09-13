@@ -51,9 +51,9 @@ const ENGINE_LOADING_HTML = `<!doctype html>
 <meta name="color-scheme" content="dark">
 <style>
   *{box-sizing:border-box}
-  html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e6e9ed}
-  body{display:grid;place-items:center;padding:8px}
-  .modal{width:100%;height:100%;display:flex;flex-direction:column;justify-content:center;padding:30px 34px;background:#171a1e;border:1px solid #414851;border-radius:12px;box-shadow:0 22px 70px rgba(0,0,0,.55)}
+  html,body{width:100%;height:100%;margin:0;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e6e9ed}
+  body{display:grid;place-items:center;padding:24px;background:rgba(15,18,22,.76)}
+  .modal{width:min(440px,calc(100vw - 48px));min-height:250px;display:flex;flex-direction:column;justify-content:center;padding:30px 34px;background:#171a1e;border:1px solid #414851;border-radius:12px;box-shadow:0 22px 70px rgba(0,0,0,.55)}
   .brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;color:#aab1b9;font-size:12px;font-weight:600;letter-spacing:.02em}
   .mark{display:grid;place-items:center;width:25px;height:25px;border-radius:3px;background:#e8eaed;color:#1a1d21;font-weight:800;font-size:14px}
   h1{margin:0 0 8px;font-size:20px;line-height:1.2;font-weight:650;letter-spacing:-.01em;color:#f0f2f4}
@@ -69,32 +69,32 @@ const ENGINE_LOADING_HTML = `<!doctype html>
   <section class="modal" role="dialog" aria-modal="true" aria-labelledby="engine-title">
     <div class="brand"><span class="mark">F</span><span>ForgeCAD</span></div>
     <h1 id="engine-title">Engine loading</h1>
-    <p>Starting the local Forge Engine and CAD services.</p>
-    <div class="track" role="progressbar" aria-label="Forge Engine loading"><span></span></div>
-    <div class="status">The design interface will unlock automatically when the engine is ready.</div>
+    <p id="engine-description">Starting the local Forge Engine and CAD services.</p>
+    <div class="track" role="progressbar" aria-label="ForgeCAD startup"><span></span></div>
+    <div class="status" id="engine-status">Stage 1 of 2 · Starting the engineering runtime.</div>
   </section>
 </body>
 </html>`;
 
 async function createEngineLoadingModal(parent: BrowserWindow): Promise<BrowserWindow> {
+  const bounds = parent.getBounds();
   const modal = new BrowserWindow({
     parent,
     modal: true,
-    width: 440,
-    height: 250,
-    minWidth: 440,
-    minHeight: 250,
-    maxWidth: 440,
-    maxHeight: 250,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     resizable: false,
-    movable: true,
+    movable: false,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
     closable: false,
     frame: false,
     transparent: true,
-    hasShadow: true,
+    hasShadow: false,
+    skipTaskbar: true,
     show: false,
     backgroundColor: '#00000000',
     webPreferences: {
@@ -103,11 +103,58 @@ async function createEngineLoadingModal(parent: BrowserWindow): Promise<BrowserW
       sandbox: true,
     },
   });
+
+  const syncBounds = () => {
+    if (!parent.isDestroyed() && !modal.isDestroyed()) modal.setBounds(parent.getBounds(), false);
+  };
+  parent.on('move', syncBounds);
+  parent.on('resize', syncBounds);
   modal.on('closed', () => {
+    parent.off('move', syncBounds);
+    parent.off('resize', syncBounds);
     if (engineLoadingWindow === modal) engineLoadingWindow = null;
   });
   await modal.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(ENGINE_LOADING_HTML)}`);
   return modal;
+}
+
+async function showComponentLoadingStage(modal: BrowserWindow): Promise<void> {
+  if (modal.isDestroyed()) return;
+  await modal.webContents.executeJavaScript(`
+    (() => {
+      const title = document.getElementById('engine-title');
+      const description = document.getElementById('engine-description');
+      const status = document.getElementById('engine-status');
+      if (title) title.textContent = 'Component library loading';
+      if (description) description.textContent = 'Preparing the local engineering catalog and component metadata.';
+      if (status) status.textContent = 'Stage 2 of 2 · Finishing the component browser before the interface unlocks.';
+    })();
+  `, true);
+}
+
+async function waitForComponentCatalog(window: BrowserWindow, timeoutMs = 180_000): Promise<boolean> {
+  if (window.isDestroyed()) return false;
+  try {
+    return Boolean(await window.webContents.executeJavaScript(`
+      new Promise((resolve) => {
+        const deadline = Date.now() + ${timeoutMs};
+        const check = () => {
+          if (document.querySelector('[data-testid^="component-"]')) {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
+            return;
+          }
+          if (Date.now() >= deadline) {
+            resolve(false);
+            return;
+          }
+          setTimeout(check, 50);
+        };
+        check();
+      })
+    `, true));
+  } catch {
+    return false;
+  }
 }
 
 async function createMainWindow() {
@@ -136,7 +183,8 @@ async function createMainWindow() {
   // Start the native engine immediately, but do not hold the entire desktop window back.
   // The user sees ForgeCAD at once with a true modal child window over it. Because the
   // child is `modal: true`, the CAD workbench cannot receive pointer or keyboard input
-  // until EngineSupervisor has passed its health gate and this window is destroyed.
+  // until EngineSupervisor has passed its health gate and the component catalog has
+  // actually rendered in the desktop behind the overlay.
   const engineStartup = engine.start().then(
     (connection) => ({ ok: true as const, connection }),
     (error: unknown) => ({ ok: false as const, error }),
@@ -159,7 +207,11 @@ async function createMainWindow() {
 
   const startup = await engineStartup;
   if (startup.ok) {
-    if (engineLoadingWindow && !engineLoadingWindow.isDestroyed()) engineLoadingWindow.destroy();
+    if (engineLoadingWindow && !engineLoadingWindow.isDestroyed()) {
+      await showComponentLoadingStage(engineLoadingWindow);
+      await waitForComponentCatalog(window);
+      if (!engineLoadingWindow.isDestroyed()) engineLoadingWindow.destroy();
+    }
     engineLoadingWindow = null;
     window.focus();
     return;
