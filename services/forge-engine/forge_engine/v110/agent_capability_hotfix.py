@@ -129,6 +129,7 @@ def _expanded_search(
     rows = list(base.get("results") or [])
     text = query.lower()
     preferred: list[dict[str, Any]] = []
+    related_sensors: list[dict[str, Any]] = []
 
     # Translate user intent into the actual physical sensing family. A request like
     # "tell me when this door opens" should not require the 8B planner to know that the
@@ -148,11 +149,11 @@ def _expanded_search(
                 min_trust,
                 min_geometry_fidelity,
             )
-            preferred.extend(related.get("results") or [])
+            related_sensors.extend(related.get("results") or [])
 
     # Network notification requests need a programmable networked computer, but that can
-    # be an already-inserted Raspberry Pi. Include capable boards as candidates rather
-    # than making the planner conclude that Discord itself must exist as a hardware SKU.
+    # be an already-inserted Raspberry Pi. Put these immediately after the primary sensor
+    # so the planner's ten-candidate context always contains both sides of the solution.
     if _triggered(text, ("discord", "dm", "message", "notify", "notification", "webhook", "internet", "wifi")):
         if category is None:
             for cid in (
@@ -168,7 +169,7 @@ def _expanded_search(
 
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for row in preferred + rows:
+    for row in preferred + related_sensors + rows:
         cid = str(row.get("id") or "")
         if not cid or cid in seen:
             continue
