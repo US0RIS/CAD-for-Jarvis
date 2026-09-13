@@ -331,21 +331,88 @@ export function createJob(input: { kind: 'agent' | 'simulation' | 'campaign' | '
 }
 
 export async function subscribeEngineEvents(onEvent: (event: EngineEvent) => void): Promise<() => void> {
-  const connection = await engineConnection();
-  const wsBase = connection.baseUrl.replace(/^http/, 'ws');
-  const socket = new WebSocket(`${wsBase}/v2/events?token=${encodeURIComponent(connection.sessionToken)}`);
-  socket.addEventListener('message', (event) => {
+  let disposed = false;
+  let socket: WebSocket | null = null;
+  let heartbeat: number | null = null;
+  let reconnectTimer: number | null = null;
+  let reconnectAttempt = 0;
+
+  const clearHeartbeat = () => {
+    if (heartbeat != null) window.clearInterval(heartbeat);
+    heartbeat = null;
+  };
+
+  const clearReconnect = () => {
+    if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  };
+
+  const scheduleReconnect = () => {
+    if (disposed || reconnectTimer != null) return;
+    const delay = Math.min(500 * 2 ** Math.min(reconnectAttempt, 4), 8_000);
+    reconnectAttempt += 1;
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      void connect();
+    }, delay);
+  };
+
+  const connect = async () => {
+    if (disposed) return;
     try {
-      const parsed = JSON.parse(String(event.data)) as EngineEvent;
-      if (parsed.type === 'project.updated') invalidateProjectRequests();
-      onEvent(parsed);
-    } catch { /* ignore malformed local event */ }
-  });
-  const heartbeat = window.setInterval(() => {
-    if (socket.readyState === WebSocket.OPEN) socket.send('ping');
-  }, 15_000);
+      // A WebSocket close commonly means the supervised native engine exited. Discard
+      // the cached port/token before asking Electron for the replacement process.
+      if (reconnectAttempt > 0) invalidateConnection();
+      const connection = await engineConnection();
+      if (disposed) return;
+      const wsBase = connection.baseUrl.replace(/^http/, 'ws');
+      const next = new WebSocket(`${wsBase}/v2/events?token=${encodeURIComponent(connection.sessionToken)}`);
+      socket = next;
+
+      next.addEventListener('open', () => {
+        if (disposed || socket !== next) return;
+        reconnectAttempt = 0;
+        clearHeartbeat();
+        heartbeat = window.setInterval(() => {
+          if (socket === next && next.readyState === WebSocket.OPEN) next.send('ping');
+        }, 15_000);
+      });
+
+      next.addEventListener('message', (event) => {
+        if (disposed || socket !== next) return;
+        try {
+          const parsed = JSON.parse(String(event.data)) as EngineEvent;
+          if (parsed.type === 'project.updated') invalidateProjectRequests();
+          onEvent(parsed);
+        } catch { /* ignore malformed local event */ }
+      });
+
+      next.addEventListener('close', () => {
+        if (disposed || socket !== next) return;
+        clearHeartbeat();
+        socket = null;
+        invalidateConnection();
+        scheduleReconnect();
+      });
+
+      next.addEventListener('error', () => {
+        // Browsers provide intentionally little WebSocket error detail. Closing the
+        // socket funnels all recovery through one path and prevents duplicate retries.
+        if (!disposed && socket === next && next.readyState !== WebSocket.CLOSED) next.close();
+      });
+    } catch {
+      invalidateConnection();
+      scheduleReconnect();
+    }
+  };
+
+  await connect();
   return () => {
-    window.clearInterval(heartbeat);
-    socket.close();
+    disposed = true;
+    clearHeartbeat();
+    clearReconnect();
+    const current = socket;
+    socket = null;
+    if (current && current.readyState < WebSocket.CLOSING) current.close();
   };
 }
