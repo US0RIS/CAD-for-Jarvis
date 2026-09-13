@@ -8,7 +8,8 @@ branch-safe oversized-part splitting, constraint-driven parametric sketches, nam
 expression-driven design parameters, branch-linked real-world evidence and feedback,
 real 3D solid finite-element screening for supported geometry including canonical
 project loads/supports, transform-independent canonical mesh caching, portable
-multi-branch workspaces, and branch-safe autonomous multi-variant engineering campaigns.
+multi-branch workspaces, machine-readable analysis contracts, and branch-safe
+autonomous multi-variant engineering campaigns.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -52,5 +53,7 @@ from . import campaign_intelligence as _campaign_intelligence
 _campaign_intelligence.install(_legacy_main)
 from . import feedback_intelligence as _feedback_intelligence
 _feedback_intelligence.install(_legacy_main)
+from . import analysis_contracts as _analysis_contracts
+_analysis_contracts.install(_legacy_main)
 
 __all__ = ["DESIGN_INTELLIGENCE_VERSION", "design_intelligence"]
