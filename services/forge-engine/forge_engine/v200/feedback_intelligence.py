@@ -13,6 +13,7 @@ comparison, and autonomous campaign reports while keeping those semantics explic
 """
 
 from copy import deepcopy
+from types import MethodType
 from typing import Any
 
 from fastapi import Depends, HTTPException
@@ -223,7 +224,10 @@ def _run_campaign(self: EngineeringProject, selected_object_id: str | None = Non
     assert _ORIGINAL_RUN_CAMPAIGN is not None
     source_branch = core.ACTIVE_DESIGN
     source_feedback = branch_feedback(source_branch)
-    result = _ORIGINAL_RUN_CAMPAIGN(self, selected_object_id, payload)
+    # campaign_intelligence installs an instance-bound MethodType so it can coexist with
+    # the legacy EngineeringProject class. Wrap that exact installed method; patching the
+    # class here would be shadowed by the existing instance attribute.
+    result = _ORIGINAL_RUN_CAMPAIGN(selected_object_id, payload)
     result["source_physical_feedback"] = source_feedback
     result["feedback_semantics"] = {
         "current_evidence_gates_exact_source_revision": True,
@@ -241,8 +245,8 @@ def install(legacy: Any) -> None:
     design_intelligence.build_planner_context = _build_context
     _ORIGINAL_COMPARE_BRANCH = EngineeringProject.compare_branch
     EngineeringProject.compare_branch = _compare_branch  # type: ignore[method-assign]
-    _ORIGINAL_RUN_CAMPAIGN = EngineeringProject.run_campaign
-    EngineeringProject.run_campaign = _run_campaign  # type: ignore[method-assign]
+    _ORIGINAL_RUN_CAMPAIGN = legacy.PROJECT.run_campaign
+    legacy.PROJECT.run_campaign = MethodType(_run_campaign, legacy.PROJECT)
 
     app = legacy.app
 
