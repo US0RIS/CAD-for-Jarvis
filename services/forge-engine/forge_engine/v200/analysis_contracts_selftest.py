@@ -12,6 +12,7 @@ def run() -> dict[str, object]:
     structural = contract["structural"]
     tolerance = contract["tolerance"]
     dynamics = contract["dynamics"]
+    electrical = contract["electrical"]
     bc = structural["project_boundary_conditions"]
 
     assert structural["solver"] == "ForgeCAD SolidFEA"
@@ -44,6 +45,18 @@ def run() -> dict[str, object]:
     assert "unfeatured box" in dynamics["inertia_fidelity"]["analytic"]
     assert any("no joints" in limitation.lower() for limitation in dynamics["limitations"])
 
+    assert electrical["solver"] == "ForgeCAD ElectricalGraph"
+    assert electrical["grade"] == "engineering_iteration"
+    assert electrical["schematic_endpoint"] == "/v2/electrical/schematic"
+    assert electrical["analysis_endpoint"] == "/v2/analysis/electrical"
+    assert electrical["connection_operation"]["operation"] == "connect_interfaces"
+    assert electrical["connection_operation"]["schema"]["net_name"] == "+5V"
+    assert electrical["connection_operation"]["schema"]["nominal_voltage_v"] == 5.0
+    assert electrical["net_label_operation"]["operation"] == "label_electrical_net"
+    assert "power" in electrical["connection_operation"]["net_classes"]
+    assert any("SPICE" in limitation for limitation in electrical["limitations"])
+    assert "conflicting modeled source voltages on one net" in electrical["fail_closed"]
+
     # Signed orthogonal face aliases are part of the accepted deterministic input
     # vocabulary even though canonical storage should prefer x_min/x_max/etc.
     assert project_structural._face("+x") == "x_max"
@@ -52,13 +65,15 @@ def run() -> dict[str, object]:
     assert project_structural._face("-x") == "x_min"
     assert project_structural._face("y-") == "y_min"
 
-    request = "Design a small load-bearing bracket and analyze its fit tolerances and rigid-body acceleration before manufacturing."
+    request = "Design a powered load-bearing mechanism, verify its electrical rails, fit tolerances, and rigid-body acceleration before manufacturing."
     architecture = design_intelligence.bootstrap_architecture(request, PROJECT.snapshot())
     context = design_intelligence.build_planner_context(request, architecture, PROJECT.snapshot())
     assert context["analysis_contracts"]["structural"]["project_boundary_conditions"]["support"]["schema"]["type"] == "fixed"
     assert context["analysis_contracts"]["tolerance"]["direct_endpoint"] == "/v2/analysis/tolerance-stack"
     assert context["analysis_contracts"]["tolerance"]["project_endpoint"] == "/v2/analysis/tolerance-stacks"
     assert context["analysis_contracts"]["dynamics"]["response_endpoint"] == "/v2/analysis/rigid-body"
+    assert context["analysis_contracts"]["electrical"]["analysis_endpoint"] == "/v2/analysis/electrical"
+    assert context["analysis_contracts"]["electrical"]["connection_operation"]["schema"]["net_class"] == "power"
     assert context["analysis_contracts"]["manufacturing"]["resource_id"] == "bambu-lab-p2s"
     assert context["analysis_contracts"]["manufacturing"]["direct_printer_control"] is False
 
@@ -66,11 +81,13 @@ def run() -> dict[str, object]:
         "solver": structural["solver"],
         "tolerance_solver": tolerance["solver"],
         "dynamics_solver": dynamics["solver"],
+        "electrical_solver": electrical["solver"],
         "faces": len(bc["faces"]),
         "supported_force_types": len(bc["force"]["supported_types"]),
         "planner_context_contract": True,
         "tolerance_contract": True,
         "dynamics_contract": True,
+        "electrical_contract": True,
         "signed_face_aliases": True,
         "unsupported_physics_fail_closed": True,
     }
