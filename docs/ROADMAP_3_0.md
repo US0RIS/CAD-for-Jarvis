@@ -1,83 +1,61 @@
 # ForgeCAD 3.0.0 — Physical World Model
 
-Status: **active development target**
+Status: **COMPLETE / release-validated**
 
-Branch: `forgecad/3.0.0`
+Release branch: `forgecad/3.0.0`
 
-ForgeCAD 2.0 established an AI-native engineering workstation: canonical CAD and component state, code attached to hardware, deterministic analysis, design branches, manufacturing preparation, evidence, and Jarvis-accessible engineering APIs.
+Runtime-validated source SHA: `a5ae8ad5ecc6622498df1e3c8c3688c31ded0afe`
 
-ForgeCAD 3.0 changes the unit of abstraction.
+Release evidence: [`RELEASE_3_0.md`](RELEASE_3_0.md)
 
-The primary 3.0 objective is to make ForgeCAD the first practical version of **Jarvis's persistent model of physical reality** rather than only a model of the design currently open in a CAD project.
+ForgeCAD 2.x established the AI-native engineering workstation: canonical CAD/component state, embedded code, deterministic analysis, branch lineage, manufacturing preparation, physical evidence, and Jarvis-accessible engineering APIs.
 
-The release should make this statement materially true:
+ForgeCAD 3.0 changes the unit of abstraction. It adds a persistent **Physical World Model (PWM)** so Jarvis and ForgeCAD can reason about stable real-world identity, hierarchy, pose, interfaces, capabilities, live observations, provenance, and authoritative engineering-source links through one shared representation.
+
+The release makes this statement materially true:
 
 > Jarvis can refer to a physical thing by stable identity, know where it is in a hierarchy and coordinate frame, know what it can do and how it is connected, distinguish designed state from observed live state, preserve provenance/confidence, and use ForgeCAD engineering state as the authoritative digital twin for designed systems.
 
-3.0 is not intended to complete the entire long-term JARVIS vision. It establishes the substrate on which perception, robotics, fabrication feedback, and persistent autonomous operation can be built without inventing a second incompatible representation of the physical world.
-
----
-
-## 1. Release thesis
-
-ForgeCAD 3.0 adds a canonical **Physical World Model (PWM)** alongside the existing project model.
-
-The world model is a persistent graph:
-
-```text
-World
-└── Site / Building
-    └── Room / Zone
-        └── Machine / Assembly / Tool
-            └── Component / Device
-                ├── Interfaces
-                ├── Capabilities
-                ├── Software
-                ├── Live state
-                └── Engineering design source
-```
-
-A ForgeCAD design is projected into this graph as an authoritative designed system. Real observations can then update live state without rewriting design truth. Jarvis consumes the same graph rather than maintaining a separate ad-hoc device inventory.
-
-The critical distinction is:
+The governing invariant is:
 
 ```text
 designed truth != observed state != inference
 ```
 
-ForgeCAD must preserve that distinction explicitly.
-
 ---
 
-## 2. 3.0.0 committed scope
+## 1. Completed 3.0 scope
 
-### 2.1 Persistent world entities
+### 1.1 Persistent world entities — COMPLETE
 
-Every world entity has a stable identity and may carry:
+The PWM stores persistent world entities with:
 
+- stable IDs;
 - name and semantic kind;
 - parent/child hierarchy;
 - coordinate frame and 6-DoF pose;
 - capabilities;
 - physical/software interfaces;
-- live state values;
+- live state;
 - provenance and confidence;
-- links back to ForgeCAD project/object/component identity;
+- ForgeCAD project/object/component source links;
 - timestamps and revision metadata.
 
-Initial semantic kinds include world, site, building, room, zone, machine, assembly, component, device, sensor, actuator, tool, fixture, material, and generic object. The schema remains extensible rather than enforcing a closed ontology prematurely.
+Supported semantic kinds remain extensible and include world, site, building, room, zone, machine, assembly, component, device, sensor, actuator, tool, fixture, material, and generic object.
 
-### 2.2 Spatial hierarchy and coordinate frames
+### 1.2 Spatial hierarchy and coordinate frames — COMPLETE
 
-The PWM must support nested coordinate frames. A component's pose can be expressed relative to an assembly; an assembly can be expressed relative to a machine; a machine can be expressed relative to a room.
+Nested coordinate frames are supported. ForgeCAD project transforms are projected from the engineering millimeter frame into SI world coordinates explicitly.
 
-ForgeCAD project transforms are converted from the project's millimeter engineering frame into SI world coordinates when projected into the PWM. The original engineering transform remains represented by provenance/source metadata and is never silently replaced by a sensor estimate.
+The authoritative engineering transform remains available through source metadata rather than being silently replaced by an observation.
 
-### 2.3 Capability and interface ontology
+Hierarchy-cycle rejection is deterministic and regression-tested.
 
-Jarvis should reason about what a device **can do**, not which one-off Python script controls it.
+### 1.3 Capability and interface ontology — COMPLETE
 
-Initial capability naming follows composable names such as:
+3.0 defines queryable capability contracts rather than one-off control scripts.
+
+Implemented capability vocabulary includes composable names such as:
 
 ```text
 sensor.temperature
@@ -95,135 +73,175 @@ engineering.modify
 engineering.simulate
 ```
 
-Capabilities may include constraints and metadata. Interfaces remain explicit physical/software connection points and retain exact source IDs when projected from ForgeCAD components.
+Interfaces remain explicit physical/software connection points and preserve source IDs when projected from ForgeCAD components.
 
-3.0 defines this contract and makes it queryable. A large hardware-driver ecosystem is not required for 3.0, but future drivers must bind to this contract rather than bypass it.
+### 1.4 Live state and observation ingestion — COMPLETE
 
-### 2.4 Live state and observation ingestion
-
-A perception system, device bridge, or human may submit an observation against a world entity.
-
-Every state sample records:
+World observations preserve:
 
 - value;
-- unit when applicable;
+- unit;
 - observation time;
-- source class and source identity;
+- source class;
+- source identity;
 - confidence;
-- optional metadata.
+- metadata.
 
-Observations update **live state**, not canonical CAD or component engineering data.
+Observations update live state only. They do not rewrite canonical CAD or component engineering data.
 
-This is the first perception-facing contract for future cameras, microphones, environmental sensors, robots, HomeKit/device telemetry, and vision pipelines.
+### 1.5 Provenance and epistemic state — COMPLETE
 
-### 2.5 Provenance and epistemic state
-
-Unknown remains unknown.
-
-The world model must distinguish at minimum:
+The world model distinguishes:
 
 - authoritative ForgeCAD design state;
 - human-declared state;
-- direct sensor observation;
+- direct sensor observations;
 - Jarvis inference;
 - imported external data.
 
-Confidence is explicit and bounded. Inference may not overwrite a more authoritative source merely because it is newer.
+Confidence is explicit and bounded. Unknown remains unknown.
 
-### 2.6 Automatic ForgeCAD project projection
+### 1.6 Automatic ForgeCAD project projection — COMPLETE
 
-The active ForgeCAD project is automatically projected into the world model.
+The active ForgeCAD project projects into the PWM with:
 
-At minimum, projection includes:
-
-- one world entity for the active project/assembly;
-- one entity for every project object;
-- project hierarchy;
-- object pose;
+- a project/assembly entity;
+- one entity per project object;
+- deterministic IDs;
+- hierarchy and pose;
 - programmable-device capabilities;
 - frozen component interfaces;
 - component references and engineering roles;
 - canonical project connections as world relations;
 - branch/revision provenance.
 
-Project entities use deterministic IDs so project edits update the same world identities rather than producing duplicates.
+Repeated sync preserves identity. Project mutations refresh the projection automatically. Stale projected entities are removed when their source object is deleted.
 
-Project mutation through existing `/v2` APIs must refresh this projection automatically.
+### 1.7 Jarvis-facing world API — COMPLETE
 
-### 2.7 Jarvis-facing world API
+Supported deterministic surfaces include world snapshot/entity/relation lookup, hierarchy and capability filtering, observations, explicit project sync, compact Jarvis context, deterministic identity resolution, event history, and authenticated event streaming.
 
-3.0 exposes deterministic APIs for:
+Jarvis/session authentication remains at the existing ForgeCAD bridge boundary.
 
-- world snapshot;
-- entity lookup;
-- hierarchy traversal/filtering;
-- capability filtering;
-- relation lookup;
-- live-state observation ingestion;
-- explicit project-to-world synchronization;
-- compact Jarvis context generation.
+### 1.8 Desktop SYSTEM world inspector — COMPLETE
 
-Jarvis authentication continues to use the existing bridge/session model.
+The desktop SYSTEM workspace exposes:
 
-### 2.8 Desktop world/system surface
-
-Before 3.0 release, the desktop SYSTEM experience should expose at least:
-
-- current world-model health;
-- entity count and source breakdown;
+- world health;
+- entity/relation counts;
+- project-sync status;
 - selected entity identity;
-- design vs live state;
-- capabilities/interfaces;
+- design source links;
+- capabilities;
+- interfaces;
+- live state;
 - provenance/confidence;
-- connected relations;
-- sync status with the active ForgeCAD design.
+- relations.
 
-The desktop does not need to become a full GIS/SLAM application in 3.0.
+A dedicated production-like browser gate verifies this surface end-to-end.
 
-### 2.9 World-aware engineering context
+### 1.9 World-aware engineering context — COMPLETE
 
-The engineering agent should be able to receive relevant world context when the user refers to a known real entity. A request such as "make the bench robot's gripper close faster" should be resolvable to a stable world entity and from there to its ForgeCAD design source where available.
+The engineering planner can receive deterministic world context for resolved real entities.
 
-This must remain deterministic at the identity-resolution layer. The model may reason about intent but must not invent entity IDs.
+The planner keeps world IDs separate from CAD IDs. A world entity can affect CAD only through an explicit `source_links.forgecad_object_id` bridge.
 
-### 2.10 Event/change stream
+Identity resolution fails closed on ambiguity and does not invent authoritative IDs from fuzzy similarity.
 
-The PWM maintains a bounded, timestamped event history for entity, relation, sync, and observation changes. Jarvis should be able to determine what changed without diffing entire world snapshots continuously.
+### 1.10 Event/change subscriptions — COMPLETE
+
+The PWM maintains bounded timestamped event history for entity, relation, sync, and observation changes.
+
+3.0 includes:
+
+- incremental event retrieval;
+- revision/cursor state;
+- authenticated WebSocket push;
+- deterministic catch-up from a previous event ID;
+- explicit reset behavior when a cursor is no longer retained.
+
+### 1.11 Capability action safety runtime — COMPLETE
+
+The 3.0 capability runtime enforces:
+
+- explicit adapter binding;
+- argument contracts;
+- fail-closed behavior for unbound actions;
+- confirmation boundaries for consequential physical actions;
+- rejection of missing or incorrect confirmations;
+- expiry of pending physical confirmation across restart;
+- persistent action audit state.
+
+This is a safety/control substrate, not a universal device-driver ecosystem.
 
 ---
 
-## 3. 3.0 stretch scope
+## 2. Release acceptance — COMPLETE
 
-These items belong in 3.0 only if the committed scope is solid and regression-tested:
+Every committed 3.0 release criterion is satisfied.
 
-- pluggable device adapters that execute capability operations against Raspberry Pi/ESP32/local services;
-- camera/perception adapters producing object observations;
-- explicit uncertainty/staleness policy by state type;
-- scene overlay showing world entities that are not native CAD parts;
-- world-aware autonomous campaign objectives;
-- deployment state for programmable devices;
-- first closed-loop prototype test where a live measurement invalidates a design assumption and creates a proposed revision.
+- **Existing engineering regression:** PASS
+- **PWM persistence and invariants:** PASS
+- **Stable project projection:** PASS
+- **Automatic project-to-world refresh:** PASS
+- **Deterministic Jarvis identity/capability/state lookup:** PASS
+- **Live state cannot overwrite canonical design truth:** PASS
+- **World persistence across restart:** PASS
+- **Desktop SYSTEM world inspection:** PASS
+- **`.focad` backward compatibility:** PASS
+- **Windows packaged v3 validation:** PASS
+- **macOS x64 packaged v3 validation:** PASS
+- **macOS arm64 packaged v3 validation:** PASS
+- **Release documentation distinguishes implemented behavior from later ambitions:** PASS
 
-They are not allowed to weaken the canonical world model in order to ship faster.
+Exact workflow runs and installer digests are recorded in [`RELEASE_3_0.md`](RELEASE_3_0.md).
 
 ---
 
-## 4. Explicitly not required for 3.0
+## 3. Regression invariants
 
-ForgeCAD 3.0 does **not** claim to provide:
+The release is guarded by deterministic self-tests covering:
+
+- world persistence;
+- hierarchy-cycle rejection;
+- deterministic project identity;
+- mm-to-m projection;
+- stale projected-entity cleanup;
+- observation persistence;
+- exact/source-link/hierarchy identity resolution;
+- ambiguity and fuzzy-match fail-closed behavior;
+- planner world-context injection;
+- explicit engineering source-link enforcement;
+- WebSocket authentication;
+- event catch-up/live push;
+- expired-cursor reset semantics;
+- capability confirmation policy;
+- action argument validation;
+- unbound-action rejection;
+- audit persistence;
+- v3 API behavior;
+- desktop browser acceptance.
+
+The complete inherited ForgeCAD engineering regression remains part of the same release gate.
+
+---
+
+## 4. Explicitly not claimed by 3.0
+
+ForgeCAD 3.0.0 does not claim:
 
 - general-purpose visual SLAM;
 - perfect object recognition or person identification;
 - unrestricted autonomous robot control;
 - arbitrary smart-home integration;
+- universal device drivers;
 - continuous multibody/digital-twin simulation of an entire building;
 - autonomous purchasing;
 - autonomous fabrication without confirmation;
-- movie-style holography;
-- safety certification;
-- a universal robotics stack.
+- regulatory or safety certification;
+- movie-style volumetric holography.
 
-Those become tractable only after stable identity, provenance, capability, state, and engineering-source contracts exist.
+3.0 establishes the stable identity, provenance, capability, state, and engineering-source contracts needed to build those later layers coherently.
 
 ---
 
@@ -231,129 +249,74 @@ Those become tractable only after stable identity, provenance, capability, state
 
 ### Canonical identity
 
-World identity is never a model-generated free-form string when an authoritative entity already exists. Deterministic source mappings own identity.
+A model does not generate a free-form authoritative ID when an authoritative entity already exists. Deterministic source mappings own identity.
 
 ### SI at the world boundary
 
-The PWM uses SI units for world-space physical state. Existing CAD/project units remain valid inside their engineering source and are converted explicitly at projection boundaries.
+The PWM uses SI units for world-space physical state. Existing CAD/project units remain valid in the engineering source and are converted explicitly at projection boundaries.
 
 ### No silent truth collapse
 
 Designed state, measured state, human input, and inferred state remain distinguishable.
 
+### Explicit design bridge
+
+A world entity is design-addressable only through an explicit engineering source link. World identity is not silently reused as CAD identity.
+
 ### No agent self-certification
 
-Jarvis/ForgeCAD may propose, simulate, and infer. Physical verification, high-severity safety verification, and authoritative human declarations remain separate evidence classes.
+Jarvis/ForgeCAD may propose, simulate, and infer. Physical verification and high-severity safety verification remain separate evidence classes.
+
+### Bounded physical execution
+
+Consequential capability execution remains confirmation-gated, typed, and auditable.
 
 ### Local-first persistence
 
-The world model persists locally by default and must remain useful without a cloud service.
+The world model persists locally by default and remains useful without a cloud service.
 
 ### Backward compatibility
 
-Existing ForgeCAD 2.x project and `.focad` contracts remain usable. The PWM is additive; it does not rewrite the entire 2.x engineering core.
+Existing ForgeCAD 2.x project and `.focad` contracts remain usable. The PWM is additive rather than a rewrite of the engineering core.
 
 ---
 
-## 6. Initial 3.0 API contract
+## 6. Post-3.0 trajectory
 
-The first vertical slice targets:
+The following are deliberately future work rather than hidden 3.0 scope:
 
-```text
-GET    /v3/health
-GET    /v3/world
-GET    /v3/world/entities
-GET    /v3/world/entities/{id}
-POST   /v3/world/entities
-PUT    /v3/world/entities/{id}
-DELETE /v3/world/entities/{id}
-POST   /v3/world/observations
-POST   /v3/world/sync-project
-GET    /v3/jarvis/context
-```
+1. real device adapters for Raspberry Pi / ESP32 / local services;
+2. camera/perception adapters producing world observations;
+3. explicit uncertainty/staleness policy by state type;
+4. non-CAD world overlays in the 3D scene;
+5. world-aware autonomous campaign objectives;
+6. deployment state for programmable devices;
+7. closed-loop tests where live evidence invalidates a design assumption and proposes a revision;
+8. fabrication and calibration feedback;
+9. spatial/AR interfaces;
+10. persistent bounded autonomous operation.
 
-All mutation endpoints use the existing ForgeCAD/Jarvis session boundary.
-
----
-
-## 7. First vertical-slice acceptance test
-
-The first 3.0 engineering test must prove, without an LLM, that ForgeCAD can:
-
-1. create a persistent physical world;
-2. create a room and machine hierarchy;
-3. reject hierarchy cycles;
-4. ingest a timestamped sensor observation with confidence and provenance;
-5. project the deterministic ForgeCAD acceptance assembly into the world;
-6. preserve stable world IDs across repeated project synchronization;
-7. convert project millimeter transforms into world meters;
-8. expose Raspberry Pi compute/software capabilities;
-9. expose canonical component interfaces;
-10. translate ForgeCAD connections into world relations;
-11. remove stale projected entities when a project object is removed;
-12. persist and reload the complete graph without identity loss.
-
-This test becomes part of the 3.0 regression gate.
-
----
-
-## 8. 3.0 release acceptance
-
-ForgeCAD 3.0.0 is not complete until all of the following are true:
-
-- every ForgeCAD 2.0 engineering regression remains green;
-- PWM persistence and invariants are deterministic and green on Windows/macOS;
-- project projection updates automatically after project mutations;
-- Jarvis can query stable entity identity/capabilities/state through the supported bridge;
-- live observations cannot overwrite canonical design truth;
-- world state survives restart;
-- desktop SYSTEM UI exposes useful world-model state;
-- `.focad` import/export continues to behave correctly;
-- packaged Windows and macOS applications exercise the v3 health/world surface;
-- the release README clearly distinguishes implemented 3.0 behavior from later JARVIS ambitions.
-
----
-
-## 9. Development order
-
-The planned implementation sequence is:
-
-1. **PWM schema + persistent store + deterministic self-test**
-2. **ForgeCAD project projection + canonical relation projection**
-3. **v3 HTTP/Jarvis surface + automatic project synchronization**
-4. **capability/device contract**
-5. **desktop SYSTEM world inspector**
-6. **world-aware Jarvis/engineering context resolution**
-7. **event/change subscriptions**
-8. **packaged cross-platform release gates**
-9. stretch integrations only after the above are stable
-
----
-
-## 10. The larger trajectory
-
-ForgeCAD 3.0 is the bridge between "AI CAD" and the larger Jarvis architecture.
-
-The intended progression after 3.0 is:
+The architectural progression is now:
 
 ```text
 ForgeCAD 2.x
     engineering workstation
         ↓
-ForgeCAD 3.x
-    persistent physical world model + Jarvis identity/capability/state substrate
+ForgeCAD 3.0
+    persistent physical world model
+    + deterministic identity/provenance/state/capabilities
         ↓
-Perception + universal device control
+Perception + real device control
         ↓
 Closed-loop autonomous engineering
         ↓
 Fabrication/test feedback
         ↓
-Spatial/AR interfaces + persistent autonomous operation
+Spatial interfaces + persistent bounded autonomy
 ```
 
-The long-term benchmark remains simple to state even if difficult to achieve:
+The long-term benchmark remains:
 
-> A user describes a physical objective. Jarvis understands the relevant real environment, resolves the real systems involved, uses ForgeCAD to design or modify what is necessary, predicts consequences before acting, asks for confirmation at meaningful boundaries, executes through typed capabilities, observes the result, and updates its model from evidence.
+> A user describes a physical objective. Jarvis understands the relevant real environment, resolves the actual systems involved, uses ForgeCAD to design or modify what is necessary, predicts consequences before acting, asks for confirmation at meaningful boundaries, executes through typed capabilities, observes the result, and updates its model from evidence.
 
-ForgeCAD 3.0 is where that stops being merely a product vision and starts becoming a concrete system architecture.
+ForgeCAD 3.0.0 is the release where the persistent physical-world substrate required for that architecture became implemented and release-validated.
