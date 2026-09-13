@@ -15,6 +15,7 @@ import { CodeWorkspace } from './components/CodeWorkspace';
 import { EngineeringWorkbench } from './components/EngineeringWorkbench';
 import { ManufacturePanel } from './components/ManufacturePanel';
 import { Viewport } from './components/Viewport';
+import { WorldSystemPanel } from './components/WorldSystemPanel';
 
 type RightTab = 'properties' | 'components' | 'analysis' | 'manufacture';
 type BrowserTab = 'model' | 'copilot';
@@ -194,12 +195,13 @@ function PropertiesPanel({ project, selectedPart, onOpenCode }: { project: Proje
   </div>;
 }
 
-function BottomContent({ tab, project, workspaceId, runtime, activeJob }: {
+function BottomContent({ tab, project, workspaceId, runtime, activeJob, selectedObjectId }: {
   tab: BottomTab;
   project: ProjectPayload | null;
   workspaceId: string | null;
   runtime: RuntimePayload | null;
   activeJob: JobPayload | null;
+  selectedObjectId: string | null;
 }) {
   if (tab === 'code') return workspaceId
     ? <CodeWorkspace workspaceId={workspaceId}/>
@@ -208,7 +210,7 @@ function BottomContent({ tab, project, workspaceId, runtime, activeJob }: {
     ? project.history.slice().reverse().map((item, index) => <div className="history-row" key={`${item.time}-${index}`}><span>{item.branch}</span><strong>{item.message}</strong><small>{item.actor}</small></div>)
     : <div className="dock-empty"><History size={18}/><span>No design operations yet.</span></div>}</div>;
   if (tab === 'simulations') return <div className="dock-empty"><Activity size={18}/><strong>Simulation jobs</strong><span>{activeJob?.kind === 'simulation' ? `${activeJob.state}: ${activeJob.message ?? ''}` : 'Run Dynamics after geometry is present.'}</span></div>;
-  return <div className="system-panel"><div><span>Forge Engine</span><strong>{runtime?.engine ?? 'starting'}</strong></div><div><span>Local model</span><strong>{runtime?.configured_model ?? 'checking'}</strong></div><div><span>Ollama</span><strong>{runtime?.ollama ?? 'checking'}</strong></div><div><span>API</span><strong>v{runtime?.api_version ?? '2'}</strong></div></div>;
+  return <WorldSystemPanel selectedObjectId={selectedObjectId}/>;
 }
 
 export default function App() {
@@ -654,7 +656,7 @@ export default function App() {
           <button data-testid="tab-system" className={bottomTab === 'system' ? 'active' : ''} onClick={() => setBottomTab(bottomTab === 'system' ? null : 'system')}><Settings size={12}/>System</button>
           <div className="bottom-spacer"/><span>{project?.parts.length ?? 0} objects</span><span>mm</span><span>Z up</span>
         </div>
-        {bottomTab && <div className="bottom-dock"><BottomContent tab={bottomTab} project={project} workspaceId={workspaceId} runtime={runtime} activeJob={activeJob}/></div>}
+        {bottomTab && <div className="bottom-dock"><BottomContent tab={bottomTab} project={project} workspaceId={workspaceId} runtime={runtime} activeJob={activeJob} selectedObjectId={selectedId}/></div>}
       </section>
 
       <aside className="right-panel">
