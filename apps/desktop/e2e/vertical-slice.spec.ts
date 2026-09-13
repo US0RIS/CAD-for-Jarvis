@@ -154,6 +154,9 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
     },
   });
   expect(fabricated.ok()).toBeTruthy();
+  const fabricatedPayload = await fabricated.json() as { project: { parts: Array<{ id: string; name: string }> } };
+  const bracketId = fabricatedPayload.project.parts.find((part) => part.name === 'Acceptance printable bracket')?.id;
+  expect(bracketId).toBeTruthy();
   await page.reload();
   await expect(page.getByText('1 objects').first()).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('toolbar-manufacture').click();
@@ -211,11 +214,44 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   expect(printEvidence?.package_sha256).toMatch(/^[0-9a-f]{64}$/);
   expect(printEvidence?.changes_design_status).toBe(false);
 
+  // Fit variation is canonical engineering state. Tie the stack directly to the bracket
+  // width, add the mating dimension and an explicit functional clearance specification,
+  // then verify both the API calculation and the visible Analyze workbench.
+  for (const constraint of [
+    { type: 'dimension_tolerance', stack: 'fixture_clearance', name: 'Bracket width', object_id: bracketId, parameter: 'x', coefficient: 1, minus_mm: 0.1, plus_mm: 0.1, sigma_mm: 0.02 },
+    { type: 'dimension_tolerance', stack: 'fixture_clearance', name: 'Fixture opening', nominal_mm: 41.5, coefficient: -1, minus_mm: 0.1, plus_mm: 0.1, sigma_mm: 0.02 },
+    { type: 'tolerance_spec', stack: 'fixture_clearance', name: 'Fixture clearance', lower_spec_mm: 0.2, upper_spec_mm: 0.8 },
+  ]) {
+    const response = await request.post('http://127.0.0.1:8765/v2/operations', {
+      headers,
+      data: { op: 'add_constraint', args: constraint, reason: 'Tolerance browser acceptance stack' },
+    });
+    expect(response.ok()).toBeTruthy();
+  }
+  const toleranceResponse = await request.get('http://127.0.0.1:8765/v2/analysis/tolerance-stacks', { headers });
+  expect(toleranceResponse.ok()).toBeTruthy();
+  const tolerancePayload = await toleranceResponse.json() as { count: number; items: Array<{ id: string; nominal_mm: number; worst_case: { min_mm: number; max_mm: number; passes_spec: boolean }; statistical: { available: boolean; yield_fraction: number | null } }> };
+  expect(tolerancePayload.count).toBe(1);
+  const clearance = tolerancePayload.items.find((item) => item.id === 'fixture_clearance');
+  expect(clearance?.nominal_mm).toBeCloseTo(0.5, 9);
+  expect(clearance?.worst_case.min_mm).toBeCloseTo(0.3, 9);
+  expect(clearance?.worst_case.max_mm).toBeCloseTo(0.7, 9);
+  expect(clearance?.worst_case.passes_spec).toBe(true);
+  expect(clearance?.statistical.available).toBe(true);
+  expect(clearance?.statistical.yield_fraction).not.toBeNull();
+
   // ForgeCAD 2.0's optimizer must be visible and usable from the CAD workbench rather
-  // than existing only as a backend function. Use a deliberately permissive deflection
-  // gate here so the fixture has at least one feasible branch, while retaining the
-  // independent FoS gate and deterministic candidate ranking.
+  // than existing only as a backend function. Reload first so the renderer receives the
+  // direct-API tolerance mutations above, then verify the tolerance UI before campaigning.
+  await page.reload();
   await page.getByRole('button', { name: 'Analyze', exact: true }).click();
+  const tolerancePanel = page.getByTestId('tolerance-stacks');
+  await expect(tolerancePanel).toBeVisible();
+  await expect(tolerancePanel.getByTestId('tolerance-stack-fixture_clearance')).toBeVisible({ timeout: 20_000 });
+  await expect(tolerancePanel.getByText('WC PASS', { exact: true })).toBeVisible();
+  await expect(tolerancePanel.getByText(/Nominal 0\.500 mm/)).toBeVisible();
+  await expect(tolerancePanel.getByText(/Explicit σ model/)).toBeVisible();
+
   const campaignConsole = page.getByTestId('campaign-console');
   await expect(campaignConsole).toBeVisible();
   await campaignConsole.locator('label').filter({ hasText: 'Max deflection' }).locator('input').fill('5');
