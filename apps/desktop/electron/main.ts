@@ -132,29 +132,34 @@ async function showComponentLoadingStage(modal: BrowserWindow): Promise<void> {
   `, true);
 }
 
-async function waitForComponentCatalog(window: BrowserWindow, timeoutMs = 180_000): Promise<boolean> {
-  if (window.isDestroyed()) return false;
-  try {
-    return Boolean(await window.webContents.executeJavaScript(`
-      new Promise((resolve) => {
-        const deadline = Date.now() + ${timeoutMs};
-        const check = () => {
-          if (document.querySelector('[data-testid^="component-"]')) {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
-            return;
-          }
-          if (Date.now() >= deadline) {
-            resolve(false);
-            return;
-          }
-          setTimeout(check, 50);
-        };
-        check();
-      })
-    `, true));
-  } catch {
-    return false;
-  }
+type CatalogStartupResult = { state: 'ready' | 'failed' | 'timeout'; detail?: string };
+
+function waitForComponentCatalogSignal(window: BrowserWindow, timeoutMs = 90_000): Promise<CatalogStartupResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | null = null;
+
+    const finish = (result: CatalogStartupResult) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      ipcMain.off('forgecad:component-catalog-state', onCatalogState);
+      window.webContents.off('destroyed', onDestroyed);
+      resolve(result);
+    };
+
+    const onCatalogState = (event: Electron.IpcMainEvent, state: unknown, detail?: unknown) => {
+      if (event.sender !== window.webContents) return;
+      if (state === 'ready') finish({ state: 'ready' });
+      else if (state === 'failed') finish({ state: 'failed', detail: typeof detail === 'string' ? detail : 'Component catalog failed to load' });
+    };
+
+    const onDestroyed = () => finish({ state: 'failed', detail: 'ForgeCAD renderer closed before the component catalog became ready' });
+
+    ipcMain.on('forgecad:component-catalog-state', onCatalogState);
+    window.webContents.once('destroyed', onDestroyed);
+    timer = setTimeout(() => finish({ state: 'timeout', detail: 'Component catalog did not report readiness within 90 seconds' }), timeoutMs);
+  });
 }
 
 async function createMainWindow() {
@@ -175,6 +180,7 @@ async function createMainWindow() {
   });
 
   const window = mainWindow;
+  const catalogStartup = waitForComponentCatalogSignal(window);
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null;
     if (engineLoadingWindow && !engineLoadingWindow.isDestroyed()) engineLoadingWindow.destroy();
@@ -183,8 +189,8 @@ async function createMainWindow() {
   // Start the native engine immediately, but do not hold the entire desktop window back.
   // The user sees ForgeCAD at once with a true modal child window over it. Because the
   // child is `modal: true`, the CAD workbench cannot receive pointer or keyboard input
-  // until EngineSupervisor has passed its health gate and the component catalog has
-  // actually rendered in the desktop behind the overlay.
+  // until EngineSupervisor has passed its health gate and the renderer explicitly reports
+  // that the component catalog has committed usable rows.
   const engineStartup = engine.start().then(
     (connection) => ({ ok: true as const, connection }),
     (error: unknown) => ({ ok: false as const, error }),
@@ -209,7 +215,10 @@ async function createMainWindow() {
   if (startup.ok) {
     if (engineLoadingWindow && !engineLoadingWindow.isDestroyed()) {
       await showComponentLoadingStage(engineLoadingWindow);
-      await waitForComponentCatalog(window);
+      const catalog = await catalogStartup;
+      if (catalog.state !== 'ready') {
+        console.warn(`[ForgeCAD] Component catalog startup ${catalog.state}: ${catalog.detail ?? 'unknown reason'}`);
+      }
       if (!engineLoadingWindow.isDestroyed()) engineLoadingWindow.destroy();
     }
     engineLoadingWindow = null;
