@@ -1,6 +1,6 @@
 # ForgeCAD 3.0.0 Release Record
 
-Status: **validated release candidate**
+Status: **COMPLETE / release-validated**
 
 Runtime-validated source SHA: `a5ae8ad5ecc6622498df1e3c8c3688c31ded0afe`
 
@@ -21,11 +21,25 @@ The packaged release gates validate more than artifact generation. They exercise
 
 ## Installer artifacts
 
-| Platform | Artifact ID | Size | SHA-256 |
+### GitHub Actions artifact archives
+
+The hashes below are the digests reported by GitHub for the uploaded artifact ZIP archives.
+
+| Platform | Artifact ID | Archive size | Artifact SHA-256 |
 |---|---:|---:|---|
 | Windows x64 | `10327592337` | 310,963,262 bytes | `af4661ed2ec81f83d0a001f3bec82e098eca4267cee71c15cc09eb13f31c0c3e` |
 | macOS x64 | `10328535594` | 367,205,730 bytes | `f596524ef782291a2435ec3b7ebebbbdd4daf1bcad08f62bfde99f6660291e5d` |
 | macOS arm64 | `10328216593` | 342,885,616 bytes | `588eade6b50095ba9586d21303ab051239a790fda7745cb78f328cca07d0c0b3` |
+
+### Installer payloads
+
+The artifact archives were downloaded after the successful exact-SHA workflows, extracted, and independently hashed.
+
+| Platform | Installer | Installer size | Installer SHA-256 |
+|---|---|---:|---|
+| Windows x64 | `ForgeCAD-Setup-3.0.0.exe` | 310,963,100 bytes | `2cfc2e37c19ad4888393d07ce262987c98fc6690af11e5a68ff779109caccfea` |
+| macOS x64 | `ForgeCAD-3.0.0-x64.dmg` | 368,921,226 bytes | `c0f9cecb420750cee996a0d2c87719f8e4064dcbd69c6c0cb9f1e7e5884a9abd` |
+| macOS arm64 | `ForgeCAD-3.0.0-arm64.dmg` | 344,703,692 bytes | `d4121e62f9b4688e4f3b9c116feaad4eb1eaf4d6ca5561275cd73477fba4f4f7` |
 
 ## Implemented 3.0 surfaces
 
