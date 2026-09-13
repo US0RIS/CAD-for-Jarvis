@@ -14,7 +14,7 @@ on:
 
 jobs:
   physical-world:
-    name: World model, provenance, observations, Jarvis API, and capability safety
+    name: World model, identity, provenance, observations, Jarvis API, and capability safety
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -33,6 +33,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v300.world_model_selftest
+      - name: Run deterministic identity resolution regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v300-identity
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v300.identity_resolution_selftest
       - name: Run capability action safety regression
         env:
           PYTHONPATH: services/forge-engine
