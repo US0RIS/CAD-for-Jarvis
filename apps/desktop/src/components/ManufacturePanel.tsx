@@ -8,6 +8,20 @@ import '../styles/manufacture.css';
 
 type WarningPayload = { code: string; message: string };
 
+type OrientationScreen = {
+  recommended?: {
+    label: string;
+    bounds_mm: number[];
+    estimated_support_area_mm2: number;
+    overhang_triangles: number;
+    footprint_mm2: number;
+  } | null;
+  evaluated_orientations: number;
+  method?: string;
+  overhang_threshold_deg?: number;
+  limitations?: string[];
+};
+
 type ManufacturingPart = {
   id: string;
   name: string;
@@ -24,10 +38,43 @@ type ManufacturingPart = {
   minimum_wall_mm?: number | null;
   wall_thickness_status?: string;
   requires_slicer_validation?: boolean;
+  recommended_orientation?: string | null;
+  recommended_bounds_mm?: number[] | null;
+  estimated_support_area_mm2?: number | null;
+  overhang_triangles?: number | null;
+  orientation_analysis?: OrientationScreen;
+  solid_material_estimate?: {
+    filament?: string | null;
+    density_g_cm3?: number | null;
+    mass_g?: number | null;
+    note?: string;
+  };
   warnings: WarningPayload[];
 };
 
 type ProfileState = { path: string | null; exists: boolean };
+
+type PlatePacking = {
+  method?: string;
+  spacing_mm?: number;
+  plate_count: number;
+  all_packable: boolean;
+  unplaced_object_ids: string[];
+  authoritative_arrangement: boolean;
+  note?: string;
+  plates?: Array<{
+    index: number;
+    used_footprint_mm2?: number;
+    bed_utilization?: number;
+    parts: Array<{
+      id: string;
+      name: string;
+      width_mm: number;
+      depth_mm: number;
+      orientation?: string | null;
+    }>;
+  }>;
+};
 
 type P2SStatus = {
   resource: {
@@ -44,12 +91,8 @@ type P2SStatus = {
   all_parts_fit_individually: boolean;
   packing_status: string;
   estimated_plate_count?: number | null;
-  plate_packing?: {
-    plate_count: number;
-    all_packable: boolean;
-    unplaced_object_ids: string[];
-    authoritative_arrangement: boolean;
-  };
+  plate_packing?: PlatePacking;
+  bambu_studio_arrangement_required?: boolean;
   slicer: {
     name: string;
     cli_available: boolean;
@@ -83,9 +126,15 @@ type PreparedPackage = {
   branch: string;
 };
 
-function formatDimensions(bounds: number[] | null) {
+function formatDimensions(bounds: number[] | null | undefined) {
   if (!bounds?.length) return '—';
   return bounds.map((value) => `${value.toFixed(value >= 100 ? 0 : 1)}`).join(' × ') + ' mm';
+}
+
+function formatArea(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '—';
+  if (value >= 1000) return `${(value / 1000).toFixed(2)}k mm²`;
+  return `${value.toFixed(value >= 100 ? 0 : 1)} mm²`;
 }
 
 function basename(path: string | null | undefined) {
@@ -147,6 +196,7 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
   const selectedFit = selectedParts.length > 0 && selectedParts.every((part) => part.fits_build_volume && part.eligible);
   const excludedPurchased = Math.max(0, (project?.parts.length ?? 0) - (status?.fabricated_part_count ?? 0));
   const warningCount = status?.parts.reduce((total, part) => total + part.warnings.length, 0) ?? 0;
+  const screenedOrientations = status?.parts.reduce((total, part) => total + (part.orientation_analysis?.evaluated_orientations ?? 0), 0) ?? 0;
 
   function togglePart(id: string) {
     setSelected((current) => {
@@ -247,7 +297,14 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
           <dt>CLI</dt><dd>{status.slicer.cli_available ? 'Detected' : 'Not detected'}</dd>
           <dt>Profiles</dt><dd>{status.slicer.profiles.complete ? 'Configured' : 'Incomplete'}</dd>
           <dt>Plates</dt><dd>{status.estimated_plate_count ?? (status.fabricated_part_count ? 'Needs redesign' : '—')}</dd>
+          <dt>Orientation</dt><dd>{screenedOrientations ? `${screenedOrientations} poses screened` : 'Not screened'}</dd>
         </dl>
+        {status.plate_packing && <div className={`manufacture-packing ${status.plate_packing.all_packable ? 'ready' : 'blocked'}`} data-testid="plate-packing">
+          <div><strong>{status.plate_packing.all_packable ? `${status.plate_packing.plate_count} screened plate${status.plate_packing.plate_count === 1 ? '' : 's'}` : `${status.plate_packing.unplaced_object_ids.length} body${status.plate_packing.unplaced_object_ids.length === 1 ? '' : 'ies'} need redesign`}</strong><small>{status.plate_packing.method ?? 'ForgeCAD packing screen'} · {status.plate_packing.spacing_mm ?? 6} mm spacing</small></div>
+          <span className={`manufacture-state ${status.plate_packing.all_packable ? 'good' : 'bad'}`}>{status.plate_packing.all_packable ? 'SCREENED' : 'BLOCKED'}</span>
+          {(status.plate_packing.plates ?? []).slice(0, 4).map((plate) => <div className="manufacture-plate" key={plate.index}><span>Plate {plate.index}</span><b>{plate.parts.length} part{plate.parts.length === 1 ? '' : 's'}</b><small>{plate.bed_utilization != null ? `${(plate.bed_utilization * 100).toFixed(1)}% footprint` : 'layout screened'}</small></div>)}
+          <p>Bambu Studio still owns final arrangement, support generation and slicing.</p>
+        </div>}
       </section>
 
       <section className="property-section manufacture-parts-section">
@@ -259,6 +316,7 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
           {status.parts.map((part) => {
             const oversize = !part.fits_build_volume;
             const materialWarning = part.material && !part.material.direct_fdm_material_match;
+            const orientation = part.orientation_analysis;
             return <div key={part.id} className={`manufacture-part ${selected.has(part.id) ? 'selected' : ''}`} data-testid={`manufacture-part-${part.id}`}>
               <label className="manufacture-part-select">
                 <input type="checkbox" checked={selected.has(part.id)} disabled={!part.eligible} onChange={() => togglePart(part.id)}/>
@@ -269,6 +327,16 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
                 <span className={`manufacture-state ${oversize ? 'bad' : materialWarning || part.warnings.length ? 'warn' : 'good'}`}>{!part.eligible ? 'INVALID' : oversize ? 'OVERSIZE' : part.warnings.length ? 'CHECK' : 'FIT'}</span>
               </label>
               <div className="manufacture-part-meta"><span>{part.material?.design_material ?? 'material unknown'}</span><span>{part.wall_thickness_status === 'declared' ? `${part.minimum_wall_mm} mm min wall` : 'wall unverified'}</span></div>
+              {orientation && <div className="manufacture-orientation" data-testid={`orientation-${part.id}`}>
+                <div><span>Recommended pose</span><strong>{part.recommended_orientation ?? 'No fitting orthogonal pose'}</strong></div>
+                <dl>
+                  <dt>Oriented envelope</dt><dd>{formatDimensions(part.recommended_bounds_mm)}</dd>
+                  <dt>Support-risk area</dt><dd>{formatArea(part.estimated_support_area_mm2)}</dd>
+                  <dt>Overhang faces</dt><dd>{part.overhang_triangles ?? '—'}</dd>
+                  <dt>Solid mass</dt><dd>{part.solid_material_estimate?.mass_g != null ? `${part.solid_material_estimate.mass_g.toFixed(1)} g` : '—'}</dd>
+                </dl>
+                <small>{orientation.evaluated_orientations} right-handed orthogonal poses · {orientation.method ?? 'mesh overhang screen'}</small>
+              </div>}
               {part.warnings.length > 0 && <div className="manufacture-warnings">{part.warnings.slice(0, 3).map((warning) => <div key={`${part.id}-${warning.code}`}><AlertTriangle size={10}/><span>{warning.message}</span></div>)}</div>}
               {(oversize || materialWarning) && <button className="manufacture-repair" onClick={() => { onSelectPart(part.id); onDraftRedesign(part); }}><Wrench size={11}/>Ask Copilot to redesign</button>}
             </div>;
