@@ -13,7 +13,7 @@ on:
 
 jobs:
   transactional-design:
-    name: Architecture, constrained CAD, 3D FEA, campaigns, manufacturing, and physical evidence
+    name: Architecture, constrained CAD, cached 3D, FEA, campaigns, manufacturing, and evidence
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -39,6 +39,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v200.sketch_selftest
+      - name: Run ForgeCAD 2.0 scene cache self-test
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v200-scene-cache-selftest
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v200.scene_cache_selftest
       - name: Run ForgeCAD 2.0 3D solid FEA self-test
         env:
           PYTHONPATH: services/forge-engine
