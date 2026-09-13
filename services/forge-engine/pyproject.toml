@@ -1,7 +1,7 @@
 [project]
 name = "forge-engine"
-version = "2.0.0"
-description = "Local canonical engineering service for ForgeCAD"
+version = "3.0.0"
+description = "Local canonical engineering and physical-world service for ForgeCAD"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",
