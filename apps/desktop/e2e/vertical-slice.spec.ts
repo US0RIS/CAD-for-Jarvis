@@ -162,14 +162,16 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   await expect(page.getByText('Acceptance printable bracket')).toBeVisible();
   await expect(page.getByText('42.0 × 28.0 × 5.0 mm')).toBeVisible();
   await expect(page.getByText('FIT', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Export geometry 3MF' })).toBeEnabled();
+  const export3mfButton = page.getByRole('button', { name: 'Export geometry 3MF' });
+  await expect(export3mfButton).toBeEnabled();
 
   const manufacturingStatus = await request.get('http://127.0.0.1:8765/v2/manufacturing/p2s', { headers });
   expect(manufacturingStatus.ok()).toBeTruthy();
-  const manufacturing = await manufacturingStatus.json() as { fabricated_part_count: number; resource: { model: string }; parts: Array<{ fits_build_volume: boolean }> };
+  const manufacturing = await manufacturingStatus.json() as { fabricated_part_count: number; resource: { model: string }; parts: Array<{ fits_build_volume: boolean }>; plate_packing?: { plate_count: number } };
   expect(manufacturing.fabricated_part_count).toBe(1);
   expect(manufacturing.resource.model).toBe('P2S');
   expect(manufacturing.parts[0]?.fits_build_volume).toBeTruthy();
+  expect(manufacturing.plate_packing?.plate_count).toBe(1);
 
   const geometry3mf = await request.post('http://127.0.0.1:8765/v2/manufacturing/p2s/export', {
     headers,
@@ -178,5 +180,27 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   expect(geometry3mf.ok()).toBeTruthy();
   expect(geometry3mf.headers()['content-type']).toContain('model/3mf');
   expect(geometry3mf.headers()['x-forgecad-manufacturing-resource']).toBe('Bambu Lab P2S');
+  expect(geometry3mf.headers()['x-forgecad-package-sha256']).toMatch(/^[0-9a-f]{64}$/);
   expect((await geometry3mf.body()).length).toBeGreaterThan(500);
+
+  // The same export path used by a person must retain the exact package fingerprint so
+  // physical observations can be tied back to the bytes that were actually printed.
+  const downloadPromise = page.waitForEvent('download');
+  await export3mfButton.click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toContain('P2S');
+  const evidencePanel = page.getByTestId('manufacture-evidence');
+  await expect(evidencePanel).toBeVisible({ timeout: 20_000 });
+  await expect(evidencePanel.getByText(/SHA-256/)).toBeVisible();
+  await evidencePanel.locator('textarea').fill('Acceptance prototype printed cleanly and fit the fixture.');
+  await evidencePanel.getByRole('button', { name: 'Record successful print' }).click();
+  await expect(page.getByText(/Physical prototype success recorded/)).toBeVisible({ timeout: 20_000 });
+
+  const evidenceResponse = await request.get('http://127.0.0.1:8765/v2/evidence', { headers });
+  expect(evidenceResponse.ok()).toBeTruthy();
+  const evidence = await evidenceResponse.json() as { items: Array<{ kind: string; outcome?: string; package_sha256?: string; changes_design_status?: boolean }> };
+  const printEvidence = evidence.items.find((item) => item.kind === 'manufacturing_evidence');
+  expect(printEvidence?.outcome).toBe('success');
+  expect(printEvidence?.package_sha256).toMatch(/^[0-9a-f]{64}$/);
+  expect(printEvidence?.changes_design_status).toBe(false);
 });
