@@ -79,7 +79,8 @@ STRUCTURAL_ANALYSIS_CONTRACT: dict[str, Any] = {
             "joint compliance",
             "prescribed displacement",
         ],
-        "policy": "A targeted unsupported load or constraint blocks the canonical project-BC SolidFEA solve instead of being ignored.",
+        "nonstructural_constraint_namespaces": ["dimension_tolerance", "tolerance", "tolerance_contributor", "tolerance_spec", "stack_spec"],
+        "policy": "A targeted unsupported structural load or constraint blocks canonical project-BC SolidFEA. Explicit nonstructural analysis records such as tolerance stacks are ignored by the structural BC parser.",
     },
     "result_precedence": {
         "when_project_boundary_conditions_supported": "structural_3d_project",
@@ -90,6 +91,69 @@ STRUCTURAL_ANALYSIS_CONTRACT: dict[str, Any] = {
         "small-strain linear isotropic elasticity",
         "no plasticity, geometric nonlinearity, contact, fracture or fatigue",
         "homogeneous isotropic material",
+        "not certification evidence",
+    ],
+}
+
+
+TOLERANCE_ANALYSIS_CONTRACT: dict[str, Any] = {
+    "id": "forgecad-tolerance-stack-2.0",
+    "solver": "ForgeCAD ToleranceStack",
+    "grade": "engineering_iteration",
+    "model": "one-dimensional linear signed stack",
+    "direct_endpoint": "/v2/analysis/tolerance-stack",
+    "project_endpoint": "/v2/analysis/tolerance-stacks",
+    "project_storage": {
+        "operation": "add_constraint",
+        "contributor_schema": {
+            "type": "dimension_tolerance",
+            "stack": "latch_gap",
+            "object_id": "$part",
+            "parameter": "x",
+            "coefficient": 1.0,
+            "minus_mm": 0.05,
+            "plus_mm": 0.10,
+            "sigma_mm": 0.02,
+        },
+        "literal_contributor_schema": {
+            "type": "dimension_tolerance",
+            "stack": "latch_gap",
+            "name": "assembly shim",
+            "nominal_mm": 0.5,
+            "coefficient": -1.0,
+            "minus_mm": 0.02,
+            "plus_mm": 0.02,
+        },
+        "design_parameter_contributor_schema": {
+            "type": "dimension_tolerance",
+            "stack": "latch_gap",
+            "design_parameter": "latch_offset",
+            "coefficient": 1.0,
+            "minus_mm": 0.05,
+            "plus_mm": 0.05,
+        },
+        "spec_schema": {
+            "type": "tolerance_spec",
+            "stack": "latch_gap",
+            "lower_spec_mm": 0.2,
+            "upper_spec_mm": 0.8,
+        },
+    },
+    "outputs": [
+        "nominal stack",
+        "asymmetric worst-case limits and margins",
+        "independent RSS tolerance limits",
+        "contributor sensitivity ranking",
+        "combined sigma and 3-sigma range when explicit sigmas are available",
+        "normal-distribution yield, defect ppm, Cp and Cpk when specs and explicit sigmas are available",
+    ],
+    "statistical_policy": "Never infer sigma from drawing tolerance. Statistical yield is unavailable unless every active contributor supplies explicit sigma_mm.",
+    "limitations": [
+        "one-dimensional linear stack only",
+        "independence assumed for RSS/statistical aggregation",
+        "no GD&T datum/feature-zone solver",
+        "no automatic process-correlation or measurement-system model",
+        "thermal/deformation effects must be encoded as explicit contributors or analyzed separately",
         "not certification evidence",
     ],
 }
@@ -116,6 +180,7 @@ def contracts() -> dict[str, Any]:
     return {
         "version": "2.0.0",
         "structural": deepcopy(STRUCTURAL_ANALYSIS_CONTRACT),
+        "tolerance": deepcopy(TOLERANCE_ANALYSIS_CONTRACT),
         "manufacturing": deepcopy(MANUFACTURING_ANALYSIS_CONTRACT),
     }
 
