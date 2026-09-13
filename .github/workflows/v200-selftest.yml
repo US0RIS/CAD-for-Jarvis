@@ -81,6 +81,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v200.campaign_sketch_selftest
+      - name: Run ForgeCAD 2.0 named-parameter campaign self-test
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v200-campaign-parameter-selftest
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v200.campaign_parameter_selftest
       - name: Run ForgeCAD 2.0 P2S manufacturing self-test
         env:
           PYTHONPATH: services/forge-engine
