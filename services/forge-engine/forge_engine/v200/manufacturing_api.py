@@ -3,6 +3,7 @@ from __future__ import annotations
 """FastAPI surface for ForgeCAD 2.0 manufacturing resources."""
 
 import asyncio
+import hashlib
 from typing import Any
 
 from fastapi import Depends, HTTPException, Response
@@ -25,6 +26,10 @@ class SliceRequest(ExportRequest):
     process_profile: str | None = None
     filament_profiles: list[str] = Field(default_factory=list)
     timeout_seconds: int = 300
+
+
+def _sha256(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
 
 
 def install(legacy: Any) -> None:
@@ -62,6 +67,8 @@ def install(legacy: Any) -> None:
                 "Content-Disposition": f'attachment; filename="{filename}"',
                 "X-ForgeCAD-Manufacturing-Resource": "Bambu Lab P2S",
                 "X-ForgeCAD-3MF-Stage": "geometry-exchange",
+                "X-ForgeCAD-Package-SHA256": _sha256(payload),
+                "X-ForgeCAD-Branch": core.ACTIVE_DESIGN,
             },
         )
 
@@ -99,5 +106,7 @@ def install(legacy: Any) -> None:
                 "X-ForgeCAD-Manufacturing-Resource": "Bambu Lab P2S",
                 "X-ForgeCAD-3MF-Stage": "bambu-studio-sliced",
                 "X-ForgeCAD-Slicer-Exit": str(details.get("returncode", 0)),
+                "X-ForgeCAD-Package-SHA256": _sha256(sliced),
+                "X-ForgeCAD-Branch": core.ACTIVE_DESIGN,
             },
         )
