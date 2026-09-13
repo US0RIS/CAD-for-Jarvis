@@ -74,6 +74,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v200.manufacturing_selftest
+      - name: Run ForgeCAD 2.0 P2S manufacturing split self-test
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v200-manufacturing-split-selftest
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v200.manufacturing_split_selftest
       - name: Run ForgeCAD 2.0 physical evidence self-test
         env:
           PYTHONPATH: services/forge-engine
