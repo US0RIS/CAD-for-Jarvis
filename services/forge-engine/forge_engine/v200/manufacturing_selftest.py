@@ -59,9 +59,17 @@ def run() -> dict[str, object]:
     bracket = manufacturing.analyze_object(next(row for row in fabricated if row["id"] == "printed-bracket"), core.build_shape)
     assert bracket["fits_build_volume"] is True
     assert bracket["wall_thickness_status"] == "declared"
+    assert bracket["orientation_analysis"]["evaluated_orientations"] == 24
+    assert bracket["recommended_orientation"]
+    assert len(bracket["recommended_bounds_mm"]) == 3
+    assert bracket["estimated_support_area_mm2"] >= 0.0
+    assert bracket["solid_material_estimate"]["filament"] == "abs"
+    assert bracket["solid_material_estimate"]["mass_g"] > 0.0
 
     panel = manufacturing.analyze_object(next(row for row in fabricated if row["id"] == "oversize-panel"), core.build_shape)
     assert panel["fits_build_volume"] is False
+    assert panel["orientation_analysis"]["evaluated_orientations"] == 24
+    assert panel["orientation_analysis"]["recommended"] is None
     assert any(warning["code"] == "exceeds_build_volume" for warning in panel["warnings"])
 
     payload = manufacturing.geometry_3mf(project, core.tessellate, object_ids=["printed-bracket"], tolerance_mm=0.25)
@@ -93,6 +101,12 @@ def run() -> dict[str, object]:
     assert status["fabricated_part_count"] == 2
     assert status["all_parts_fit_individually"] is False
     assert status["lan_control"]["implemented"] is False
+    assert status["plate_packing"]["authoritative_arrangement"] is False
+    assert status["plate_packing"]["plate_count"] == 1
+    assert status["plate_packing"]["unplaced_object_ids"] == ["oversize-panel"]
+    assert status["estimated_plate_count"] is None
+    assert status["packing_status"] == "requires-redesign-or-split"
+    assert status["bambu_studio_arrangement_required"] is True
 
     # Manufacturing must be part of design reasoning, not a disconnected export tool.
     request = "Design a printable enclosure for my Bambu P2S."
@@ -115,6 +129,9 @@ def run() -> dict[str, object]:
         "build_volume_mm": status["resource"]["build_volume_mm"],
         "headless_slice_ready": status["slicer"]["ready_for_headless_slice"],
         "planner_manufacturing_status": manufacturing_rows[0]["status"],
+        "orientation_screen_count": bracket["orientation_analysis"]["evaluated_orientations"],
+        "screened_plates": status["plate_packing"]["plate_count"],
+        "unplaced_parts": len(status["plate_packing"]["unplaced_object_ids"]),
     }
 
 
