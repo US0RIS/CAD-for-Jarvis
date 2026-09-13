@@ -8,11 +8,12 @@ branch-safe oversized-part splitting, constraint-driven parametric sketches, nam
 expression-driven design parameters, branch-linked real-world evidence and feedback,
 real 3D solid finite-element screening for supported geometry including canonical
 project loads/supports and parametric load cases, deterministic tolerance-stack
-analysis, assembly mass properties and rigid-body dynamics, transform-independent
-canonical mesh caching, portable multi-branch workspaces, machine-readable analysis
-contracts, full engineering-state branch diffs, a project API surface for canonical
-engineering records, and branch-safe autonomous multi-variant engineering campaigns
-whose structural ranking uses canonical project SolidFEA when available.
+analysis, assembly mass properties and rigid-body dynamics, canonical electrical
+schematics/net and rail screening, transform-independent canonical mesh caching,
+portable multi-branch workspaces, machine-readable analysis contracts, full
+engineering-state branch diffs, a project API surface for canonical engineering
+records, and branch-safe autonomous multi-variant engineering campaigns whose
+structural ranking uses canonical project SolidFEA when available.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -52,6 +53,8 @@ from . import tolerance_analysis as _tolerance_analysis
 _tolerance_analysis.install(_legacy_main)
 from . import rigid_body_dynamics as _rigid_body_dynamics
 _rigid_body_dynamics.install(_legacy_main)
+from . import electrical_design as _electrical_design
+_electrical_design.install(_legacy_main)
 from . import workspace_bundle as _workspace_bundle
 _workspace_bundle.install()
 from . import manufacturing_api as _manufacturing_api
