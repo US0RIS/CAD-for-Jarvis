@@ -4,9 +4,9 @@ v1.1 remains the deterministic CAD/engineering execution substrate. v2.0 adds th
 system-architecture layer above it: goal decomposition, requirements, capability
 resolution, candidate discovery, plan quality gates, canonical requirement capture,
 a bounded design/validate/repair loop, manufacturing-resource integration,
-constraint-driven parametric sketches, branch-linked real-world evidence, real 3D
-solid finite-element screening for supported geometry, transform-independent canonical
-mesh caching, portable multi-branch workspaces, and branch-safe autonomous
+constraint-driven parametric sketches, branch-linked real-world evidence and feedback,
+real 3D solid finite-element screening for supported geometry, transform-independent
+canonical mesh caching, portable multi-branch workspaces, and branch-safe autonomous
 multi-variant engineering campaigns.
 """
 
@@ -43,5 +43,7 @@ from . import physical_evidence as _physical_evidence
 _physical_evidence.install(_legacy_main)
 from . import campaign_intelligence as _campaign_intelligence
 _campaign_intelligence.install(_legacy_main)
+from . import feedback_intelligence as _feedback_intelligence
+_feedback_intelligence.install(_legacy_main)
 
 __all__ = ["DESIGN_INTELLIGENCE_VERSION", "design_intelligence"]
