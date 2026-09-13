@@ -103,16 +103,23 @@ test('ForgeCAD 3.0 exposes the canonical physical world in the desktop SYSTEM do
   await expect(piObject).toBeVisible({ timeout: 20_000 });
   await piObject.click();
 
+  // The component catalog performs native OpenCascade thumbnail rendering on the
+  // engine's main thread. This acceptance is about the physical-world surface, not
+  // catalog thumbnails, so unmount that unrelated workload before measuring world UI
+  // readiness. The world API invariants above have already been proven independently.
+  await page.locator('.right-tabs button').filter({ hasText: /^Properties$/ }).click();
   await page.getByTestId('tab-system').click();
   const system = page.getByTestId('world-system-panel');
   await expect(system).toBeVisible({ timeout: 20_000 });
   await expect(system.getByText('PHYSICAL WORLD', { exact: true })).toBeVisible();
+  const refreshWorld = system.getByRole('button', { name: 'Refresh world model' });
+  await expect(refreshWorld).toBeEnabled({ timeout: 60_000 });
   await expect(system.getByText('Project sync', { exact: true })).toBeVisible();
-  await expect(system.getByText('Current', { exact: true })).toBeVisible();
-  await expect(page.getByTestId('world-entity-count')).not.toHaveText('0');
+  await expect(system.getByText('Current', { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('world-entity-count')).not.toHaveText('0', { timeout: 30_000 });
 
   const detail = page.getByTestId('world-entity-detail');
-  await expect(detail.getByText('compute.execute', { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(detail.getByText('compute.execute', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(detail.getByText('software.deploy', { exact: true })).toBeVisible();
   await expect(detail.getByText('compute.raspberry_pi_5_8gb', { exact: true })).toBeVisible();
   await expect(detail.getByText(/cpu_temperature_c:/)).toBeVisible();
