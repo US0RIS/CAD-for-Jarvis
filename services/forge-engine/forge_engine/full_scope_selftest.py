@@ -14,7 +14,7 @@ import cadquery as cq
 
 def main() -> None:
     from .engineering_state import PROJECT
-    from .v110 import acceptance_design, component_registry, physical_components, project_bundle, realistic_components, software, system_validation
+    from .v110 import acceptance_design, component_registry, physical_components, premium_geometry, project_bundle, realistic_components, software, system_validation
 
     stats = component_registry.registry_stats()
     assert stats["total"] >= 1400, stats
@@ -27,6 +27,32 @@ def main() -> None:
     }
     available = {item["id"] for item in component_registry.all_components()}
     assert required <= available, sorted(required - available)
+
+    # Broad catalog quality gate.  ForgeCAD used to claim >1,000 components while many
+    # rendered as a literal bounding box.  Keep at least 100 diverse seed exemplars on
+    # the premium parametric path and explicitly prove that the reported 12 mm precision
+    # shaft is cylindrical rather than a cuboid with the right bounding dimensions.
+    seed_ids = premium_geometry.curated_seed_ids(100)
+    assert len(seed_ids) == 100, len(seed_ids)
+    seed_categories = set()
+    for component_id in seed_ids:
+        component = component_registry.component_by_id(component_id)
+        assert premium_geometry.supports(component), component_id
+        parts = premium_geometry.component_parts(component)
+        assert parts and all(shape is not None for shape, _ in parts), component_id
+        seed_categories.add(str(component.get("category")))
+    assert len(seed_categories) >= 15, seed_categories
+
+    shaft_component = component_registry.component_by_id("shaft.12x50")
+    shaft_parts = premium_geometry.component_parts(shaft_component)
+    assert shaft_parts and len(shaft_parts) >= 1
+    shaft_shape = shaft_parts[0][0]
+    bb = shaft_shape.BoundingBox()
+    bbox_volume = max(1e-9, bb.xlen * bb.ylen * bb.zlen)
+    fill_ratio = float(shaft_shape.Volume()) / bbox_volume
+    assert 0.68 <= fill_ratio <= 0.86, {"fill_ratio": fill_ratio, "reason": "12 mm shaft regressed to non-cylindrical/envelope geometry"}
+    assert abs(max(bb.xlen, bb.ylen) - 12.0) < 0.6, (bb.xlen, bb.ylen, bb.zlen)
+    assert abs(bb.zlen - 50.0) < 0.8, (bb.xlen, bb.ylen, bb.zlen)
 
     acceptance = acceptance_design.build_project()
     assert len(acceptance["objects"]) >= 6
@@ -125,6 +151,9 @@ def main() -> None:
     print(json.dumps({
         "full_scope_selftest": "PASS",
         "registry_total": stats["total"],
+        "premium_seed_models": len(seed_ids),
+        "premium_seed_categories": len(seed_categories),
+        "shaft_12x50_fill_ratio": round(fill_ratio, 4),
         "focad_format": restored["manifest"]["format"],
         "focad_version": restored["manifest"]["format_version"],
         "acceptance_objects": len(acceptance["objects"]),
