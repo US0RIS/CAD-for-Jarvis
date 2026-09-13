@@ -37,6 +37,11 @@ def run() -> dict[str, object]:
             if row["source_links"].get("component_ref") == "compute.raspberry_pi_5_8gb"
         )
 
+        exact_resolution = client.get("/v3/jarvis/resolve", params={"q": pi["id"]})
+        assert exact_resolution.status_code == 200, exact_resolution.text
+        assert exact_resolution.json()["status"] == "resolved", exact_resolution.json()
+        assert exact_resolution.json()["entity_id"] == pi["id"], exact_resolution.json()
+
         observation = client.post(
             "/v3/world/observations",
             json={
@@ -66,6 +71,12 @@ def run() -> dict[str, object]:
         assert relations.status_code == 200, relations.text
         assert relations.json()["count"] >= 5, relations.json()
 
+        before_events = client.get("/v3/world/events", params={"limit": 1000})
+        assert before_events.status_code == 200, before_events.text
+        before_body = before_events.json()
+        before_last = before_body["last_event_id"]
+        assert before_last, before_body
+
         # Exercise the public Jarvis action boundary. Adapters are intentionally not
         # registerable over HTTP; trusted host code owns them. The API can bind a world
         # capability to a configured adapter ID, but physical execution still requires
@@ -90,6 +101,46 @@ def run() -> dict[str, object]:
             },
         )
         assert relay.status_code == 200, relay.text
+
+        incremental_events = client.get(
+            "/v3/world/events",
+            params={"after_id": before_last, "limit": 50},
+        )
+        assert incremental_events.status_code == 200, incremental_events.text
+        incremental_body = incremental_events.json()
+        assert incremental_body["count"] >= 1, incremental_body
+        assert any(row["entity_id"] == relay_id for row in incremental_body["items"]), incremental_body
+
+        unique_name = client.get("/v3/jarvis/resolve", params={"q": "API Self-test Relay"})
+        assert unique_name.status_code == 200, unique_name.text
+        assert unique_name.json()["status"] == "resolved", unique_name.json()
+        assert unique_name.json()["entity_id"] == relay_id, unique_name.json()
+
+        duplicate_id = "device:api-selftest-relay-2"
+        duplicate = client.post(
+            "/v3/world/entities",
+            json={
+                "id": duplicate_id,
+                "name": "API Self-test Relay",
+                "kind": "actuator",
+                "parent_id": "world:local",
+                "capabilities": [{"name": "actuator.relay", "mode": "actuate"}],
+                "provenance": [
+                    {
+                        "source": "human",
+                        "source_id": "v300-api-selftest-2",
+                        "confidence": 1.0,
+                        "authoritative": True,
+                    }
+                ],
+            },
+        )
+        assert duplicate.status_code == 200, duplicate.text
+        ambiguous = client.get("/v3/jarvis/resolve", params={"q": "API Self-test Relay"})
+        assert ambiguous.status_code == 200, ambiguous.text
+        assert ambiguous.json()["status"] == "ambiguous", ambiguous.json()
+        assert ambiguous.json()["entity_id"] is None, ambiguous.json()
+        assert len(ambiguous.json()["candidates"]) == 2, ambiguous.json()
 
         binding = client.post(
             "/v3/capabilities/bindings",
@@ -152,6 +203,9 @@ def run() -> dict[str, object]:
             "compute_entity": pi["id"],
             "observation_roundtrip": True,
             "project_sync": True,
+            "incremental_world_events": True,
+            "exact_identity_resolution": True,
+            "ambiguous_identity_failed_closed": True,
             "physical_action_confirmation_boundary": True,
             "unregistered_adapter_failed_closed": True,
         }
