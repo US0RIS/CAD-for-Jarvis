@@ -7,7 +7,7 @@ import {
   Plus, Redo2, Search, Send, Settings, Undo2, Upload, X,
 } from 'lucide-react';
 import {
-  activateBranch, addComponent, createJob, downloadProjectBundle, fetchComponents, fetchJob, fetchProject, fetchRegistryStats, fetchRuntime,
+  activateBranch, addComponent, createJob, downloadProjectBundle, engineFetch, fetchComponents, fetchJob, fetchProject, fetchRegistryStats, fetchRuntime,
   importProjectBundle, importStepFile, newProject, redoHistory, subscribeEngineEvents, undoHistory,
   type ComponentPayload, type JobPayload, type ProjectPayload, type RegistryStatsPayload, type RuntimePayload,
 } from './api/engine';
@@ -21,6 +21,24 @@ type BottomTab = 'history' | 'code' | 'simulations' | 'system';
 type ChatEntry = { role: 'user' | 'agent'; text: string };
 
 const terminalStates = new Set<JobPayload['state']>(['completed', 'failed', 'cancelled']);
+const jobStateLabels: Record<JobPayload['state'], string> = {
+  queued: 'Queued',
+  warming: 'Starting local AI',
+  planning: 'Planning',
+  applying: 'Applying changes',
+  analyzing: 'Analyzing',
+  verifying: 'Verifying',
+  completed: 'Complete',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+};
+
+function formatElapsed(seconds: number) {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const remainder = safe % 60;
+  return minutes ? `${minutes}:${String(remainder).padStart(2, '0')}` : `${remainder}s`;
+}
 
 function RuntimeStatus({ runtime, error }: { runtime: RuntimePayload | null; error: string | null }) {
   const good = !error && runtime?.engine === 'ready';
@@ -161,8 +179,12 @@ export default function App() {
   const [startupError, setStartupError] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<JobPayload | null>(null);
   const [streamText, setStreamText] = useState('');
+  const [submittingAgent, setSubmittingAgent] = useState(false);
+  const [agentSubmitError, setAgentSubmitError] = useState<string | null>(null);
+  const [agentStartedAt, setAgentStartedAt] = useState<number | null>(null);
+  const [agentElapsed, setAgentElapsed] = useState(0);
   const [chat, setChat] = useState<ChatEntry[]>([
-    { role: 'agent', text: 'Describe what you want to build or change. I can inspect the design, choose catalog components, and apply edits through Forge Engine.' },
+    { role: 'agent', text: 'Ask me to build, modify, or inspect the active design. When you send a task, the activity panel above will show exactly what ForgeCAD is doing.' },
   ]);
   const [newBusy, setNewBusy] = useState(false);
   const handledJobs = useRef(new Set<string>());
@@ -173,9 +195,36 @@ export default function App() {
   const selectedPart = useMemo(() => project?.parts.find((part) => part.id === selectedId) ?? null, [project, selectedId]);
   const workspaceId = selectedPart?.programmable_workspace_id ?? project?.parts.find((part) => part.programmable_workspace_id)?.programmable_workspace_id ?? null;
   const jobBusy = Boolean(activeJob && !terminalStates.has(activeJob.state));
+  const activeAgentJob = activeJob?.kind === 'agent' ? activeJob : null;
+  const statusJob = activeJob && (activeJob.kind === 'agent' || !terminalStates.has(activeJob.state)) ? activeJob : null;
+  const copilotBusy = submittingAgent || jobBusy;
   const hasGeometry = Boolean(project?.parts.length);
   const sceneRevision = project ? `${project.active_branch}:${project.revision}` : 'loading';
   const visibleComponents = useMemo(() => components.slice(0, visibleComponentCount), [components, visibleComponentCount]);
+  const statusWorking = submittingAgent || Boolean(statusJob && !terminalStates.has(statusJob.state));
+  const statusProgress = submittingAgent ? 0.04 : Math.max(0, Math.min(1, statusJob?.progress ?? 0));
+  const modelHealthLabel = runtime?.ollama === 'ready' ? 'AI ready'
+    : runtime?.ollama === 'warming' ? 'AI warming'
+      : runtime?.ollama === 'checking' || !runtime ? 'Checking AI'
+        : 'AI unavailable';
+  const agentTone = agentSubmitError || statusJob?.state === 'failed' ? 'error'
+    : statusJob?.state === 'completed' ? 'done'
+      : statusWorking ? 'working' : 'idle';
+  const agentTitle = agentSubmitError ? 'Could not start task'
+    : submittingAgent ? 'Sending request'
+      : statusJob?.kind && statusJob.kind !== 'agent' && !terminalStates.has(statusJob.state) ? `${statusJob.kind.replaceAll('-', ' ')} running`
+        : statusJob ? ({
+          queued: 'Request queued', warming: 'Starting local AI', planning: 'Planning the design', applying: 'Applying design changes',
+          analyzing: 'Analyzing the design', verifying: 'Verifying the result', completed: 'Task complete', failed: 'Task failed', cancelled: 'Task cancelled',
+        } as Record<JobPayload['state'], string>)[statusJob.state]
+          : runtime?.ollama === 'offline' || runtime?.ollama === 'failed' ? 'Local AI unavailable'
+            : 'Ready for a task';
+  const agentDetail = agentSubmitError
+    ?? (submittingAgent ? 'Creating an engineering job and handing it to Forge Engine…'
+      : statusJob?.message
+        ?? (runtime?.ollama === 'offline' || runtime?.ollama === 'failed'
+          ? `Forge Engine is running, but ${runtime.configured_model} is not currently available in Ollama.`
+          : 'Ready to inspect or modify the active design.'));
 
   const refreshProject = useCallback(async () => {
     const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;
@@ -192,6 +241,10 @@ export default function App() {
 
   const acceptJobSnapshot = useCallback((job: JobPayload) => {
     setActiveJob(job);
+    if (job.kind === 'agent') {
+      setSubmittingAgent(false);
+      setAgentSubmitError(null);
+    }
     if (!terminalStates.has(job.state) || handledJobs.current.has(job.id)) return;
     handledJobs.current.add(job.id);
     if (job.state === 'completed') {
@@ -199,6 +252,8 @@ export default function App() {
       if (text) setChat((items) => [...items, { role: 'agent', text }]);
     } else if (job.state === 'failed') {
       setChat((items) => [...items, { role: 'agent', text: `Engineering job failed: ${job.error?.message ?? job.message ?? 'Unknown local-engine error'}` }]);
+    } else if (job.state === 'cancelled' && job.kind === 'agent') {
+      setChat((items) => [...items, { role: 'agent', text: 'Task cancelled.' }]);
     }
     setStreamText('');
     void refreshProject();
@@ -239,6 +294,14 @@ export default function App() {
   }, [activeJob?.id, activeJob?.state, acceptJobSnapshot]);
 
   useEffect(() => {
+    if (!agentStartedAt || !statusWorking) return;
+    const update = () => setAgentElapsed(Math.max(0, Math.floor((Date.now() - agentStartedAt) / 1000)));
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [agentStartedAt, statusWorking]);
+
+  useEffect(() => {
     setVisibleComponentCount(80);
     const timer = window.setTimeout(() => {
       const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;
@@ -253,14 +316,19 @@ export default function App() {
   useEffect(() => {
     const node = conversationRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [chat, streamText, activeJob?.state]);
+  }, [chat, streamText, activeJob?.state, submittingAgent]);
 
   const runAgent = useCallback(async (text: string, edits: boolean) => {
     const trimmed = text.trim();
-    if (!trimmed || jobBusy) return;
+    if (!trimmed || copilotBusy) return;
     setChat((items) => [...items, { role: 'user', text: trimmed }]);
     setMessage('');
     setStreamText('');
+    setActiveJob(null);
+    setAgentSubmitError(null);
+    setAgentStartedAt(Date.now());
+    setAgentElapsed(0);
+    setSubmittingAgent(true);
     try {
       const job = await createJob({
         kind: 'agent', text: trimmed, selected_object_id: selectedId, apply_edits: edits,
@@ -268,9 +336,23 @@ export default function App() {
       });
       setActiveJob(job);
     } catch (error) {
-      setChat((items) => [...items, { role: 'agent', text: `Could not start engineering job: ${error instanceof Error ? error.message : String(error)}` }]);
+      const detail = error instanceof Error ? error.message : String(error);
+      setAgentSubmitError(detail);
+      setChat((items) => [...items, { role: 'agent', text: `Could not start engineering job: ${detail}` }]);
+    } finally {
+      setSubmittingAgent(false);
     }
-  }, [jobBusy, project?.active_branch, selectedId]);
+  }, [copilotBusy, project?.active_branch, selectedId]);
+
+  async function cancelActiveJob() {
+    if (!activeJob || terminalStates.has(activeJob.state)) return;
+    try {
+      const cancelled = await engineFetch<JobPayload>(`/v2/jobs/${encodeURIComponent(activeJob.id)}/cancel`, { method: 'POST' });
+      acceptJobSnapshot(cancelled);
+    } catch (error) {
+      setAgentSubmitError(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   async function switchBranch(name: string) {
     if (name === project?.active_branch) return;
@@ -386,6 +468,7 @@ export default function App() {
       <div className="wordmark"><span className="wordmark-icon">F</span><strong>ForgeCAD</strong></div>
       <div className="doc-tab"><FileText size={13}/><span>{project?.name ?? 'Opening…'}</span><small>{project?.active_branch ?? ''}</small></div>
       <div className="app-bar-spacer"/>
+      {statusWorking && <button className="agent-global-status" data-testid="agent-global-status" onClick={() => setBrowserTab('copilot')} title="Open Copilot activity"><Activity size={12} className="agent-spin"/>Agent working · {agentTitle}</button>}
       <RuntimeStatus runtime={runtime} error={startupError}/>
       <button className="toolbar-button" onClick={() => void createBlankProject()} disabled={newBusy}><Plus size={14}/>New</button>
       <button className="toolbar-button" data-testid="open-focad" onClick={() => focadInput.current?.click()} title="Open a portable ForgeCAD design"><Upload size={14}/>Open .focad</button>
@@ -395,7 +478,7 @@ export default function App() {
       <input ref={stepInput} hidden type="file" accept=".step,.stp" onChange={(event) => void importStep(event.target.files?.[0])}/>
     </header>
 
-    <div className="workbench">
+    <div className={`workbench ${browserTab === 'copilot' ? 'copilot-open' : ''}`}>
       <aside className="left-panel">
         <div className="panel-tabs compact">
           <button className={browserTab === 'model' ? 'active' : ''} onClick={() => setBrowserTab('model')}><Layers size={13}/>Model</button>
@@ -420,14 +503,50 @@ export default function App() {
             <div className="browser-list">{project?.branches.map((branch) => <BranchRow key={branch.name} branch={branch} onActivate={(name) => void switchBranch(name)}/>)}</div>
           </section>
         </div> : <div className="copilot-pane">
-          <div className="copilot-header"><Bot size={15}/><div><strong>Engineering Copilot</strong><small>{runtime?.configured_model ?? 'local model'} · local</small></div></div>
+          <div className="copilot-header">
+            <Bot size={16}/>
+            <div className="copilot-header-main"><strong>Engineering Copilot</strong><small>{runtime?.configured_model ?? 'local model'} · runs locally through Forge Engine</small></div>
+            <div className={`copilot-health ${runtime?.ollama ?? 'checking'}`} title={`Ollama: ${runtime?.ollama ?? 'checking'}`}><span className="copilot-health-dot"/>{modelHealthLabel}</div>
+          </div>
+
+          <div className={`agent-status-card ${agentTone}`} data-testid="agent-status" aria-live="polite">
+            <div className="agent-status-row">
+              <span className="agent-status-icon">
+                {statusWorking ? <Activity size={14} className="agent-spin"/> : agentTone === 'done' ? <Check size={14}/> : agentTone === 'error' ? <CircleAlert size={14}/> : <Bot size={14}/>} 
+              </span>
+              <div className="agent-status-copy"><strong>{agentTitle}</strong><small>{agentDetail}</small></div>
+              {(agentStartedAt || statusWorking) && <span className="agent-elapsed">{formatElapsed(agentElapsed)}</span>}
+            </div>
+            {statusWorking && <div className="agent-progress-track" title={`${Math.round(statusProgress * 100)}%`}><span style={{ width: `${Math.max(4, Math.round(statusProgress * 100))}%` }}/></div>}
+            {(submittingAgent || statusJob) && <div className="agent-status-meta">
+              <span>{submittingAgent ? 'Submitting' : statusJob ? jobStateLabels[statusJob.state] : 'Working'}</span>
+              <span>{Math.round(statusProgress * 100)}%</span>
+              <span>{statusJob?.branch ?? project?.active_branch ?? 'main'}</span>
+            </div>}
+            {statusWorking && activeJob && <div className="agent-status-actions"><button className="agent-cancel" onClick={() => void cancelActiveJob()}><X size={11}/>Cancel task</button></div>}
+          </div>
+
           <section className="conversation" ref={conversationRef} data-testid="conversation">
             {chat.map((entry, index) => <div className={`message ${entry.role}`} key={`${index}-${entry.text.slice(0, 18)}`}><span className="message-author">{entry.role === 'agent' ? 'ForgeCAD' : 'You'}</span>{entry.role === 'agent' ? <MarkdownMessage text={entry.text}/> : <p>{entry.text}</p>}</div>)}
-            {jobBusy && <div className="message agent live"><span className="message-author">ForgeCAD · {activeJob?.state}</span><MarkdownMessage text={streamText || activeJob?.message || 'Working…'}/><div className="job-progress"><span style={{ width: `${Math.round((activeJob?.progress ?? 0) * 100)}%` }}/></div></div>}
+            {statusWorking && (submittingAgent || statusJob?.kind === 'agent') && <div className="message agent live" data-testid="agent-live-message">
+              <span className="message-author">ForgeCAD · live</span>
+              <div className="agent-live-line"><Activity size={12} className="agent-spin"/><strong>{agentTitle}</strong></div>
+              {streamText ? <MarkdownMessage text={streamText}/> : <p className="agent-live-detail">{agentDetail}</p>}
+            </div>}
           </section>
           <div className="composer" data-testid="composer">
-            <textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void runAgent(message, applyEdits); }} placeholder="Ask about this design…"/>
-            <div className="composer-footer"><label><input type="checkbox" checked={applyEdits} onChange={(event) => setApplyEdits(event.target.checked)}/>Allow edits</label><button className="send-button" data-testid="send-button" disabled={jobBusy || !message.trim()} onClick={() => void runAgent(message, applyEdits)}><Send size={14}/></button></div>
+            <textarea
+              aria-label="Copilot request"
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void runAgent(message, applyEdits); }}
+              placeholder={copilotBusy ? 'ForgeCAD is working. You can draft your next request here…' : 'Describe what you want to build, change, or inspect…'}
+            />
+            <div className="composer-permission-note">{applyEdits ? 'ForgeCAD may add, move, connect, and edit design objects for this task.' : 'Analysis only — ForgeCAD will not change the design.'}</div>
+            <div className="composer-footer">
+              <label className="edit-permission" title="Turn this off when you only want analysis or an answer"><input type="checkbox" checked={applyEdits} onChange={(event) => setApplyEdits(event.target.checked)}/>Modify design</label>
+              <div className="composer-actions"><span className="composer-shortcut">{copilotBusy ? 'One task at a time' : 'Ctrl+Enter'}</span><button className="send-button" data-testid="send-button" disabled={copilotBusy || !message.trim()} onClick={() => void runAgent(message, applyEdits)}>{copilotBusy ? <Activity size={13} className="agent-spin"/> : <Send size={13}/>}<span>{copilotBusy ? 'Working' : 'Send'}</span></button></div>
+            </div>
           </div>
         </div>}
       </aside>
