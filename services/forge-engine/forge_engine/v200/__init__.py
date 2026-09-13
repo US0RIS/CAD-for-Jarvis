@@ -3,7 +3,7 @@
 v1.1 remains the deterministic CAD/engineering execution substrate. v2.0 adds the
 system-architecture layer above it: goal decomposition, requirements, capability
 resolution, candidate discovery, plan quality gates, canonical requirement capture,
-and a bounded design/validate/repair loop.
+a bounded design/validate/repair loop, and manufacturing-resource integration.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -16,5 +16,7 @@ _execution_enrichment.install()
 from . import agent_loop as _agent_loop
 from .. import main as _legacy_main
 _agent_loop.install(_legacy_main)
+from . import manufacturing_api as _manufacturing_api
+_manufacturing_api.install(_legacy_main)
 
 __all__ = ["DESIGN_INTELLIGENCE_VERSION", "design_intelligence"]
