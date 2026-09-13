@@ -85,6 +85,8 @@ from . import thermal_contract as _thermal_contract
 _thermal_contract.install()
 from . import fluid_contract as _fluid_contract
 _fluid_contract.install()
+from . import routing_contract as _routing_contract
+_routing_contract.install()
 from . import engineering_diff as _engineering_diff
 _engineering_diff.install()
 from . import project_surface as _project_surface
