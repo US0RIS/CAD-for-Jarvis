@@ -55,7 +55,7 @@ jobs:
           $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-full-scope-selftest"
           $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\services\forge-engine"
           python -m forge_engine.full_scope_selftest
-          python -c "from forge_engine.v200 import DESIGN_INTELLIGENCE_VERSION; from forge_engine.v200 import design_intelligence as d; from forge_engine.engineering_state import PROJECT; a=d.bootstrap_architecture('notify me when a door is opened', PROJECT.snapshot()); c=d.build_planner_context('notify me when a door is opened', a, PROJECT.snapshot()); assert DESIGN_INTELLIGENCE_VERSION=='2.0.0'; assert any(f['capability']=='physical_state_sensing' for f in c['functions']); assert any(x['id']=='sensor.adafruit.magnetic_contact_375' for x in c['candidate_components']); print('ForgeCAD 2.0 design intelligence: PASS')"
+          python -m forge_engine.v200.windows_smoke
 
       - name: Build standalone Forge Engine
         shell: pwsh
