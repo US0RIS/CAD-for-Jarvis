@@ -55,6 +55,7 @@ jobs:
           $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-full-scope-selftest"
           $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\services\forge-engine"
           python -m forge_engine.full_scope_selftest
+          python -c "from forge_engine.v200 import DESIGN_INTELLIGENCE_VERSION; from forge_engine.v200 import design_intelligence as d; from forge_engine.engineering_state import PROJECT; a=d.bootstrap_architecture('notify me when a door is opened', PROJECT.snapshot()); c=d.build_planner_context('notify me when a door is opened', a, PROJECT.snapshot()); assert DESIGN_INTELLIGENCE_VERSION=='2.0.0'; assert any(f['capability']=='physical_state_sensing' for f in c['functions']); assert any(x['id']=='sensor.adafruit.magnetic_contact_375' for x in c['candidate_components']); print('ForgeCAD 2.0 design intelligence: PASS')"
 
       - name: Build standalone Forge Engine
         shell: pwsh
@@ -68,6 +69,7 @@ jobs:
             --collect-all OCP `
             --collect-all vtkmodules `
             --collect-submodules forge_engine.v110 `
+            --collect-submodules forge_engine.v200 `
             --distpath services/forge-engine/dist `
             --workpath services/forge-engine/build/pyinstaller `
             --specpath services/forge-engine/build `
@@ -93,11 +95,15 @@ jobs:
               } catch {}
               Start-Sleep -Milliseconds 250
             } while ((Get-Date) -lt $deadline)
-            if (-not ($health.ok -and $health.engineering_layer -eq 'v1.1-full-scope' -and $health.engine_version -eq '1.1.2')) { throw 'Bundled Forge Engine did not report ForgeCAD 1.1.2 full scope.' }
+            if (-not ($health.ok -and $health.engine_version -eq '2.0.0')) { throw 'Bundled Forge Engine did not report ForgeCAD 2.0.0.' }
             $stats = Invoke-RestMethod http://127.0.0.1:8877/v2/component-registry/stats -Headers $headers -TimeoutSec 20
             if ([int]$stats.total -lt 1400) { throw "Expected at least 1400 registry components, got $($stats.total)." }
             $search = Invoke-RestMethod 'http://127.0.0.1:8877/v2/components?q=gear' -Headers $headers -TimeoutSec 20
             if (@($search.items).Count -le 30) { throw "Filtered component search is still capped: $(@($search.items).Count)" }
+            $architectureBody = @{ text = 'notify me when a door is opened'; use_model = $false } | ConvertTo-Json
+            $architecture = Invoke-RestMethod http://127.0.0.1:8877/v2/design/architecture -Method Post -Headers $headers -ContentType 'application/json' -Body $architectureBody -TimeoutSec 20
+            if (-not (@($architecture.functions) | Where-Object { $_.capability -eq 'physical_state_sensing' })) { throw 'ForgeCAD 2.0 architecture did not infer physical-state sensing.' }
+            if (-not (@($architecture.candidate_components) | Where-Object { $_.id -eq 'sensor.adafruit.magnetic_contact_375' })) { throw 'ForgeCAD 2.0 architecture did not resolve the door-contact candidate.' }
             $focad = Join-Path $env:RUNNER_TEMP 'bundled-design.focad'
             Invoke-WebRequest http://127.0.0.1:8877/v2/project/export -Headers $headers -OutFile $focad -TimeoutSec 30
             python -c "import zipfile,json; z=zipfile.ZipFile(r'$focad'); m=json.loads(z.read('manifest.json')); assert m['format']=='focad' and m['format_version']==1"
@@ -105,7 +111,7 @@ jobs:
             if (-not $scene.authoritative -or @($scene.parts).Count -lt 6) { throw 'Canonical scene is missing the full acceptance assembly.' }
             $validation = Invoke-RestMethod http://127.0.0.1:8877/v2/validation -Headers $headers -TimeoutSec 60
             if (-not $validation.metrics) { throw 'Validation payload did not contain engineering metrics.' }
-            Write-Host "Bundled full scope: registry=$($stats.total) search=$(@($search.items).Count) scene_parts=$(@($scene.parts).Count)"
+            Write-Host "Bundled 2.0 scope: registry=$($stats.total) search=$(@($search.items).Count) scene_parts=$(@($scene.parts).Count)"
           } finally {
             if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           }
@@ -124,8 +130,8 @@ jobs:
       - name: Verify installer exists
         shell: pwsh
         run: |
-          $installer = Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-1.1.3.exe' | Select-Object -First 1
-          if (-not $installer) { throw 'ForgeCAD 1.1.3 installer was not produced.' }
+          $installer = Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-2.0.0.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'ForgeCAD 2.0.0 installer was not produced.' }
           Write-Host "Installer: $($installer.FullName)"
           Write-Host "Size: $([math]::Round($installer.Length / 1MB, 1)) MB"
 
@@ -133,7 +139,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-1.1.3.exe' | Select-Object -First 1).FullName
+          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-2.0.0.exe' | Select-Object -First 1).FullName
           if (-not $installer) { throw 'ForgeCAD installer was not produced.' }
           $installDir = Join-Path $env:RUNNER_TEMP 'ForgeCAD-Installed-Copy'
           if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
@@ -149,7 +155,7 @@ jobs:
           if (-not (Test-Path $engine)) { throw "Installed Forge Engine executable missing: $engine" }
           $version = (Get-Item $app).VersionInfo.ProductVersion
           Write-Host "Installed ProductVersion: $version"
-          if (-not $version.StartsWith('1.1.3')) { throw "Expected installed ProductVersion 1.1.3, got $version" }
+          if (-not $version.StartsWith('2.0.0')) { throw "Expected installed ProductVersion 2.0.0, got $version" }
 
           $env:FORGECAD_PORT = '8878'
           $env:FORGECAD_SESSION_TOKEN = 'installed-copy-smoke'
@@ -167,12 +173,15 @@ jobs:
               } catch {}
               Start-Sleep -Milliseconds 250
             } while ((Get-Date) -lt $deadline)
-            if (-not ($health.ok -and $health.engineering_layer -eq 'v1.1-full-scope' -and $health.engine_version -eq '1.1.2')) { throw 'Installed Forge Engine failed 1.1.2 full-scope health smoke test.' }
+            if (-not ($health.ok -and $health.engine_version -eq '2.0.0')) { throw 'Installed Forge Engine failed 2.0.0 health smoke test.' }
 
             $stats = Invoke-RestMethod http://127.0.0.1:8878/v2/component-registry/stats -Headers $headers -TimeoutSec 20
             if ([int]$stats.total -lt 1400) { throw "Installed registry incomplete: $($stats.total)" }
             $search = Invoke-RestMethod 'http://127.0.0.1:8878/v2/components?q=gear' -Headers $headers -TimeoutSec 20
             if (@($search.items).Count -le 30) { throw "Installed filtered search still capped: $(@($search.items).Count)" }
+            $architectureBody = @{ text = 'notify me when a door is opened'; use_model = $false } | ConvertTo-Json
+            $architecture = Invoke-RestMethod http://127.0.0.1:8878/v2/design/architecture -Method Post -Headers $headers -ContentType 'application/json' -Body $architectureBody -TimeoutSec 20
+            if (-not (@($architecture.candidate_components) | Where-Object { $_.id -eq 'sensor.adafruit.magnetic_contact_375' })) { throw 'Installed ForgeCAD 2.0 capability resolver failed.' }
             $focad = Join-Path $env:RUNNER_TEMP 'installed-design.focad'
             Invoke-WebRequest http://127.0.0.1:8878/v2/project/export -Headers $headers -OutFile $focad -TimeoutSec 30
             python -c "import zipfile,json; z=zipfile.ZipFile(r'$focad'); m=json.loads(z.read('manifest.json')); assert m['format']=='focad'"
@@ -211,12 +220,12 @@ jobs:
           $deadline = (Get-Date).AddSeconds(30)
           while ((Test-Path $app) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
           if (Test-Path $app) { throw "Installed ForgeCAD executable still exists after uninstall: $app" }
-          Write-Host 'Installed-copy full-scope smoke test: PASS'
+          Write-Host 'Installed-copy ForgeCAD 2.0 smoke test: PASS'
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: ForgeCAD-Windows-Installer
-          path: apps/desktop/release/ForgeCAD-Setup-1.1.3.exe
+          path: apps/desktop/release/ForgeCAD-Setup-2.0.0.exe
           if-no-files-found: error
           compression-level: 0
