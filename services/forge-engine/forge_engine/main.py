@@ -32,6 +32,14 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=[
+        "Content-Disposition",
+        "X-ForgeCAD-Package-SHA256",
+        "X-ForgeCAD-Branch",
+        "X-ForgeCAD-3MF-Stage",
+        "X-ForgeCAD-Manufacturing-Resource",
+        "X-ForgeCAD-Thumbnail-Source",
+    ],
 )
 _jobs: dict[str, EngineeringJob] = {}
 _event_clients: set[WebSocket] = set()
@@ -261,7 +269,7 @@ async def branch_status(branch_name: str, request: BranchStatusRequest) -> dict[
     try:
         result = PROJECT.set_branch_status(branch_name, request.status, request.note, request.physical_verified)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Branch not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     snapshot = PROJECT.snapshot()
     await broadcast({"type": "project.updated", "project": snapshot})
     return {"branch": result, "project": snapshot}
