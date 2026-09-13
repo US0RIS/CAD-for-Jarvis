@@ -112,6 +112,10 @@ def object_mass_properties(obj: dict[str, Any]) -> dict[str, Any]:
     centroid_mm = np.asarray(metrics.get("centroid_mm") or [0.0, 0.0, 0.0], dtype=float)
     if centroid_mm.shape != (3,) or not np.all(np.isfinite(centroid_mm)):
         raise ValueError(f"Object {obj.get('id')} has invalid centroid data")
+    # OpenCascade may return tiny floating residue for a theoretically exact symmetric
+    # centroid (for example 1e-15 mm instead of 0). Normalize only sub-picometer noise
+    # so deterministic downstream comparisons do not depend on kernel roundoff.
+    centroid_mm[np.abs(centroid_mm) < 1e-9] = 0.0
 
     local, fidelity, limitations = _local_inertia(obj, mass)
     rotation = _rotation_matrix(list((obj.get("transform") or {}).get("rotation_deg", [0.0, 0.0, 0.0])))
