@@ -116,6 +116,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v200.routing_selftest
+      - name: Run ForgeCAD 2.0 route-coupled fluid self-test
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v200-fluid-routing-selftest
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v200.fluid_routing_selftest
       - name: Run ForgeCAD 2.0 analysis contracts self-test
         env:
           PYTHONPATH: services/forge-engine
