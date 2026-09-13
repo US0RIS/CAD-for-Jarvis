@@ -23,7 +23,7 @@ const bridge: ForgeDesktopBridge = Object.freeze({
     chrome: process.versions.chrome,
   },
   getEngineConnection: () => ipcRenderer.invoke('forgecad:connection') as Promise<EngineConnection>,
-  reportComponentCatalogState: (state, detail) => ipcRenderer.send('forgecad:component-catalog-state', state, detail),
+  reportComponentCatalogState: (state: 'ready' | 'failed', detail?: string) => ipcRenderer.send('forgecad:component-catalog-state', state, detail),
 });
 
 contextBridge.exposeInMainWorld('forgeDesktop', bridge);
