@@ -14,6 +14,8 @@ from . import intent_hotfix as _intent_hotfix
 _intent_hotfix.install()
 from . import manufacturing_intelligence as _manufacturing_intelligence
 _manufacturing_intelligence.install()
+from . import manufacturing_analysis as _manufacturing_analysis
+_manufacturing_analysis.install()
 from . import execution_enrichment as _execution_enrichment
 _execution_enrichment.install()
 from . import agent_loop as _agent_loop
