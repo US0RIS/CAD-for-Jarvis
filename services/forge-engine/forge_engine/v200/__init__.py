@@ -10,7 +10,7 @@ real 3D solid finite-element screening for supported geometry including canonica
 project loads/supports and parametric load cases, transform-independent canonical mesh
 caching, portable multi-branch workspaces, machine-readable analysis contracts, full
 engineering-state branch diffs, and branch-safe autonomous multi-variant engineering
-campaigns.
+campaigns whose structural ranking uses canonical project SolidFEA when available.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -56,6 +56,8 @@ from . import campaign_intelligence as _campaign_intelligence
 _campaign_intelligence.install(_legacy_main)
 from . import feedback_intelligence as _feedback_intelligence
 _feedback_intelligence.install(_legacy_main)
+from . import campaign_project_structural as _campaign_project_structural
+_campaign_project_structural.install(_legacy_main)
 from . import analysis_contracts as _analysis_contracts
 _analysis_contracts.install(_legacy_main)
 from . import engineering_diff as _engineering_diff
