@@ -101,8 +101,8 @@ def _planner_system() -> str:
         "Later command arguments may reference a created object as '$name'; Forge Engine resolves it to the actual UUID after creation. "
         "Use this whenever a new part must subsequently be moved, mated, wired, machined, or programmed in the same plan. "
         "Allowed operations: add, add_component, replace_component, sync_component, update, transform, mate_components, connect_interfaces, disconnect, delete, "
-        "add_feature, delete_feature, add_load, add_constraint, set_requirement, add_bom_item, add_note, code_write, code_delete, code_rename, project_name, settings. "
-        "For purchased hardware use add_component with an exact candidate ID; purchased components may not be scaled or have authoritative geometry rewritten. "
+        "add_feature, delete_feature, split_for_manufacturing, add_load, add_constraint, set_requirement, add_bom_item, add_note, code_write, code_delete, code_rename, project_name, settings. "
+        "For purchased hardware use add_component with an exact candidate ID; purchased components may not be scaled, split, or have authoritative geometry rewritten. "
         "For simple custom fabricated parts use add with kind box, cylinder, sphere, sketch_extrude, or revolve. "
         "When a custom part is governed by mechanical dimensions or geometric relationships, prefer kind constrained_sketch_extrude so the design remains dimension-driven instead of freezing arbitrary vertex coordinates. "
         "constrained_sketch_extrude params are {height,sketch:{points:[[x,y],...],constraints:[...],require_fully_constrained:true}}. "
@@ -112,11 +112,15 @@ def _planner_system() -> str:
         "box params: {x,y,z}; cylinder: {radius,height}; sphere: {radius}; sketch_extrude: {height,sketch:{type:'rectangle'|'circle'|'polygon',width?,height?,radius?,points?}}; "
         "revolve: {points:[[radius,z],...],angle_deg}. Supply material, transform, and semantic role/tags when useful. "
         "After creating custom geometry, add_feature can add holes {type:'hole',diameter,axis,x,y,z}, circular/rectangular pockets, fillets, or chamfers. "
+        "When a fabricated body exceeds an available manufacturing resource, do not merely report that it is too large. For a Bambu Lab P2S use split_for_manufacturing with "
+        "{id:'$part',resource_id:'bambu-lab-p2s',margin_mm:8,max_pieces:24,alignment_diameter_mm:3.2,alignment_depth_mm:8}. "
+        "That operation creates a protected sibling manufacturing branch, preserves the unsplit source, generates actual clipped printable solids and optional alignment sockets, and leaves joint strength unverified. "
+        "After splitting, re-run manufacturing, structural/joint, assembly, and requirement validation; never treat alignment sockets as proof that the seam is mechanically adequate. "
         "Prefer editable parametric geometry over a visually plausible but dimensionally arbitrary shape. Never use scaling to hide incorrect dimensions. "
         "Use object_id from existing_assets for existing transforms, connections, and code_write. When credentials or deployment-specific values are unknown, "
         "generate configurable placeholders and identify them in checks rather than refusing the design. "
         "Keep physically verified baselines protected; Forge Engine will fork them automatically. "
-        "The plan should make concrete progress whenever the architecture has a resolved existing asset, catalog candidate, software host, or custom-part path."
+        "The plan should make concrete progress whenever the architecture has a resolved existing asset, catalog candidate, software host, custom-part path, or manufacturing adaptation path."
     )
 
 
