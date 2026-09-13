@@ -67,6 +67,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v200.project_structural_selftest
+      - name: Run ForgeCAD 2.0 parametric project SolidFEA self-test
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v200-parametric-project-fea-selftest
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v200.project_structural_parametric_selftest
       - name: Run ForgeCAD 2.0 analysis contracts self-test
         env:
           PYTHONPATH: services/forge-engine
