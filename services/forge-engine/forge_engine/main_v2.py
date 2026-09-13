@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from . import main as legacy
 from .models import EngineeringJob, JobState, OllamaState
 from .v200 import DESIGN_INTELLIGENCE_VERSION
-from .v200 import design_intelligence
+from .v200 import design_intelligence, parametric_expressions
 
 
 app = legacy.app
@@ -101,11 +101,16 @@ def _planner_system() -> str:
         "Later command arguments may reference a created object as '$name'; Forge Engine resolves it to the actual UUID after creation. "
         "Use this whenever a new part must subsequently be moved, mated, wired, machined, or programmed in the same plan. "
         "Allowed operations: add, add_component, replace_component, sync_component, update, transform, mate_components, connect_interfaces, disconnect, delete, "
-        "add_feature, delete_feature, split_for_manufacturing, add_load, add_constraint, set_requirement, add_bom_item, add_note, code_write, code_delete, code_rename, project_name, settings. "
+        "add_feature, delete_feature, split_for_manufacturing, set_design_parameter, delete_design_parameter, add_load, add_constraint, set_requirement, add_bom_item, add_note, code_write, code_delete, code_rename, project_name, settings. "
         "For purchased hardware use add_component with an exact candidate ID; purchased components may not be scaled, split, or have authoritative geometry rewritten. "
         "For simple custom fabricated parts use add with kind box, cylinder, sphere, sketch_extrude, or revolve. "
+        "When several dimensions encode the same design intent, define named project parameters before creating geometry. set_design_parameter args are "
+        "{name,value,unit?,description?} for a literal or {name,expression,unit?,description?} for a derived value. Derived expressions may use other parameter names, basic arithmetic, "
+        "pi/e/tau, and the safe math functions abs,min,max,sqrt,sin,cos,tan,asin,acos,atan,radians,degrees,floor,ceil. "
+        "Reference a named parameter inside custom-part params or feature dimensions with {expr:'parameter_name'} or {expr:'body_width + 2 * clearance'}. "
+        "Keep placement transforms literal; expression references are for authoritative custom geometry dimensions/features. Prefer named expressions when changing one engineering variable should regenerate several related dimensions. "
         "When a custom part is governed by mechanical dimensions or geometric relationships, prefer kind constrained_sketch_extrude so the design remains dimension-driven instead of freezing arbitrary vertex coordinates. "
-        "constrained_sketch_extrude params are {height,sketch:{points:[[x,y],...],constraints:[...],require_fully_constrained:true}}. "
+        "constrained_sketch_extrude params are {height,sketch:{points:[[x,y],...],constraints:[...],require_fully_constrained:true}}. Its numeric point coordinates and constraint values may themselves be expression nodes when they derive from named parameters. "
         "Supported sketch constraints are fixed {point,x,y}, fixed_x {point,x}, fixed_y {point,y}, horizontal {a,b}, vertical {a,b}, coincident {a,b}, distance {a,b,value}, "
         "x_distance {a,b,value}, y_distance {a,b,value}, equal_length {a,b,c,d}, parallel {a,b,c,d}, perpendicular {a,b,c,d}, angle {a,b,c,d,angle_deg}, and midpoint {point,a,b}. "
         "Use enough independent constraints to remove every sketch degree of freedom. Start from sensible approximate points; constraints define the authoritative solved geometry. "
@@ -124,10 +129,19 @@ def _planner_system() -> str:
     )
 
 
+def _planner_context(text: str, architecture: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+    context = design_intelligence.build_planner_context(text, architecture, project)
+    try:
+        context["design_parameters"] = parametric_expressions.parameter_report()
+    except ValueError as exc:
+        context["design_parameters"] = {"count": 0, "parameters": [], "values": {}, "error": str(exc)}
+    return context
+
+
 async def qwen_plan(text: str) -> dict[str, Any]:
     project = legacy.PROJECT.snapshot()
     architecture = await qwen_architecture(text)
-    context = design_intelligence.build_planner_context(text, architecture, project)
+    context = _planner_context(text, architecture, project)
     payload = {"request": text, "design_context": context}
     plan = await _model_json(_planner_system(), payload, num_predict=2800, temperature=0.05)
     if not isinstance(plan.get("commands", []), list):
@@ -161,11 +175,12 @@ async def qwen_plan(text: str) -> dict[str, Any]:
 
 async def qwen_reply(text: str, job: EngineeringJob) -> str:
     architecture = await qwen_architecture(text)
-    context = design_intelligence.build_planner_context(text, architecture, legacy.PROJECT.snapshot())
+    context = _planner_context(text, architecture, legacy.PROJECT.snapshot())
     system = (
         "You are ForgeCAD 2.0's engineering copilot. Reason from the supplied requirements and functional architecture, not only the parts currently in the scene. "
         "The deterministic Forge Engine is authoritative. Distinguish catalog facts from estimates, identify verification gaps, and never claim screening analysis certifies a safety-critical design. "
-        "When a current part is missing, explain whether ForgeCAD should reuse an asset, select a catalog candidate, synthesize a custom part, or implement the function in software."
+        "When a current part is missing, explain whether ForgeCAD should reuse an asset, select a catalog candidate, synthesize a custom part, or implement the function in software. "
+        "When the supplied design_parameters show a named relationship, preserve that relationship instead of replacing it with duplicated literal dimensions."
     )
     request = {
         "model": legacy.CONFIGURED_MODEL,
@@ -210,4 +225,4 @@ async def design_architecture(request: ArchitectureRequest) -> dict[str, Any]:
         architecture = await qwen_architecture(request.text) if state == OllamaState.READY else design_intelligence.bootstrap_architecture(request.text, project)
     else:
         architecture = design_intelligence.bootstrap_architecture(request.text, project)
-    return design_intelligence.build_planner_context(request.text, architecture, project)
+    return _planner_context(request.text, architecture, project)
