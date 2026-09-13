@@ -10,11 +10,12 @@ real 3D solid finite-element screening for supported geometry including canonica
 project loads/supports and parametric load cases, deterministic tolerance-stack
 analysis, assembly mass properties and rigid-body dynamics, canonical electrical
 schematics/net and rail screening, canonical multi-body steady-state thermal networks,
-canonical steady-state incompressible fluid/hydraulic networks, transform-independent
-canonical mesh caching, portable multi-branch workspaces, machine-readable analysis
-contracts, full engineering-state branch diffs, a project API surface for canonical
-engineering records, and branch-safe autonomous multi-variant engineering campaigns
-whose structural ranking uses canonical project SolidFEA when available.
+canonical steady-state incompressible fluid/hydraulic networks, canonical cable/tube
+route geometry and bend screening, transform-independent canonical mesh caching,
+portable multi-branch workspaces, machine-readable analysis contracts, full
+engineering-state branch diffs, a project API surface for canonical engineering
+records, and branch-safe autonomous multi-variant engineering campaigns whose
+structural ranking uses canonical project SolidFEA when available.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -64,6 +65,8 @@ from . import thermal_network as _thermal_network
 _thermal_network.install(_legacy_main)
 from . import fluid_network as _fluid_network
 _fluid_network.install(_legacy_main)
+from . import routing as _routing
+_routing.install(_legacy_main)
 from . import workspace_bundle as _workspace_bundle
 _workspace_bundle.install()
 from . import manufacturing_api as _manufacturing_api
