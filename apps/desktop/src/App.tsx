@@ -34,6 +34,13 @@ const jobStateLabels: Record<JobPayload['state'], string> = {
   cancelled: 'Cancelled',
 };
 
+// Canonical catalog thumbnails are rendered by OpenCascade on Forge Engine's main
+// thread because moving that native work to Windows worker threads is unsafe. Prime
+// visible thumbnails serially so image rendering cannot starve interactive search or
+// mutation requests. The eventual <img> uses the normal canonical URL from browser
+// cache, preserving the public image contract and provenance headers.
+let componentThumbnailQueue: Promise<void> = Promise.resolve();
+
 function formatElapsed(seconds: number) {
   const safe = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(safe / 60);
@@ -68,28 +75,50 @@ function BranchRow({ branch, onActivate }: { branch: ProjectPayload['branches'][
 
 function ComponentImage({ item }: { item: ComponentPayload }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const queuedRef = useRef(false);
   const [requested, setRequested] = useState(false);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    queuedRef.current = false;
     setRequested(false);
     setFailed(false);
   }, [item.image?.uri]);
 
   useEffect(() => {
     const node = hostRef.current;
-    if (!node || requested || failed || !item.image?.uri) return;
+    const uri = item.image?.uri;
+    if (!node || requested || failed || !uri) return;
+    let cancelled = false;
+
+    const prime = () => {
+      if (queuedRef.current) return;
+      queuedRef.current = true;
+      componentThumbnailQueue = componentThumbnailQueue
+        .catch(() => undefined)
+        .then(async () => {
+          if (cancelled) return;
+          const response = await fetch(uri, { cache: 'force-cache' });
+          if (!response.ok) throw new Error(`Thumbnail ${response.status}`);
+          // Read the complete body before releasing the queue. A later <img> request then
+          // resolves from HTTP cache instead of starting a second native render.
+          await response.blob();
+          if (!cancelled) setRequested(true);
+        })
+        .catch(() => { if (!cancelled) setFailed(true); });
+    };
+
     if (!('IntersectionObserver' in window)) {
-      setRequested(true);
-      return;
+      prime();
+      return () => { cancelled = true; };
     }
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some((entry) => entry.isIntersecting)) return;
-      setRequested(true);
+      prime();
       observer.disconnect();
     }, { rootMargin: '120px 0px', threshold: 0.01 });
     observer.observe(node);
-    return () => observer.disconnect();
+    return () => { cancelled = true; observer.disconnect(); };
   }, [failed, item.image?.uri, requested]);
 
   return <div ref={hostRef} style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center' }}>
@@ -172,6 +201,7 @@ export default function App() {
   const [componentQuery, setComponentQuery] = useState('');
   const [componentCategory, setComponentCategory] = useState('');
   const [componentVoltage, setComponentVoltage] = useState('');
+  const [componentCatalogRevision, setComponentCatalogRevision] = useState(0);
   const [visibleComponentCount, setVisibleComponentCount] = useState(80);
   const [registryStats, setRegistryStats] = useState<RegistryStatsPayload | null>(null);
   const [insertingComponentId, setInsertingComponentId] = useState<string | null>(null);
@@ -189,6 +219,7 @@ export default function App() {
   ]);
   const [newBusy, setNewBusy] = useState(false);
   const handledJobs = useRef(new Set<string>());
+  const componentSearchGeneration = useRef(0);
   const conversationRef = useRef<HTMLElement | null>(null);
   const stepInput = useRef<HTMLInputElement | null>(null);
   const focadInput = useRef<HTMLInputElement | null>(null);
@@ -228,17 +259,12 @@ export default function App() {
           : 'Ready to inspect or modify the active design.'));
 
   const refreshProject = useCallback(async () => {
-    const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;
-    const [nextProject, nextComponents, nextStats] = await Promise.all([
-      fetchProject(),
-      fetchComponents(componentQuery, componentCategory || undefined, Number.isFinite(voltage) ? voltage : undefined),
-      fetchRegistryStats(),
-    ]);
+    const [nextProject, nextStats] = await Promise.all([fetchProject(), fetchRegistryStats()]);
     setProject(nextProject);
-    setComponents(nextComponents.items);
     setRegistryStats(nextStats);
+    setComponentCatalogRevision((revision) => revision + 1);
     setSelectedId((current) => current && nextProject.parts.some((part) => part.id === current) ? current : null);
-  }, [componentQuery, componentCategory, componentVoltage]);
+  }, []);
 
   const acceptJobSnapshot = useCallback((job: JobPayload) => {
     setActiveJob(job);
@@ -266,7 +292,6 @@ export default function App() {
       const tasks = [
         fetchRuntime().then((next) => { if (!cancelled) setRuntime(next); }),
         fetchProject().then((next) => { if (!cancelled) { setProject(next); setSelectedId(null); } }),
-        fetchComponents('').then((next) => { if (!cancelled) setComponents(next.items); }),
         fetchRegistryStats().then((next) => { if (!cancelled) setRegistryStats(next); }),
       ];
       const results = await Promise.allSettled(tasks);
@@ -304,13 +329,20 @@ export default function App() {
 
   useEffect(() => {
     setVisibleComponentCount(80);
+    const generation = ++componentSearchGeneration.current;
+    let cancelled = false;
     const timer = window.setTimeout(() => {
       const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;
       void fetchComponents(componentQuery, componentCategory || undefined, Number.isFinite(voltage) ? voltage : undefined)
-        .then((result) => setComponents(result.items)).catch(() => undefined);
+        .then((result) => {
+          if (!cancelled && generation === componentSearchGeneration.current) setComponents(result.items);
+        })
+        .catch((error) => {
+          if (!cancelled && generation === componentSearchGeneration.current) setStartupError(error instanceof Error ? error.message : String(error));
+        });
     }, 180);
-    return () => window.clearTimeout(timer);
-  }, [componentQuery, componentCategory, componentVoltage]);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [componentQuery, componentCategory, componentVoltage, componentCatalogRevision]);
 
   useEffect(() => setSceneReady(false), [sceneRevision]);
 
@@ -361,6 +393,7 @@ export default function App() {
       setSceneReady(false);
       setSelectedId(null);
       setProject(await activateBranch(name));
+      setComponentCatalogRevision((revision) => revision + 1);
       setExplode(0);
     } catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }
   }
@@ -373,8 +406,8 @@ export default function App() {
       setProject(result.project);
       setSelectedId(result.component.instance_id ?? null);
       setRightTab('properties');
-      const refreshed = await fetchComponents(componentQuery, componentCategory || undefined, componentVoltage.trim() ? Number(componentVoltage) : undefined);
-      setComponents(refreshed.items);
+      setComponentCatalogRevision((revision) => revision + 1);
+      setStartupError(null);
     } catch (error) {
       setStartupError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -390,6 +423,7 @@ export default function App() {
       setSceneReady(false);
       setSelectedId(null);
       setProject(await newProject());
+      setComponentCatalogRevision((revision) => revision + 1);
       setExplode(0);
       setBottomTab(null);
       setRightTab('components');
@@ -404,12 +438,11 @@ export default function App() {
       setSelectedId(null);
       const result = await importProjectBundle(file);
       setProject(result.project);
+      setComponentCatalogRevision((revision) => revision + 1);
       setExplode(0);
       setBottomTab(null);
       setRightTab('properties');
-      const [nextComponents, nextStats] = await Promise.all([fetchComponents(''), fetchRegistryStats()]);
-      setComponents(nextComponents.items);
-      setRegistryStats(nextStats);
+      setRegistryStats(await fetchRegistryStats());
       setStartupError(null);
     } catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }
     finally { if (focadInput.current) focadInput.current.value = ''; }
@@ -445,11 +478,11 @@ export default function App() {
   }
 
   async function undoDesign() {
-    try { const result = await undoHistory(); setProject(result.project); setSelectedId(null); }
+    try { const result = await undoHistory(); setProject(result.project); setSelectedId(null); setComponentCatalogRevision((revision) => revision + 1); }
     catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }
   }
   async function redoDesign() {
-    try { const result = await redoHistory(); setProject(result.project); setSelectedId(null); }
+    try { const result = await redoHistory(); setProject(result.project); setSelectedId(null); setComponentCatalogRevision((revision) => revision + 1); }
     catch (error) { setStartupError(error instanceof Error ? error.message : String(error)); }
   }
   async function startSimulation() {
