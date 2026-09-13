@@ -12,12 +12,17 @@ language model silently mutate a known-good design. Instead it:
 5. ranks only candidates that pass the requested engineering gates;
 6. activates the best unverified candidate while preserving the source branch exactly.
 
-Campaign variables may address ordinary top-level object parameters or named/dimension
-constraints inside ForgeCAD 2.0 constrained sketches. The built-in structural/thermal
-analyses remain screening models. A campaign result is never promoted to physical
-verification automatically.
+Campaign variables may address ordinary top-level object parameters, named dimensions
+inside constrained sketches, or literal project-level design parameters that feed the
+selected object's expression tree. Derived expressions themselves are preserved; the
+optimizer changes their independent inputs rather than replacing design intent with a
+literal number.
+
+The built-in structural/thermal analyses remain screening models. A campaign result is
+never promoted to physical verification automatically.
 """
 
+import ast
 from copy import deepcopy
 import itertools
 import math
@@ -40,19 +45,69 @@ def _slug(value: str) -> str:
 def _numeric_params(obj: dict[str, Any]) -> dict[str, float]:
     out: dict[str, float] = {}
     for key, value in (obj.get("params") or {}).items():
-        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
             out[str(key)] = float(value)
     return out
 
 
-def _dimension_variables(obj: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Return optimizable design variables with an explicit mutation path.
+def _expression_names(expression: str) -> set[str]:
+    try:
+        tree = ast.parse(str(expression), mode="eval")
+    except SyntaxError:
+        return set()
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
 
-    Top-level numeric parameters keep their historical names. Constrained sketch
-    dimensions use ``sketch.<name>`` when a constraint has a semantic name, otherwise
-    ``sketch.constraint_<index>``. This lets campaigns vary true dimension constraints
-    instead of moving raw vertices and breaking sketch intent.
-    """
+
+def _object_expression_names(value: Any) -> set[str]:
+    names: set[str] = set()
+    if isinstance(value, dict):
+        if isinstance(value.get("expr"), str):
+            names.update(_expression_names(str(value["expr"])))
+        for item in value.values():
+            names.update(_object_expression_names(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            names.update(_object_expression_names(item))
+    return names
+
+
+def _dependent_literal_design_parameters(obj: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    definitions = core.PROJECT.get("design_parameters") or {}
+    if not isinstance(definitions, dict) or not definitions:
+        return {}
+    referenced = _object_expression_names(obj.get("params") or {}) | _object_expression_names(obj.get("features") or [])
+    pending = [name for name in referenced if name in definitions]
+    visited: set[str] = set()
+    literals: dict[str, dict[str, Any]] = {}
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        raw = definitions.get(name)
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            literals[name] = {"value": float(raw), "unit": "", "description": ""}
+            continue
+        if not isinstance(raw, dict):
+            continue
+        expression = raw.get("expression")
+        if expression not in (None, ""):
+            for dependency in _expression_names(str(expression)):
+                if dependency in definitions and dependency not in visited:
+                    pending.append(dependency)
+            continue
+        value = raw.get("value")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
+            literals[name] = {
+                "value": float(value),
+                "unit": str(raw.get("unit") or ""),
+                "description": str(raw.get("description") or ""),
+            }
+    return literals
+
+
+def _dimension_variables(obj: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return optimizable design variables with an explicit mutation path."""
     variables: dict[str, dict[str, Any]] = {}
     for name, value in _numeric_params(obj).items():
         variables[name] = {
@@ -62,34 +117,47 @@ def _dimension_variables(obj: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "kind": "parameter",
         }
 
-    if str(obj.get("kind") or "") != "constrained_sketch_extrude":
-        return variables
-    params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
-    sketch = params.get("sketch") if isinstance(params.get("sketch"), dict) else {}
-    constraints = sketch.get("constraints") if isinstance(sketch.get("constraints"), list) else []
-    supported = {"distance", "x_distance", "y_distance", "angle"}
-    for index, raw in enumerate(constraints):
-        if not isinstance(raw, dict):
-            continue
-        constraint_type = str(raw.get("type") or "").lower().strip()
-        if constraint_type not in supported:
-            continue
-        field = "angle_deg" if constraint_type == "angle" else "value"
-        value = raw.get(field)
-        if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
-            continue
-        semantic_name = str(raw.get("name") or raw.get("dimension") or raw.get("id") or "").strip()
-        key = f"sketch.{semantic_name}" if semantic_name else f"sketch.constraint_{index}"
-        if key in variables:
-            key = f"sketch.constraint_{index}"
+    if str(obj.get("kind") or "") == "constrained_sketch_extrude":
+        params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+        sketch = params.get("sketch") if isinstance(params.get("sketch"), dict) else {}
+        constraints = sketch.get("constraints") if isinstance(sketch.get("constraints"), list) else []
+        supported = {"distance", "x_distance", "y_distance", "angle"}
+        for index, raw in enumerate(constraints):
+            if not isinstance(raw, dict):
+                continue
+            constraint_type = str(raw.get("type") or "").lower().strip()
+            if constraint_type not in supported:
+                continue
+            field = "angle_deg" if constraint_type == "angle" else "value"
+            value = raw.get(field)
+            # Expression-driven dimensions are optimized through their independent named
+            # design parameters below; never overwrite an expression node with a literal.
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
+                continue
+            semantic_name = str(raw.get("name") or raw.get("dimension") or raw.get("id") or "").strip()
+            key = f"sketch.{semantic_name}" if semantic_name else f"sketch.constraint_{index}"
+            if key in variables:
+                key = f"sketch.constraint_{index}"
+            variables[key] = {
+                "name": key,
+                "start": float(value),
+                "path": ["params", "sketch", "constraints", index, field],
+                "kind": "sketch_dimension",
+                "constraint_index": index,
+                "constraint_type": constraint_type,
+                "field": field,
+            }
+
+    for parameter_name, definition in _dependent_literal_design_parameters(obj).items():
+        key = f"design.{parameter_name}"
         variables[key] = {
             "name": key,
-            "start": float(value),
-            "path": ["params", "sketch", "constraints", index, field],
-            "kind": "sketch_dimension",
-            "constraint_index": index,
-            "constraint_type": constraint_type,
-            "field": field,
+            "start": float(definition["value"]),
+            "path": ["design_parameters", parameter_name, "value"],
+            "kind": "design_parameter",
+            "parameter_name": parameter_name,
+            "unit": str(definition.get("unit") or ""),
+            "description": str(definition.get("description") or ""),
         }
     return variables
 
@@ -118,15 +186,16 @@ def _default_variable(params: dict[str, dict[str, Any]]) -> str:
         row = params.get(name)
         if row and float(row["start"]) > 0:
             return name
-    # If no conventional solid parameter is available, prefer a true sketch dimension
-    # over an arbitrary/raw geometry value.
+    for name, row in params.items():
+        if row.get("kind") == "design_parameter" and float(row["start"]) > 0:
+            return name
     for name, row in params.items():
         if row.get("kind") == "sketch_dimension" and float(row["start"]) > 0:
             return name
     for name, row in params.items():
         if float(row["start"]) > 0:
             return name
-    raise ValueError("Selected fabricated part has no numeric parameter or constrained-sketch dimension suitable for optimization")
+    raise ValueError("Selected fabricated part has no numeric parameter, sketch dimension, or independent design parameter suitable for optimization")
 
 
 def _resolve_variable_name(name: str, available: dict[str, dict[str, Any]]) -> str | None:
@@ -136,9 +205,12 @@ def _resolve_variable_name(name: str, available: dict[str, dict[str, Any]]) -> s
     exact = next((key for key in available if key.lower() == normalized), None)
     if exact:
         return exact
-    # Accept a semantic dimension name without requiring callers to know the sketch.
-    # prefix, e.g. {name:'width'} can resolve sketch.width when unambiguous.
-    suffix_matches = [key for key in available if key.lower().removeprefix("sketch.") == normalized]
+    # Permit concise semantic references when the suffix is unambiguous: `width` may
+    # address sketch.width or design.width depending on what actually drives the object.
+    suffix_matches = [
+        key for key in available
+        if key.lower().removeprefix("sketch.").removeprefix("design.") == normalized
+    ]
     return suffix_matches[0] if len(suffix_matches) == 1 else None
 
 
@@ -197,8 +269,6 @@ def _candidate_parameter_sets(variables: list[dict[str, Any]], max_candidates: i
         values = [lo + (hi - lo) * index / (levels - 1) for index in range(levels)]
         values.append(start)
         unique = sorted({round(value, 9) for value in values})
-        # Evaluate the baseline-nearest values first so a low candidate cap still gives
-        # the optimizer a useful reference plus smaller/larger alternatives.
         unique.sort(key=lambda value: (abs(value - start), value))
         grids.append(unique)
 
@@ -220,19 +290,28 @@ def _write_path(root: Any, path: list[Any], value: float) -> None:
     cursor[path[-1]] = float(value)
 
 
-def _candidate_params(obj: dict[str, Any], variables: list[dict[str, Any]], values: dict[str, float]) -> dict[str, Any]:
+def _candidate_changes(obj: dict[str, Any], variables: list[dict[str, Any]], values: dict[str, float]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     params = deepcopy(obj.get("params") or {})
     wrapper = {"params": params}
     by_name = {str(row["name"]): row for row in variables}
+    design_updates: list[dict[str, Any]] = []
     for name, value in values.items():
         definition = by_name.get(name)
         if definition is None:
             raise ValueError(f"Campaign variable {name!r} is not defined for the selected object")
+        if definition.get("kind") == "design_parameter":
+            design_updates.append({
+                "name": str(definition["parameter_name"]),
+                "value": float(value),
+                "unit": str(definition.get("unit") or ""),
+                "description": str(definition.get("description") or ""),
+            })
+            continue
         path = list(definition.get("path") or [])
         if not path or path[0] != "params":
             raise ValueError(f"Campaign variable {name!r} has an invalid mutation path")
         _write_path(wrapper, path, value)
-    return params
+    return params, design_updates
 
 
 def _failed_requirement_count(validation: dict[str, Any]) -> int:
@@ -268,8 +347,6 @@ def _independent_verifier(
     max_temperature_c: float | None,
     thermal: dict[str, Any],
 ) -> dict[str, Any]:
-    # The verifier deliberately recomputes the structural preview through the lower-level
-    # cantilever screen rather than trusting the optimizer's result object verbatim.
     independent = analysis.quick_cantilever(obj, force_n=force_n)
     linear_deflection = float(structural.get("max_deflection_mm", structural.get("max_displacement_mm", float("inf"))))
     independent_deflection = float(independent.get("max_deflection_mm", float("inf")))
@@ -319,25 +396,36 @@ def _run_campaign(self: Any, selected_object_id: str | None = None, payload: dic
 
     source_state = deepcopy(core.PROJECT)
     source_params = deepcopy(source_object.get("params") or {})
+    source_design_parameters = deepcopy(core.PROJECT.get("design_parameters") or {})
     candidates: list[dict[str, Any]] = []
 
     for index, values in enumerate(candidate_sets, start=1):
-        # Every candidate is a sibling copied from the exact source branch. No campaign
-        # candidate is allowed to become the parent of a later candidate by accident.
         core.switch_branch(source_branch)
         branch_seed = f"campaign-{_slug(objective)}-{index:02d}"
         core.create_branch(branch_seed, reason=f"Autonomous {objective} campaign candidate {index}")
         branch_name = core.ACTIVE_DESIGN
         candidate_obj = core.object_by_id(object_id)
-        params = _candidate_params(candidate_obj, variables, values)
+        params, design_updates = _candidate_changes(candidate_obj, variables, values)
 
         try:
-            core.execute(
-                "update",
-                {"id": object_id, "params": params},
-                actor="forge-optimizer",
-                reason=f"Campaign candidate {index}: {values}",
-            )
+            for update in design_updates:
+                existing = (core.PROJECT.get("design_parameters") or {}).get(update["name"])
+                current_value = existing.get("value") if isinstance(existing, dict) else existing
+                if isinstance(current_value, (int, float)) and abs(float(current_value) - float(update["value"])) <= 1e-12:
+                    continue
+                core.execute(
+                    "set_design_parameter",
+                    update,
+                    actor="forge-optimizer",
+                    reason=f"Campaign candidate {index}: set {update['name']}={update['value']}",
+                )
+            if params != (candidate_obj.get("params") or {}):
+                core.execute(
+                    "update",
+                    {"id": object_id, "params": params},
+                    actor="forge-optimizer",
+                    reason=f"Campaign candidate {index}: {values}",
+                )
             candidate_obj = core.object_by_id(object_id)
             metrics = core.object_metrics(candidate_obj)
             structural = analysis.linear_fea(candidate_obj, force_n=force_n)
@@ -410,9 +498,8 @@ def _run_campaign(self: Any, selected_object_id: str | None = None, payload: dic
         core.switch_branch(str(winner["branch"]))
     else:
         core.switch_branch(source_branch)
-        # Defensive proof that a failed campaign cannot mutate the source design.
         current_source = core.object_by_id(object_id)
-        if current_source.get("params") != source_params:
+        if current_source.get("params") != source_params or (core.PROJECT.get("design_parameters") or {}) != source_design_parameters:
             core.PROJECT.clear()
             core.PROJECT.update(deepcopy(source_state))
             core.BRANCHES[source_branch] = deepcopy(core.PROJECT)
