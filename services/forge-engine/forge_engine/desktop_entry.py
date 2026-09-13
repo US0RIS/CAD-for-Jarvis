@@ -4,7 +4,7 @@ import os
 
 import uvicorn
 
-from forge_engine.main import app
+from forge_engine.main_v2 import app
 
 
 def main() -> None:
