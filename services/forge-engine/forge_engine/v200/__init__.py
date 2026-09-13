@@ -69,6 +69,8 @@ from . import routing as _routing
 _routing.install(_legacy_main)
 from . import routing_surface as _routing_surface
 _routing_surface.install()
+from . import fluid_routing as _fluid_routing
+_fluid_routing.install()
 from . import workspace_bundle as _workspace_bundle
 _workspace_bundle.install()
 from . import manufacturing_api as _manufacturing_api
