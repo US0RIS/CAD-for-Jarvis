@@ -10,6 +10,11 @@ branch-safe autonomous multi-variant engineering campaigns.
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
 
+# v110 remains the execution substrate, but every externally visible project/bundle
+# created while v200 is installed must carry the release version being developed.
+from ..v110 import core as _core
+_core.APP_VERSION = DESIGN_INTELLIGENCE_VERSION
+
 from . import design_intelligence
 from . import intent_hotfix as _intent_hotfix
 _intent_hotfix.install()
