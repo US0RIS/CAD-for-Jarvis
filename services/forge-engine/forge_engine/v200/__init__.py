@@ -12,11 +12,12 @@ analysis, assembly mass properties and rigid-body dynamics, canonical electrical
 schematics/net and rail screening, canonical multi-body steady-state thermal networks,
 canonical steady-state incompressible fluid/hydraulic networks, canonical cable/tube
 route geometry and bend screening, canonical safety/failure-mode analysis with
-current-design evidence binding, transform-independent canonical mesh caching,
-portable multi-branch workspaces, machine-readable analysis contracts, full
-engineering-state branch diffs, a project API surface for canonical engineering
-records, and branch-safe autonomous multi-variant engineering campaigns whose
-structural ranking uses canonical project SolidFEA when available.
+current-design evidence binding, deterministic mechanism kinematics with sampled exact
+B-rep interference screening, transform-independent canonical mesh caching, portable
+multi-branch workspaces, machine-readable analysis contracts, full engineering-state
+branch diffs, a project API surface for canonical engineering records, and branch-safe
+autonomous multi-variant engineering campaigns whose structural ranking uses canonical
+project SolidFEA when available.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -84,6 +85,8 @@ from . import canonical_fingerprint as _canonical_fingerprint
 _canonical_fingerprint.install()
 from . import safety_evidence as _safety_evidence
 _safety_evidence.install()
+from . import mechanism_kinematics as _mechanism_kinematics
+_mechanism_kinematics.install(_legacy_main)
 from . import campaign_intelligence as _campaign_intelligence
 _campaign_intelligence.install(_legacy_main)
 from . import feedback_intelligence as _feedback_intelligence
@@ -100,6 +103,8 @@ from . import routing_contract as _routing_contract
 _routing_contract.install()
 from . import safety_contract as _safety_contract
 _safety_contract.install()
+from . import kinematics_contract as _kinematics_contract
+_kinematics_contract.install()
 from . import engineering_diff as _engineering_diff
 _engineering_diff.install()
 from . import project_surface as _project_surface
