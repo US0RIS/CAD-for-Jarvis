@@ -6,9 +6,13 @@ ForgeCAD 1.x stopped after applying one model plan. 2.0 treats deterministic val
 as feedback: hard failures are summarized, the planner gets a bounded opportunity to
 repair them, and validation is repeated. Warnings and unknown qualitative requirements
 do not cause an infinite redesign loop.
+
+CadQuery/OpenCascade validation deliberately remains on Forge Engine's main thread.
+The Windows scene path previously proved that moving OCC geometry work through
+``asyncio.to_thread`` can deadlock native state. Validation can invoke assembly geometry,
+so the same thread-affinity rule applies here.
 """
 
-import asyncio
 import json
 from copy import deepcopy
 from typing import Any
@@ -114,7 +118,7 @@ async def run_agent_job_v2(legacy: Any, job: EngineeringJob, request: Any) -> No
 
         validations: list[dict[str, Any]] = []
         await legacy.update_job(job, state=JobState.VERIFYING, progress=0.68, message="Testing the design against deterministic reality checks")
-        validation = await asyncio.to_thread(legacy.PROJECT.validation)
+        validation = legacy.PROJECT.validation()
         validations.append(validation)
 
         repair_iteration = 0
@@ -142,7 +146,7 @@ async def run_agent_job_v2(legacy: Any, job: EngineeringJob, request: Any) -> No
             if job.state == JobState.CANCELLED:
                 return
             await legacy.update_job(job, state=JobState.VERIFYING, progress=min(0.84 + repair_iteration * 0.07, 0.95), message=f"Re-testing repaired design · pass {repair_iteration + 1}")
-            next_validation = await asyncio.to_thread(legacy.PROJECT.validation)
+            next_validation = legacy.PROJECT.validation()
             validations.append(next_validation)
             repair_iteration += 1
             fingerprint = validation_fingerprint(next_validation)
