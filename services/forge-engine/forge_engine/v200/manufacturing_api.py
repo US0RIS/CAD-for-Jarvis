@@ -42,8 +42,10 @@ def install(legacy: Any) -> None:
     async def p2s_export(request: ExportRequest) -> Response:
         tolerance = min(1.0, max(0.03, float(request.tolerance_mm)))
         try:
-            payload = await asyncio.to_thread(
-                manufacturing.geometry_3mf,
+            # CadQuery/OpenCascade tessellation stays on Forge Engine's main thread.
+            # Moving OCC work through asyncio.to_thread has caused Windows deadlocks in
+            # the authoritative scene path; manufacturing uses the same kernel.
+            payload = manufacturing.geometry_3mf(
                 core.PROJECT,
                 core.tessellate,
                 object_ids=request.object_ids or None,
@@ -67,13 +69,14 @@ def install(legacy: Any) -> None:
     async def p2s_slice(request: SliceRequest) -> Response:
         tolerance = min(1.0, max(0.03, float(request.tolerance_mm)))
         try:
-            geometry = await asyncio.to_thread(
-                manufacturing.geometry_3mf,
+            geometry = manufacturing.geometry_3mf(
                 core.PROJECT,
                 core.tessellate,
                 object_ids=request.object_ids or None,
                 tolerance_mm=tolerance,
             )
+            # The slicer is a subprocess and does not touch OpenCascade state, so it is
+            # safe to keep that potentially slow external process off the event loop.
             sliced, details = await asyncio.to_thread(
                 manufacturing.slice_3mf_bytes,
                 geometry,
