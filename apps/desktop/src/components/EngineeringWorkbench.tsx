@@ -18,6 +18,7 @@ import {
   type RegistryStatsPayload,
   type ValidationPayload,
 } from '../api/engine';
+import { ToleranceSummary } from './ToleranceSummary';
 import '../styles/engineering-workbench.css';
 
 interface Props {
@@ -271,7 +272,7 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
 
   return <div className="component-library engineering-analysis" data-testid="analysis-workspace">
     <h2>Engineering validation</h2>
-    <p>Deterministic structural, modal, thermal, manufacturability, electrical and assembly screening.</p>
+    <p>Deterministic structural, modal, thermal, tolerance, manufacturability, electrical and assembly screening.</p>
     {error && <div className="runtime-banner error"><ShieldAlert size={15}/><div><strong>Validation failed</strong><span>{error}</span></div></div>}
     <div className="campaign-card">
       <div className="campaign-title">{validation?.ok ? <CheckCircle2 size={18}/> : <ShieldAlert size={18}/>}<div><strong>{validation?.ok ? 'Reality checks pass' : 'Engineering risks need attention'}</strong><span>{validation ? `${validation.counts.error} errors · ${validation.counts.warning} warnings · ${validation.counts.info} info` : 'Loading validation…'}</span></div></div>
@@ -292,6 +293,8 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
         </div>;
       })}</div>
     </div>}
+
+    <ToleranceSummary revision={project?.revision}/>
 
     <div className="campaign-card campaign-console" data-testid="campaign-console">
       <div className="campaign-title"><Activity size={18}/><div><strong>Autonomous variant campaign</strong><span>Generate sibling branches, screen each candidate, independently verify gates, and activate the best unverified result.</span></div></div>
