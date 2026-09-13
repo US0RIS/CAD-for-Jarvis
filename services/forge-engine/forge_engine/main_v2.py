@@ -2,14 +2,14 @@ from __future__ import annotations
 
 """ForgeCAD 2.0 application entrypoint.
 
-The v1.1 FastAPI surface and deterministic CAD execution engine remain intact.  This
+The v1.1 FastAPI surface and deterministic CAD execution engine remain intact. This
 module replaces the one-shot agent planner with a two-stage design-intelligence loop:
 
 1. decompose the user goal into requirements and functional capabilities;
 2. resolve each capability against existing assets, real catalog candidates, software,
    or custom-part synthesis before asking the model for typed CAD operations.
 
-That separation is the core ForgeCAD 2.0 architectural change.  The model chooses what
+That separation is the core ForgeCAD 2.0 architectural change. The model chooses what
 the system must do; Forge Engine still owns geometry, component identity, state, and
 validation.
 """
@@ -76,7 +76,7 @@ async def qwen_architecture(text: str) -> dict[str, Any]:
         "{id,capability,description,kind,required,search_terms,constraints,depends_on}. "
         "Think across mechanical structure, sensing, actuation, power, compute, connectivity, software, thermal management, interfaces, and safety where relevant. "
         "A missing part in the current design is not a blocker; describe the required capability. External services are software capabilities, not physical catalog parts. "
-        "Ask a question only when a genuinely blocking requirement cannot be safely inferred."
+        "Infer ordinary implementation details when safe. Ask a question only when a genuinely blocking requirement cannot be safely inferred."
     )
     try:
         raw = await _model_json(
@@ -87,8 +87,6 @@ async def qwen_architecture(text: str) -> dict[str, Any]:
         )
         return design_intelligence.normalize_architecture(raw, text, project)
     except Exception:
-        # The deterministic bootstrap means architecture discovery still exists when a
-        # small model emits malformed JSON or is temporarily unavailable.
         return design_intelligence.bootstrap_architecture(text, project)
 
 
@@ -96,14 +94,21 @@ def _planner_system() -> str:
     return (
         "You are ForgeCAD 2.0's engineering planner. Return JSON only with keys summary, commands, checks. "
         "You are given a resolved functional architecture. Treat the current assembly as a starting point, never as the component universe. "
-        "For each required function: reuse existing_assets when suitable; otherwise select a candidate_component by its exact ID; "
-        "if the function is software, write or update code in an existing programmable workspace; only synthesize a custom part when no catalog candidate is suitable. "
-        "Do not invent object IDs or component IDs. Do not invent a physical component for an external software service. "
-        "Each command is {op,args}. Allowed operations: add, add_component, replace_component, sync_component, update, transform, "
-        "mate_components, connect_interfaces, disconnect, delete, add_feature, delete_feature, add_load, add_constraint, "
-        "set_requirement, add_bom_item, add_note, code_write, code_delete, code_rename, project_name, settings. "
-        "Purchased components must use exact registry IDs and may not be scaled or have their authoritative geometry rewritten. "
-        "Use object_id from existing_assets for transforms, connections, and code_write. When credentials or deployment-specific values are unknown, "
+        "For each required function: reuse existing_assets when suitable; otherwise select candidate_components by exact ID; "
+        "if the function is software, write or update code in an existing programmable workspace; synthesize custom fabricated geometry when no catalog part should exist. "
+        "Do not invent object UUIDs or component IDs. Do not invent a physical component for an external software service. "
+        "Each command is {op,args} and creation commands may also include a top-level symbolic handle using {as:'name'}. "
+        "Later command arguments may reference a created object as '$name'; Forge Engine resolves it to the actual UUID after creation. "
+        "Use this whenever a new part must subsequently be moved, mated, wired, machined, or programmed in the same plan. "
+        "Allowed operations: add, add_component, replace_component, sync_component, update, transform, mate_components, connect_interfaces, disconnect, delete, "
+        "add_feature, delete_feature, add_load, add_constraint, set_requirement, add_bom_item, add_note, code_write, code_delete, code_rename, project_name, settings. "
+        "For purchased hardware use add_component with an exact candidate ID; purchased components may not be scaled or have authoritative geometry rewritten. "
+        "For custom fabricated parts use add with kind box, cylinder, sphere, sketch_extrude, or revolve. "
+        "box params: {x,y,z}; cylinder: {radius,height}; sphere: {radius}; sketch_extrude: {height,sketch:{type:'rectangle'|'circle'|'polygon',width?,height?,radius?,points?}}; "
+        "revolve: {points:[[radius,z],...],angle_deg}. Supply material, transform, and semantic role/tags when useful. "
+        "After creating custom geometry, add_feature can add holes {type:'hole',diameter,axis,x,y,z}, circular/rectangular pockets, fillets, or chamfers. "
+        "Prefer editable parametric geometry over a visually plausible but dimensionally arbitrary shape. Never use scaling to hide incorrect dimensions. "
+        "Use object_id from existing_assets for existing transforms, connections, and code_write. When credentials or deployment-specific values are unknown, "
         "generate configurable placeholders and identify them in checks rather than refusing the design. "
         "Keep physically verified baselines protected; Forge Engine will fork them automatically. "
         "The plan should make concrete progress whenever the architecture has a resolved existing asset, catalog candidate, software host, or custom-part path."
@@ -115,7 +120,7 @@ async def qwen_plan(text: str) -> dict[str, Any]:
     architecture = await qwen_architecture(text)
     context = design_intelligence.build_planner_context(text, architecture, project)
     payload = {"request": text, "design_context": context}
-    plan = await _model_json(_planner_system(), payload, num_predict=2400, temperature=0.05)
+    plan = await _model_json(_planner_system(), payload, num_predict=2800, temperature=0.05)
     if not isinstance(plan.get("commands", []), list):
         raise ValueError("Engineering planner commands must be a list")
 
@@ -127,15 +132,13 @@ async def qwen_plan(text: str) -> dict[str, Any]:
             "previous_plan": plan,
             "critique": design_intelligence.repair_instruction(reason),
         }
-        plan = await _model_json(_planner_system(), repaired_payload, num_predict=2600, temperature=0.04)
+        plan = await _model_json(_planner_system(), repaired_payload, num_predict=3000, temperature=0.04)
         if not isinstance(plan.get("commands", []), list):
             raise ValueError("Replanned engineering commands must be a list")
         repair_again, reason_again = design_intelligence.needs_plan_repair(plan, context, text)
         if repair_again:
             raise ValueError(f"ForgeCAD 2.0 planner did not produce an actionable design plan: {reason_again}")
 
-    # Preserve the architecture in the job result so the UI and .focad format can expose
-    # the rationale/requirements without trusting hidden model state.
     plan["architecture"] = {
         "goal": context.get("goal"),
         "requirements": context.get("requirements"),
@@ -184,8 +187,8 @@ async def qwen_reply(text: str, job: EngineeringJob) -> str:
     return "".join(answer).strip()
 
 
-# Existing v1.1 job execution resolves these names from forge_engine.main at runtime, so
-# replacing them here upgrades the agent without duplicating the stable CAD API surface.
+# Existing v1.1 job execution resolves these names from forge_engine.main at runtime.
+# v200 installs the bounded agent loop and these replacements upgrade its reasoning calls.
 legacy.qwen_plan = qwen_plan
 legacy.qwen_reply = qwen_reply
 
