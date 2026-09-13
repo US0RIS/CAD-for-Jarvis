@@ -63,7 +63,8 @@ function detailFor(key: DomainKey, data: LooseRecord, count: number): string {
     const verified = array(data.failure_modes).filter((row) => record(row)?.verification_status === 'passed').length;
     return `${count} failure mode${count === 1 ? '' : 's'} · ${verified} current-design verified`;
   }
-  return `${count} kinematic joint${count === 1 ? '' : 's'} · ${collisionCount(data)} sampled collision${collisionCount(data) === 1 ? '' : 's'}`;
+  const collisions = collisionCount(data);
+  return `${count} kinematic joint${count === 1 ? '' : 's'} · ${collisions} sampled collision${collisions === 1 ? '' : 's'}`;
 }
 
 function pretty(value: unknown): string {
@@ -71,7 +72,7 @@ function pretty(value: unknown): string {
   return text.length > 4800 ? `${text.slice(0, 4800)}\n…` : text;
 }
 
-export function EngineeringDomainSummary({ validation, project }: { validation: ValidationPayload | null; project: ProjectPayload | null }) {
+export function EngineeringDomainSummary({ validation, project, mode = 'analysis' }: { validation: ValidationPayload | null; project: ProjectPayload | null; mode?: 'design' | 'analysis' }) {
   const root = (validation ?? {}) as unknown as LooseRecord;
   const projectRoot = (project ?? {}) as unknown as LooseRecord;
   const engineeringState = record(projectRoot.engineering_state);
@@ -95,7 +96,7 @@ export function EngineeringDomainSummary({ validation, project }: { validation: 
       </div>
     </div>
 
-    <div className="campaign-card" data-testid="analysis-domains">
+    {mode === 'analysis' && <div className="campaign-card" data-testid="analysis-domains">
       <div className="campaign-title"><Activity size={18}/><div><strong>System analyses</strong><span>Deterministic domain evidence from the same canonical project state. Unknown inputs remain unknown.</span></div></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
         {DOMAINS.map(({ key, title, icon: Icon, description }) => {
@@ -117,6 +118,6 @@ export function EngineeringDomainSummary({ validation, project }: { validation: 
         })}
       </div>
       <div className="campaign-disclaimer"><ShieldAlert size={11}/>Analysis results are engineering-iteration evidence. Solver limits and provenance remain visible; none of these cards converts screening into certification or physical verification.</div>
-    </div>
+    </div>}
   </>;
 }
