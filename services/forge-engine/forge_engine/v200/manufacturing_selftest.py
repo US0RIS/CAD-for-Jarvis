@@ -6,6 +6,7 @@ from io import BytesIO
 import zipfile
 
 from ..v110 import core
+from . import design_intelligence
 from . import manufacturing
 
 
@@ -55,7 +56,7 @@ def run() -> dict[str, object]:
     fabricated = manufacturing.fabricated_objects(project)
     assert {row["id"] for row in fabricated} == {"printed-bracket", "oversize-panel"}
 
-    bracket = manufacturing.analyze_object(fabricated[0], core.build_shape)
+    bracket = manufacturing.analyze_object(next(row for row in fabricated if row["id"] == "printed-bracket"), core.build_shape)
     assert bracket["fits_build_volume"] is True
     assert bracket["wall_thickness_status"] == "declared"
 
@@ -84,7 +85,8 @@ def run() -> dict[str, object]:
     assert command[command.index("--arrange") + 1] == "1"
     assert command[command.index("--slice") + 1] == "0"
     assert command[command.index("--export-3mf") + 1].endswith(".3mf")
-    assert "p2s-machine.json;/profiles/process.json" in command
+    assert "/profiles/p2s-machine.json;/profiles/process.json" in command
+    assert "/profiles/petg.json" in command
 
     status = manufacturing.p2s_status(project, core.build_shape)
     assert status["resource"]["build_volume_mm"] == [256.0, 256.0, 256.0]
@@ -92,12 +94,27 @@ def run() -> dict[str, object]:
     assert status["all_parts_fit_individually"] is False
     assert status["lan_control"]["implemented"] is False
 
+    # Manufacturing must be part of design reasoning, not a disconnected export tool.
+    request = "Design a printable enclosure for my Bambu P2S."
+    architecture = design_intelligence.bootstrap_architecture(request, {"parts": []})
+    context = design_intelligence.build_planner_context(request, architecture, {"parts": []})
+    manufacturing_rows = [row for row in context["functions"] if row.get("capability") == "additive_manufacturing"]
+    assert len(manufacturing_rows) == 1
+    assert manufacturing_rows[0]["status"] == "manufacturing_resource"
+    assert manufacturing_rows[0]["candidate_components"] == []
+    assert manufacturing_rows[0]["constraints"]["build_volume_mm"] == [256.0, 256.0, 256.0]
+    resources = context["available_manufacturing_resources"]
+    assert len(resources) == 1 and resources[0]["id"] == "bambu-lab-p2s"
+    assert context["manufacturing_policy"]["primary_exchange_format"] == "3mf"
+    assert context["manufacturing_policy"]["direct_printer_control_available"] is False
+
     return {
         "printer": status["resource"]["model"],
         "fabricated_parts": status["fabricated_part_count"],
         "3mf_bytes": len(payload),
         "build_volume_mm": status["resource"]["build_volume_mm"],
         "headless_slice_ready": status["slicer"]["ready_for_headless_slice"],
+        "planner_manufacturing_status": manufacturing_rows[0]["status"],
     }
 
 

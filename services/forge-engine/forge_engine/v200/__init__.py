@@ -11,6 +11,8 @@ DESIGN_INTELLIGENCE_VERSION = "2.0.0"
 from . import design_intelligence
 from . import intent_hotfix as _intent_hotfix
 _intent_hotfix.install()
+from . import manufacturing_intelligence as _manufacturing_intelligence
+_manufacturing_intelligence.install()
 from . import execution_enrichment as _execution_enrichment
 _execution_enrichment.install()
 from . import agent_loop as _agent_loop
