@@ -36,10 +36,16 @@ const jobStateLabels: Record<JobPayload['state'], string> = {
 
 // Canonical catalog thumbnails are rendered by OpenCascade on Forge Engine's main
 // thread because moving that native work to Windows worker threads is unsafe. Prime
-// visible thumbnails serially so image rendering cannot starve interactive search or
-// mutation requests. The eventual <img> uses the normal canonical URL from browser
-// cache, preserving the public image contract and provenance headers.
+// visible thumbnails serially, after a short interaction grace period, so native image
+// generation cannot starve component search or design-mutation requests. A small
+// cooldown between renders gives a changed query time to unmount/cancel queued rows.
 let componentThumbnailQueue: Promise<void> = Promise.resolve();
+const THUMBNAIL_GRACE_MS = 500;
+const THUMBNAIL_COOLDOWN_MS = 350;
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
 
 function formatElapsed(seconds: number) {
   const safe = Math.max(0, Math.floor(seconds));
@@ -90,6 +96,7 @@ function ComponentImage({ item }: { item: ComponentPayload }) {
     const uri = item.image?.uri;
     if (!node || requested || failed || !uri) return;
     let cancelled = false;
+    let graceTimer: number | null = null;
 
     const prime = () => {
       if (queuedRef.current) return;
@@ -104,21 +111,37 @@ function ComponentImage({ item }: { item: ComponentPayload }) {
           // resolves from HTTP cache instead of starting a second native render.
           await response.blob();
           if (!cancelled) setRequested(true);
+          await delay(THUMBNAIL_COOLDOWN_MS);
         })
         .catch(() => { if (!cancelled) setFailed(true); });
     };
 
+    const schedulePrime = () => {
+      if (graceTimer != null || queuedRef.current) return;
+      graceTimer = window.setTimeout(() => {
+        graceTimer = null;
+        prime();
+      }, THUMBNAIL_GRACE_MS);
+    };
+
     if (!('IntersectionObserver' in window)) {
-      prime();
-      return () => { cancelled = true; };
+      schedulePrime();
+      return () => {
+        cancelled = true;
+        if (graceTimer != null) window.clearTimeout(graceTimer);
+      };
     }
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some((entry) => entry.isIntersecting)) return;
-      prime();
+      schedulePrime();
       observer.disconnect();
     }, { rootMargin: '120px 0px', threshold: 0.01 });
     observer.observe(node);
-    return () => { cancelled = true; observer.disconnect(); };
+    return () => {
+      cancelled = true;
+      if (graceTimer != null) window.clearTimeout(graceTimer);
+      observer.disconnect();
+    };
   }, [failed, item.image?.uri, requested]);
 
   return <div ref={hostRef} style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center' }}>
@@ -404,6 +427,11 @@ export default function App() {
       setSceneReady(false);
       const result = await addComponent(id);
       setProject(result.project);
+      setComponents((items) => items.map((item) => item.id === id ? {
+        ...item,
+        added: true,
+        instance_id: result.component.instance_id ?? item.instance_id ?? null,
+      } : item));
       setSelectedId(result.component.instance_id ?? null);
       setRightTab('properties');
       setComponentCatalogRevision((revision) => revision + 1);
