@@ -5,8 +5,9 @@ from __future__ import annotations
 A ``.focad`` file is a ZIP container with a stable, inspectable structure intended to
 be authored by ForgeCAD itself *or by an external engineering agent such as ChatGPT*.
 It carries canonical project JSON, frozen purchased-component snapshots, embedded
-code, and every local CAD asset needed to reproduce component geometry on another
-workstation. Paths inside project state are content-addressed / relative.
+code, every local CAD asset needed to reproduce component geometry on another
+workstation, and (when exported from the desktop) the complete multi-branch design
+workspace.
 
 The extension is deliberately not ``.zip`` even though the container uses ZIP so a
 ForgeCAD design can be handed around as one first-class document. Older
@@ -43,14 +44,21 @@ def _sanitize_component(component:dict[str,Any])->dict[str,Any]:
     return c
 
 def _component_snapshots(project:dict[str,Any])->list[dict[str,Any]]:
-    seen={};
+    seen={}
     for obj in project.get("objects",[]):
         snap=obj.get("component_snapshot")
         if isinstance(snap,dict) and snap.get("id"):seen[str(snap["id"])]=_sanitize_component(snap)
     return list(seen.values())
 
-def export_bundle_bytes(project:dict[str,Any])->bytes:
-    p=deepcopy(project);assets={}
+def _projects_for_export(project:dict[str,Any],workspace:dict[str,Any]|None)->list[dict[str,Any]]:
+    projects=[project]
+    if isinstance(workspace,dict):
+        for branch in (workspace.get("branches") or {}).values():
+            if isinstance(branch,dict):projects.append(branch)
+    return projects
+
+def _sanitize_project_assets(project:dict[str,Any],assets:dict[str,Path])->dict[str,Any]:
+    p=deepcopy(project)
     for obj in p.get("objects",[]):
         snap=obj.get("component_snapshot")
         if not isinstance(snap,dict):continue
@@ -60,6 +68,25 @@ def export_bundle_bytes(project:dict[str,Any])->bytes:
             if path and path.is_file():
                 rel=str(asset.get("relative_path") or f"{asset.get('sha256','asset')[:16]}_{Path(asset.get('filename','asset.step')).name}")
                 assets[rel]=path
+    return p
+
+def _sanitize_workspace(workspace:dict[str,Any],assets:dict[str,Path])->dict[str,Any]:
+    result={
+        "active":str(workspace.get("active") or "main"),
+        "branches":{},
+        "designs":deepcopy(workspace.get("designs") or {}),
+    }
+    for name,branch in (workspace.get("branches") or {}).items():
+        if isinstance(branch,dict):result["branches"][str(name)]=_sanitize_project_assets(branch,assets)
+    return result
+
+def export_bundle_bytes(project:dict[str,Any],workspace:dict[str,Any]|None=None)->bytes:
+    assets={}
+    p=_sanitize_project_assets(project,assets)
+    sanitized_workspace=_sanitize_workspace(workspace,assets) if isinstance(workspace,dict) else None
+    snapshots={}
+    for candidate in _projects_for_export(p,sanitized_workspace):
+        for snap in _component_snapshots(candidate):snapshots[str(snap["id"])]=snap
     manifest={
         "format":FORMAT_ID,
         "format_name":FORMAT_NAME,
@@ -70,11 +97,15 @@ def export_bundle_bytes(project:dict[str,Any])->bytes:
         "project_file":"project.json",
         "component_file":"components.json",
         "asset_count":len(assets),
-        "component_count":len(_component_snapshots(p)),
+        "component_count":len(snapshots),
     }
+    if sanitized_workspace is not None:
+        manifest["workspace_file"]="workspace.json"
+        manifest["branch_count"]=len(sanitized_workspace.get("branches") or {})
     out=io.BytesIO()
     with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED) as z:
-        z.writestr("manifest.json",json.dumps(manifest,indent=2));z.writestr("project.json",json.dumps(p,indent=2));z.writestr("components.json",json.dumps({"schema_version":registry.SCHEMA_VERSION,"components":_component_snapshots(p)},indent=2))
+        z.writestr("manifest.json",json.dumps(manifest,indent=2));z.writestr("project.json",json.dumps(p,indent=2));z.writestr("components.json",json.dumps({"schema_version":registry.SCHEMA_VERSION,"components":list(snapshots.values())},indent=2))
+        if sanitized_workspace is not None:z.writestr("workspace.json",json.dumps(sanitized_workspace,indent=2))
         for rel,path in assets.items():z.writestr("assets/"+rel.replace("\\","/"),path.read_bytes())
     return out.getvalue()
 
@@ -85,6 +116,21 @@ def _safe_extract(z:zipfile.ZipFile,root:Path)->None:
         try:target.relative_to(root)
         except ValueError:raise ValueError(".focad file contains unsafe path")
     z.extractall(root)
+
+def _validate_workspace(raw:Any)->dict[str,Any]|None:
+    if raw is None:return None
+    if not isinstance(raw,dict):raise ValueError(".focad workspace is malformed")
+    active=str(raw.get("active") or "")
+    branches=raw.get("branches")
+    designs=raw.get("designs")
+    if not active or not isinstance(branches,dict) or not isinstance(designs,dict):raise ValueError(".focad workspace is malformed")
+    clean_branches={}
+    for name,branch in branches.items():
+        if not isinstance(branch,dict) or not isinstance(branch.get("objects"),list):raise ValueError(f".focad branch {name!r} is malformed")
+        clean_branches[str(name)]=branch
+    if active not in clean_branches:raise ValueError(".focad workspace active branch is missing")
+    clean_designs={str(name):deepcopy(meta) for name,meta in designs.items() if isinstance(meta,dict)}
+    return {"active":active,"branches":clean_branches,"designs":clean_designs}
 
 def import_bundle_bytes(data:bytes)->dict[str,Any]:
     if len(data)>600*1024*1024:raise ValueError(".focad design exceeds 600 MB")
@@ -102,6 +148,12 @@ def import_bundle_bytes(data:bytes)->dict[str,Any]:
         if version!=BUNDLE_VERSION:raise ValueError(f"Unsupported .focad version {version}")
         project=json.loads(project_path.read_text(encoding="utf-8"))
         if not isinstance(project,dict) or not isinstance(project.get("objects"),list):raise ValueError(".focad project is malformed")
+        workspace=None
+        workspace_name=str(manifest.get("workspace_file") or "")
+        if workspace_name:
+            workspace_path=root/workspace_name
+            if not workspace_path.is_file():raise ValueError(".focad manifest references a missing workspace file")
+            workspace=_validate_workspace(json.loads(workspace_path.read_text(encoding="utf-8")))
         components_path=root/"components.json";installed=[]
         if components_path.is_file():
             payload=json.loads(components_path.read_text(encoding="utf-8"))
@@ -122,4 +174,4 @@ def import_bundle_bytes(data:bytes)->dict[str,Any]:
         # Normalize old bundle manifests in the response. Callers can always identify an
         # imported document as a .focad-compatible design after successful validation.
         normalized={**manifest,"format":FORMAT_ID,"format_name":FORMAT_NAME,"format_version":version,"bundle_version":version}
-        return {"ok":True,"project":project,"components_installed":installed,"assets_restored":copied,"manifest":normalized}
+        return {"ok":True,"project":project,"workspace":workspace,"components_installed":installed,"assets_restored":copied,"manifest":normalized}
