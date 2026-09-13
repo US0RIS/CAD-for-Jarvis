@@ -13,6 +13,7 @@ export interface ForgeDesktopBridge {
     chrome: string;
   };
   getEngineConnection(): Promise<EngineConnection>;
+  reportComponentCatalogState(state: 'ready' | 'failed', detail?: string): void;
 }
 
 const bridge: ForgeDesktopBridge = Object.freeze({
@@ -22,6 +23,7 @@ const bridge: ForgeDesktopBridge = Object.freeze({
     chrome: process.versions.chrome,
   },
   getEngineConnection: () => ipcRenderer.invoke('forgecad:connection') as Promise<EngineConnection>,
+  reportComponentCatalogState: (state, detail) => ipcRenderer.send('forgecad:component-catalog-state', state, detail),
 });
 
 contextBridge.exposeInMainWorld('forgeDesktop', bridge);
