@@ -13,7 +13,7 @@ on:
 
 jobs:
   transactional-design:
-    name: Functional architecture, CAD, and manufacturing
+    name: Functional architecture, campaigns, CAD, and manufacturing
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -32,6 +32,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v200.selftest
+      - name: Run ForgeCAD 2.0 autonomous campaign self-test
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v200-campaign-selftest
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v200.campaign_selftest
       - name: Run ForgeCAD 2.0 P2S manufacturing self-test
         env:
           PYTHONPATH: services/forge-engine
