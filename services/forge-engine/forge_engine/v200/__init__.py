@@ -55,6 +55,8 @@ from . import rigid_body_dynamics as _rigid_body_dynamics
 _rigid_body_dynamics.install(_legacy_main)
 from . import electrical_design as _electrical_design
 _electrical_design.install(_legacy_main)
+from . import electrical_history as _electrical_history
+_electrical_history.install()
 from . import electrical_validation as _electrical_validation
 _electrical_validation.install()
 from . import workspace_bundle as _workspace_bundle
