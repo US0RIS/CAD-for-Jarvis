@@ -9,8 +9,9 @@ expression-driven design parameters, branch-linked real-world evidence and feedb
 real 3D solid finite-element screening for supported geometry including canonical
 project loads/supports and parametric load cases, transform-independent canonical mesh
 caching, portable multi-branch workspaces, machine-readable analysis contracts, full
-engineering-state branch diffs, and branch-safe autonomous multi-variant engineering
-campaigns whose structural ranking uses canonical project SolidFEA when available.
+engineering-state branch diffs, a project API surface for canonical engineering records,
+and branch-safe autonomous multi-variant engineering campaigns whose structural ranking
+uses canonical project SolidFEA when available.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -62,5 +63,7 @@ from . import analysis_contracts as _analysis_contracts
 _analysis_contracts.install(_legacy_main)
 from . import engineering_diff as _engineering_diff
 _engineering_diff.install()
+from . import project_surface as _project_surface
+_project_surface.install()
 
 __all__ = ["DESIGN_INTELLIGENCE_VERSION", "design_intelligence"]
