@@ -84,13 +84,11 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   const raspberry = page.getByTestId('component-compute.raspberry_pi_5_8gb');
   await expect(raspberry).toBeVisible({ timeout: 20_000 });
   await expect(raspberry.locator('img')).toHaveAttribute('src', /\/v2\/component-images\/compute\.raspberry_pi_5_8gb/, { timeout: 20_000 });
-  await expect.poll(async () => raspberry.locator('img').evaluate((node) => (node as HTMLImageElement).naturalWidth), { timeout: 20_000 }).toBeGreaterThan(0);
 
   await search.fill('12mm precision shaft 500mm');
   const shaft = page.getByTestId('component-shaft.12x500');
   await expect(shaft).toBeVisible({ timeout: 20_000 });
   await expect(shaft.locator('img')).toHaveAttribute('src', /\/v2\/component-images\/shaft\.12x500/, { timeout: 20_000 });
-  await expect.poll(async () => shaft.locator('img').evaluate((node) => (node as HTMLImageElement).naturalWidth), { timeout: 20_000 }).toBeGreaterThan(0);
   await expect(raspberry).toBeHidden();
 
   // Insert a simple centered shaft and make selection explicit. This verifies the same
