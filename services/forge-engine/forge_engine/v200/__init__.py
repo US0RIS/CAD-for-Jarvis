@@ -6,9 +6,9 @@ resolution, candidate discovery, plan quality gates, canonical requirement captu
 a bounded design/validate/repair loop, manufacturing-resource integration including
 branch-safe oversized-part splitting, constraint-driven parametric sketches, named
 expression-driven design parameters, branch-linked real-world evidence and feedback,
-real 3D solid finite-element screening for supported geometry, transform-independent
-canonical mesh caching, portable multi-branch workspaces, and branch-safe autonomous
-multi-variant engineering campaigns.
+real 3D solid finite-element screening for supported geometry including canonical
+project loads/supports, transform-independent canonical mesh caching, portable
+multi-branch workspaces, and branch-safe autonomous multi-variant engineering campaigns.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -34,6 +34,8 @@ from . import sketch_solver as _sketch_solver
 _sketch_solver.install(_legacy_main)
 from . import structural_fea as _structural_fea
 _structural_fea.install(_legacy_main)
+from . import project_structural as _project_structural
+_project_structural.install(_legacy_main)
 from . import manufacturing_split as _manufacturing_split
 _manufacturing_split.install(_legacy_main)
 from . import scene_cache as _scene_cache
