@@ -4,6 +4,7 @@ import {
   Wrench, X,
 } from 'lucide-react';
 import { engineFetch, engineRawFetch, type ProjectPayload } from '../api/engine';
+import { ManufacturingSplitControl } from './ManufacturingSplitControl';
 import '../styles/manufacture.css';
 
 type WarningPayload = { code: string; message: string };
@@ -338,6 +339,16 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
                 <small>{orientation.evaluated_orientations} right-handed orthogonal poses · {orientation.method ?? 'mesh overhang screen'}</small>
               </div>}
               {part.warnings.length > 0 && <div className="manufacture-warnings">{part.warnings.slice(0, 3).map((warning) => <div key={`${part.id}-${warning.code}`}><AlertTriangle size={10}/><span>{warning.message}</span></div>)}</div>}
+              {oversize && part.eligible && <ManufacturingSplitControl
+                part={part}
+                onError={(message) => setError(message)}
+                onApplied={(response) => {
+                  setLastAction(`Created ${response.split.piece_ids.length} printable bodies on branch ${response.split.split_branch}. Joint strength remains unverified.`);
+                  setSelected(new Set(response.split.piece_ids));
+                  if (response.split.piece_ids[0]) onSelectPart(response.split.piece_ids[0]);
+                  void refresh();
+                }}
+              />}
               {(oversize || materialWarning) && <button className="manufacture-repair" onClick={() => { onSelectPart(part.id); onDraftRedesign(part); }}><Wrench size={11}/>Ask Copilot to redesign</button>}
             </div>;
           })}
