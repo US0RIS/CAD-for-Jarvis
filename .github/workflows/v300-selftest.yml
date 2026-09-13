@@ -1,0 +1,42 @@
+name: ForgeCAD 3.0 physical world model
+
+on:
+  push:
+    branches: [forgecad/3.0.0, forgecad/3.0.0-foundation]
+    paths:
+      - 'services/forge-engine/forge_engine/v300/**'
+      - 'services/forge-engine/forge_engine/main_v3.py'
+      - 'services/forge-engine/forge_engine/desktop_entry.py'
+      - 'services/forge-engine/forge_engine/__init__.py'
+      - 'services/forge-engine/pyproject.toml'
+      - '.github/workflows/v300-selftest.yml'
+  workflow_dispatch:
+
+jobs:
+  physical-world:
+    name: Persistent world, project projection, provenance, observations, and Jarvis API
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Forge Engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine
+      - name: Run physical world model regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v300-world
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v300.world_model_selftest
+      - name: Run v3 API vertical slice
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v300-api
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '1'
+        run: python -m forge_engine.v300.api_selftest
