@@ -92,9 +92,26 @@ async def run_async() -> dict[str, object]:
             unbound_rejected = True
         assert unbound_rejected
 
+        # Plan another physical action but deliberately do not confirm it. Confirmation
+        # tokens are memory-only secrets, so a runtime restart must cancel rather than
+        # resurrect an apparently actionable physical command.
+        pending, pending_token = runtime.plan(
+            entity_id=relay.id,
+            capability="actuator.relay",
+            operation="set",
+            args={"state": False},
+            requested_by="jarvis-selftest",
+        )
+        assert pending.status == "awaiting_confirmation"
+        assert pending_token
+
         reloaded = CapabilityRuntime(world, root / "capabilities.json")
         assert reloaded.action(action.id).status == "completed"
         assert reloaded.bindings(entity_id=relay.id)[0].id == binding.id
+        expired = reloaded.action(pending.id)
+        assert expired.status == "cancelled", expired
+        assert expired.error == "confirmation_expired_on_restart", expired
+        assert expired.metadata.get("recovery") == "fail_closed_restart", expired
 
         return {
             "capability_runtime_selftest": "PASS",
@@ -103,6 +120,7 @@ async def run_async() -> dict[str, object]:
             "wrong_confirmation_rejected": wrong_token_rejected,
             "argument_contract_enforced": missing_rejected,
             "unbound_action_rejected": unbound_rejected,
+            "pending_physical_action_expired_on_restart": True,
             "adapter_invocations": len(calls),
             "audit_persisted": True,
         }
