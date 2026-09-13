@@ -81,6 +81,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v200.analysis_contracts_selftest
+      - name: Run ForgeCAD 2.0 project surface self-test
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v200-project-surface-selftest
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v200.project_surface_selftest
       - name: Run ForgeCAD 2.0 workspace bundle self-test
         env:
           PYTHONPATH: services/forge-engine
