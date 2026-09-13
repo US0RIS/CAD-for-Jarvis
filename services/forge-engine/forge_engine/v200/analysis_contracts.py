@@ -159,6 +159,43 @@ TOLERANCE_ANALYSIS_CONTRACT: dict[str, Any] = {
 }
 
 
+DYNAMICS_ANALYSIS_CONTRACT: dict[str, Any] = {
+    "id": "forgecad-rigid-body-2.0",
+    "solver": "ForgeCAD RigidBody",
+    "grade": "engineering_iteration",
+    "mass_properties_endpoint": "/v2/analysis/mass-properties",
+    "response_endpoint": "/v2/analysis/rigid-body",
+    "request_schema": {
+        "object_ids": [],
+        "force_n": [0.0, 0.0, 0.0],
+        "torque_nm": [0.0, 0.0, 0.0],
+        "gravity_m_s2": [0.0, 0.0, -9.80665],
+        "duration_s": 0.25,
+        "initial_velocity_m_s": [0.0, 0.0, 0.0],
+        "initial_angular_velocity_rad_s": [0.0, 0.0, 0.0],
+    },
+    "outputs": [
+        "assembly mass and center of mass",
+        "center-of-mass inertia tensor and principal moments",
+        "constant-load linear and angular acceleration",
+        "short-interval displacement and angular displacement",
+        "linear/angular momentum and kinetic energy",
+    ],
+    "inertia_fidelity": {
+        "analytic": ["unfeatured box", "unfeatured cylinder", "unfeatured sphere"],
+        "fallback": "uniform rectangular physical-envelope approximation",
+        "mass_source": "canonical ForgeCAD geometry or frozen purchased-component mass metadata",
+    },
+    "limitations": [
+        "selected bodies are treated as one perfectly rigid assembly",
+        "no joints, contact, drag, damping, flexible response, impacts or actuator/control limits",
+        "constant world-frame force/torque and constant angular-acceleration integration",
+        "large-rotation gyroscopic coupling is not modeled",
+        "not certification evidence",
+    ],
+}
+
+
 MANUFACTURING_ANALYSIS_CONTRACT: dict[str, Any] = {
     "id": "bambu-lab-p2s-screening-2.0",
     "resource_id": "bambu-lab-p2s",
@@ -181,6 +218,7 @@ def contracts() -> dict[str, Any]:
         "version": "2.0.0",
         "structural": deepcopy(STRUCTURAL_ANALYSIS_CONTRACT),
         "tolerance": deepcopy(TOLERANCE_ANALYSIS_CONTRACT),
+        "dynamics": deepcopy(DYNAMICS_ANALYSIS_CONTRACT),
         "manufacturing": deepcopy(MANUFACTURING_ANALYSIS_CONTRACT),
     }
 
