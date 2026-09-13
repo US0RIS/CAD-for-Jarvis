@@ -17,6 +17,7 @@ from . import main as legacy
 from . import main_v2 as v2
 from .v110 import core
 from .v300 import WORLD_MODEL_SCHEMA_VERSION
+from .v300.capability_runtime import CapabilityBinding, CapabilityRuntime
 from .v300.world_model import (
     PhysicalWorldStore,
     ROOT_WORLD_ID,
@@ -28,6 +29,7 @@ from .v300.world_model import (
 
 app = v2.app
 WORLD = PhysicalWorldStore()
+ACTIONS = CapabilityRuntime(WORLD)
 _LAST_SYNC: dict[str, Any] = {"ok": False, "reason": "not_yet_synchronized"}
 
 
@@ -45,6 +47,24 @@ class ObservationRequest(BaseModel):
 
 class ProjectSyncRequest(BaseModel):
     parent_id: str | None = None
+
+
+class ActionPlanRequest(BaseModel):
+    entity_id: str
+    capability: str
+    operation: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    requested_by: str = "jarvis"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActionConfirmRequest(BaseModel):
+    confirmation_token: str
+    confirmed_by: str = "human"
+
+
+class ActionCancelRequest(BaseModel):
+    cancelled_by: str = "human"
 
 
 def _current_project_objects() -> list[dict[str, Any]]:
@@ -66,6 +86,16 @@ def _sync_current_project(*, parent_id: str | None = None, reason: str = "explic
     except Exception as exc:
         _LAST_SYNC = {"ok": False, "reason": reason, "error": str(exc)}
         raise
+
+
+def _action_runtime_summary() -> dict[str, Any]:
+    snapshot = ACTIONS.snapshot()
+    return {
+        "binding_count": len(snapshot.bindings),
+        "action_count": len(snapshot.actions),
+        "registered_adapters": ACTIONS.adapters(),
+        "awaiting_confirmation": sum(1 for row in snapshot.actions if row.status == "awaiting_confirmation"),
+    }
 
 
 @app.on_event("startup")
@@ -103,6 +133,7 @@ async def v3_health() -> dict[str, Any]:
         "engine_version": legacy.__version__,
         "world_model_schema_version": WORLD_MODEL_SCHEMA_VERSION,
         "world": WORLD.summary(),
+        "capability_runtime": _action_runtime_summary(),
         "project_sync": deepcopy(_LAST_SYNC),
     }
 
@@ -214,6 +245,106 @@ async def sync_project_into_world(request: ProjectSyncRequest) -> dict[str, Any]
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/v3/capabilities/bindings", dependencies=[Depends(legacy.require_session)])
+async def capability_bindings(
+    entity_id: str | None = None,
+    capability: str | None = None,
+    operation: str | None = None,
+) -> dict[str, Any]:
+    rows = ACTIONS.bindings(entity_id=entity_id, capability=capability, operation=operation)
+    return {
+        "items": [row.model_dump(mode="json") for row in rows],
+        "count": len(rows),
+        "registered_adapters": ACTIONS.adapters(),
+    }
+
+
+@app.post("/v3/capabilities/bindings", dependencies=[Depends(legacy.require_session)])
+async def create_capability_binding(binding: CapabilityBinding) -> dict[str, Any]:
+    try:
+        return ACTIONS.bind(binding).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/v3/capabilities/bindings/{binding_id}", dependencies=[Depends(legacy.require_session)])
+async def delete_capability_binding(binding_id: str) -> dict[str, Any]:
+    try:
+        ACTIONS.unbind(binding_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown capability binding: {binding_id}") from exc
+    return {"ok": True, "binding_id": binding_id}
+
+
+@app.get("/v3/actions", dependencies=[Depends(legacy.require_session)])
+async def capability_actions(entity_id: str | None = None, status: str | None = None) -> dict[str, Any]:
+    rows = ACTIONS.actions(entity_id=entity_id, status=status)
+    return {"items": [row.model_dump(mode="json") for row in rows], "count": len(rows)}
+
+
+@app.post("/v3/actions/plan", dependencies=[Depends(legacy.require_session)])
+async def plan_capability_action(request: ActionPlanRequest) -> dict[str, Any]:
+    try:
+        action, confirmation_token = ACTIONS.plan(
+            entity_id=request.entity_id,
+            capability=request.capability,
+            operation=request.operation,
+            args=request.args,
+            requested_by=request.requested_by,
+            metadata=request.metadata,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "action": action.model_dump(mode="json"),
+        # This token is intentionally returned only at plan time. The runtime stores
+        # only its hash and requires a distinct confirmation transition before a
+        # physical/high-consequence action can execute.
+        "confirmation_token": confirmation_token,
+    }
+
+
+@app.post("/v3/actions/{action_id}/confirm", dependencies=[Depends(legacy.require_session)])
+async def confirm_capability_action(action_id: str, request: ActionConfirmRequest) -> dict[str, Any]:
+    try:
+        action = ACTIONS.confirm(action_id, request.confirmation_token, confirmed_by=request.confirmed_by)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown capability action: {action_id}") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return action.model_dump(mode="json")
+
+
+@app.post("/v3/actions/{action_id}/execute", dependencies=[Depends(legacy.require_session)])
+async def execute_capability_action(action_id: str) -> dict[str, Any]:
+    try:
+        action = await ACTIONS.execute(action_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown capability action: {action_id}") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return action.model_dump(mode="json")
+
+
+@app.post("/v3/actions/{action_id}/cancel", dependencies=[Depends(legacy.require_session)])
+async def cancel_capability_action(action_id: str, request: ActionCancelRequest) -> dict[str, Any]:
+    try:
+        action = ACTIONS.cancel(action_id, cancelled_by=request.cancelled_by)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown capability action: {action_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return action.model_dump(mode="json")
+
+
 @app.get("/v3/jarvis/context", dependencies=[Depends(legacy.require_session)])
 async def jarvis_world_context(
     kind: str | None = None,
@@ -256,10 +387,16 @@ async def jarvis_world_context(
                 "confidence": entity.confidence,
             }
         )
+    relevant_bindings = [
+        row
+        for row in ACTIONS.bindings()
+        if row.entity_id in entity_ids
+    ]
     return {
         "world": WORLD.summary(),
         "root_id": ROOT_WORLD_ID,
         "project_sync": deepcopy(_LAST_SYNC),
+        "capability_runtime": _action_runtime_summary(),
         "entities": compact_entities,
         "relations": [
             {
@@ -271,6 +408,19 @@ async def jarvis_world_context(
                 "b_interface_id": row.b_interface_id,
             }
             for row in relations
+        ],
+        "capability_bindings": [
+            {
+                "id": row.id,
+                "entity_id": row.entity_id,
+                "capability": row.capability,
+                "operation": row.operation,
+                "adapter_id": row.adapter_id,
+                "risk": row.risk,
+                "requires_confirmation": row.requires_confirmation,
+                "enabled": row.enabled,
+            }
+            for row in relevant_bindings
         ],
         "truncated": len(entities) >= max_entities,
     }
