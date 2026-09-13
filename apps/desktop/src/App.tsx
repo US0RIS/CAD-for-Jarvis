@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   Activity, Bot, Box, Check, ChevronDown, ChevronRight, CircleAlert, Code2, Download, FileText,
-  FolderOpen, GitBranch, History, Layers, MessageSquare, MoreHorizontal, Package, Play,
+  FolderOpen, GitBranch, History, Layers, MessageSquare, MoreHorizontal, Package, Play, Printer,
   Plus, Redo2, Search, Send, Settings, Undo2, Upload, X,
 } from 'lucide-react';
 import {
@@ -13,9 +13,10 @@ import {
 } from './api/engine';
 import { CodeWorkspace } from './components/CodeWorkspace';
 import { EngineeringWorkbench } from './components/EngineeringWorkbench';
+import { ManufacturePanel } from './components/ManufacturePanel';
 import { Viewport } from './components/Viewport';
 
-type RightTab = 'properties' | 'components' | 'analysis';
+type RightTab = 'properties' | 'components' | 'analysis' | 'manufacture';
 type BrowserTab = 'model' | 'copilot';
 type BottomTab = 'history' | 'code' | 'simulations' | 'system';
 type ChatEntry = { role: 'user' | 'agent'; text: string };
@@ -561,6 +562,7 @@ export default function App() {
           <button className="toolbar-button" onClick={() => stepInput.current?.click()}><FolderOpen size={14}/>Import STEP</button>
           <div className="document-toolbar-spacer"/>
           <button className="toolbar-button" disabled={!hasGeometry} onClick={() => setBottomTab(bottomTab === 'history' ? null : 'history')}><History size={14}/>History</button>
+          <button className="toolbar-button" data-testid="toolbar-manufacture" disabled={!hasGeometry} onClick={() => setRightTab('manufacture')}><Printer size={14}/>Manufacture</button>
           <button className="primary-action" disabled={!hasGeometry} onClick={() => void startSimulation()}><Play size={14}/>Dynamics</button>
         </div>
 
@@ -595,10 +597,11 @@ export default function App() {
       </section>
 
       <aside className="right-panel">
-        <div className="panel-tabs">
+        <div className="panel-tabs right-tabs">
           <button className={rightTab === 'properties' ? 'active' : ''} onClick={() => setRightTab('properties')}>Properties</button>
           <button className={rightTab === 'components' ? 'active' : ''} onClick={() => setRightTab('components')}>Components</button>
           <button className={rightTab === 'analysis' ? 'active' : ''} onClick={() => setRightTab('analysis')}>Analyze</button>
+          <button data-testid="tab-manufacture" className={rightTab === 'manufacture' ? 'active' : ''} onClick={() => setRightTab('manufacture')}>Manufacture</button>
         </div>
         {rightTab === 'components' ? <div className="component-panel">
           <div className="panel-title"><div><strong>Component library</strong><small>{registryStats?.total ?? '…'} catalog parts</small></div></div>
@@ -609,7 +612,17 @@ export default function App() {
             {visibleComponents.map((item) => <ComponentRow key={item.id} item={item} inserting={insertingComponentId === item.id} onInsert={(id) => void insertLibraryComponent(id)}/>)}
             {visibleComponents.length < components.length && <button className="wide-action" onClick={() => setVisibleComponentCount((count) => Math.min(components.length, count + 80))}>Load 80 more</button>}
           </div>
-        </div> : rightTab === 'properties' ? <PropertiesPanel project={project} selectedPart={selectedPart} onOpenCode={() => setBottomTab('code')}/> : <EngineeringWorkbench mode="analysis" project={project} selectedId={selectedId} activeJob={activeJob} onProject={setProject} onStartSimulation={() => void startSimulation()} onStartCampaign={() => void startCampaign()}/>} 
+        </div> : rightTab === 'properties' ? <PropertiesPanel project={project} selectedPart={selectedPart} onOpenCode={() => setBottomTab('code')}/> : rightTab === 'manufacture' ? <ManufacturePanel
+          project={project}
+          selectedId={selectedId}
+          onSelectPart={setSelectedId}
+          onDraftRedesign={(part) => {
+            setSelectedId(part.id);
+            setBrowserTab('copilot');
+            const warningText = part.warnings.map((warning) => warning.message).join(' ');
+            setMessage(`Redesign "${part.name}" so it can be manufactured reliably on my Bambu Lab P2S. Preserve its functional role and interfaces. ${warningText} If the part is too large, split it into printable bodies with alignment features and a mechanically sound joining strategy, then re-check the design against the P2S manufacturing constraints.`);
+          }}
+        /> : <EngineeringWorkbench mode="analysis" project={project} selectedId={selectedId} activeJob={activeJob} onProject={setProject} onStartSimulation={() => void startSimulation()} onStartCampaign={() => void startCampaign()}/>} 
       </aside>
     </div>
   </main>;
