@@ -12,8 +12,10 @@ language model silently mutate a known-good design. Instead it:
 5. ranks only candidates that pass the requested engineering gates;
 6. activates the best unverified candidate while preserving the source branch exactly.
 
-The built-in structural/thermal analyses remain screening models. A campaign result is
-never promoted to physical verification automatically.
+Campaign variables may address ordinary top-level object parameters or named/dimension
+constraints inside ForgeCAD 2.0 constrained sketches. The built-in structural/thermal
+analyses remain screening models. A campaign result is never promoted to physical
+verification automatically.
 """
 
 from copy import deepcopy
@@ -43,6 +45,55 @@ def _numeric_params(obj: dict[str, Any]) -> dict[str, float]:
     return out
 
 
+def _dimension_variables(obj: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return optimizable design variables with an explicit mutation path.
+
+    Top-level numeric parameters keep their historical names. Constrained sketch
+    dimensions use ``sketch.<name>`` when a constraint has a semantic name, otherwise
+    ``sketch.constraint_<index>``. This lets campaigns vary true dimension constraints
+    instead of moving raw vertices and breaking sketch intent.
+    """
+    variables: dict[str, dict[str, Any]] = {}
+    for name, value in _numeric_params(obj).items():
+        variables[name] = {
+            "name": name,
+            "start": value,
+            "path": ["params", name],
+            "kind": "parameter",
+        }
+
+    if str(obj.get("kind") or "") != "constrained_sketch_extrude":
+        return variables
+    params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+    sketch = params.get("sketch") if isinstance(params.get("sketch"), dict) else {}
+    constraints = sketch.get("constraints") if isinstance(sketch.get("constraints"), list) else []
+    supported = {"distance", "x_distance", "y_distance", "angle"}
+    for index, raw in enumerate(constraints):
+        if not isinstance(raw, dict):
+            continue
+        constraint_type = str(raw.get("type") or "").lower().strip()
+        if constraint_type not in supported:
+            continue
+        field = "angle_deg" if constraint_type == "angle" else "value"
+        value = raw.get(field)
+        if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            continue
+        semantic_name = str(raw.get("name") or raw.get("dimension") or raw.get("id") or "").strip()
+        key = f"sketch.{semantic_name}" if semantic_name else f"sketch.constraint_{index}"
+        if key in variables:
+            key = f"sketch.constraint_{index}"
+        variables[key] = {
+            "name": key,
+            "start": float(value),
+            "path": ["params", "sketch", "constraints", index, field],
+            "kind": "sketch_dimension",
+            "constraint_index": index,
+            "constraint_type": constraint_type,
+            "field": field,
+        }
+    return variables
+
+
 def _select_object(selected_object_id: str | None) -> dict[str, Any]:
     if selected_object_id:
         candidate = core.object_by_id(selected_object_id)
@@ -62,41 +113,79 @@ def _select_object(selected_object_id: str | None) -> dict[str, Any]:
     return candidate
 
 
-def _default_variable(params: dict[str, float]) -> str:
+def _default_variable(params: dict[str, dict[str, Any]]) -> str:
     for name in ("thickness", "z", "height", "x", "y", "radius", "diameter", "width", "depth"):
-        if name in params and params[name] > 0:
+        row = params.get(name)
+        if row and float(row["start"]) > 0:
             return name
-    for name, value in params.items():
-        if value > 0:
+    # If no conventional solid parameter is available, prefer a true sketch dimension
+    # over an arbitrary/raw geometry value.
+    for name, row in params.items():
+        if row.get("kind") == "sketch_dimension" and float(row["start"]) > 0:
             return name
-    raise ValueError("Selected fabricated part has no numeric parameter suitable for optimization")
+    for name, row in params.items():
+        if float(row["start"]) > 0:
+            return name
+    raise ValueError("Selected fabricated part has no numeric parameter or constrained-sketch dimension suitable for optimization")
 
 
-def _variables(obj: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, float | str]]:
-    params = _numeric_params(obj)
+def _resolve_variable_name(name: str, available: dict[str, dict[str, Any]]) -> str | None:
+    if name in available:
+        return name
+    normalized = name.strip().lower().replace(" ", "_")
+    exact = next((key for key in available if key.lower() == normalized), None)
+    if exact:
+        return exact
+    # Accept a semantic dimension name without requiring callers to know the sketch.
+    # prefix, e.g. {name:'width'} can resolve sketch.width when unambiguous.
+    suffix_matches = [key for key in available if key.lower().removeprefix("sketch.") == normalized]
+    return suffix_matches[0] if len(suffix_matches) == 1 else None
+
+
+def _default_bounds(row: dict[str, Any]) -> tuple[float, float]:
+    start = float(row["start"])
+    if row.get("constraint_type") == "angle":
+        return max(1.0, start - 20.0), min(179.0, start + 20.0)
+    if start > 0:
+        return max(0.1, start * 0.65), max(0.2, start * 1.35)
+    span = max(1.0, abs(start) * 0.35)
+    return start - span, start + span
+
+
+def _variables(obj: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
+    available = _dimension_variables(obj)
     requested = payload.get("variables")
-    rows: list[dict[str, float | str]] = []
+    rows: list[dict[str, Any]] = []
     if isinstance(requested, list):
         for raw in requested[:3]:
             if not isinstance(raw, dict):
                 continue
-            name = str(raw.get("name") or "")
-            if name not in params:
+            requested_name = str(raw.get("name") or "")
+            name = _resolve_variable_name(requested_name, available)
+            if not name:
                 continue
-            start = params[name]
-            lo = float(raw.get("min", max(0.1, start * 0.65)))
-            hi = float(raw.get("max", max(lo + 1e-6, start * 1.35)))
+            definition = available[name]
+            start = float(definition["start"])
+            default_lo, default_hi = _default_bounds(definition)
+            lo = float(raw.get("min", default_lo))
+            hi = float(raw.get("max", default_hi))
             if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
                 continue
-            rows.append({"name": name, "start": start, "min": lo, "max": hi})
+            if definition.get("constraint_type") == "angle":
+                lo, hi = max(0.1, lo), min(179.9, hi)
+                if hi <= lo:
+                    continue
+            rows.append({**deepcopy(definition), "name": name, "start": start, "min": lo, "max": hi})
     if rows:
         return rows
-    name = _default_variable(params)
-    start = params[name]
-    return [{"name": name, "start": start, "min": max(0.1, start * 0.65), "max": max(0.2, start * 1.35)}]
+    name = _default_variable(available)
+    definition = available[name]
+    start = float(definition["start"])
+    lo, hi = _default_bounds(definition)
+    return [{**deepcopy(definition), "name": name, "start": start, "min": lo, "max": hi}]
 
 
-def _candidate_parameter_sets(variables: list[dict[str, float | str]], max_candidates: int) -> list[dict[str, float]]:
+def _candidate_parameter_sets(variables: list[dict[str, Any]], max_candidates: int) -> list[dict[str, float]]:
     max_candidates = max(3, min(int(max_candidates), 24))
     count = len(variables)
     levels = max(2, min(5, int(math.ceil(max_candidates ** (1.0 / max(count, 1))))))
@@ -109,7 +198,7 @@ def _candidate_parameter_sets(variables: list[dict[str, float | str]], max_candi
         values.append(start)
         unique = sorted({round(value, 9) for value in values})
         # Evaluate the baseline-nearest values first so a low candidate cap still gives
-        # the optimizer a useful reference plus thinner/thicker alternatives.
+        # the optimizer a useful reference plus smaller/larger alternatives.
         unique.sort(key=lambda value: (abs(value - start), value))
         grids.append(unique)
 
@@ -122,6 +211,28 @@ def _candidate_parameter_sets(variables: list[dict[str, float | str]], max_candi
         if len(result) >= max_candidates:
             break
     return result
+
+
+def _write_path(root: Any, path: list[Any], value: float) -> None:
+    cursor = root
+    for key in path[:-1]:
+        cursor = cursor[key]
+    cursor[path[-1]] = float(value)
+
+
+def _candidate_params(obj: dict[str, Any], variables: list[dict[str, Any]], values: dict[str, float]) -> dict[str, Any]:
+    params = deepcopy(obj.get("params") or {})
+    wrapper = {"params": params}
+    by_name = {str(row["name"]): row for row in variables}
+    for name, value in values.items():
+        definition = by_name.get(name)
+        if definition is None:
+            raise ValueError(f"Campaign variable {name!r} is not defined for the selected object")
+        path = list(definition.get("path") or [])
+        if not path or path[0] != "params":
+            raise ValueError(f"Campaign variable {name!r} has an invalid mutation path")
+        _write_path(wrapper, path, value)
+    return params
 
 
 def _failed_requirement_count(validation: dict[str, Any]) -> int:
@@ -218,8 +329,7 @@ def _run_campaign(self: Any, selected_object_id: str | None = None, payload: dic
         core.create_branch(branch_seed, reason=f"Autonomous {objective} campaign candidate {index}")
         branch_name = core.ACTIVE_DESIGN
         candidate_obj = core.object_by_id(object_id)
-        params = deepcopy(candidate_obj.get("params") or {})
-        params.update(values)
+        params = _candidate_params(candidate_obj, variables, values)
 
         try:
             core.execute(
@@ -264,6 +374,7 @@ def _run_campaign(self: Any, selected_object_id: str | None = None, payload: dic
             row = {
                 "branch": branch_name,
                 "parameters": values,
+                "parameter_paths": {str(item["name"]): deepcopy(item.get("path")) for item in variables if str(item["name"]) in values},
                 "metrics": metrics,
                 "structural": structural,
                 "thermal": thermal,
@@ -283,6 +394,7 @@ def _run_campaign(self: Any, selected_object_id: str | None = None, payload: dic
             row = {
                 "branch": branch_name,
                 "parameters": values,
+                "parameter_paths": {str(item["name"]): deepcopy(item.get("path")) for item in variables if str(item["name"]) in values},
                 "feasible": False,
                 "score": float("inf"),
                 "error": str(exc),
