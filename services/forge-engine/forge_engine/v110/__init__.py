@@ -6,3 +6,5 @@ ENGINEERING_LAYER_VERSION = "1.1.0"
 # and a validated, cached local-model detail pass instead of silent bounding-box stand-ins.
 from . import premium_geometry as _premium_geometry
 _premium_geometry.install()
+from . import premium_geometry_hotfix as _premium_geometry_hotfix
+_premium_geometry_hotfix.install()
