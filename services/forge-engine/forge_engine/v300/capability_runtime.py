@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import inspect
-import json
 import os
 from pathlib import Path
 import secrets
@@ -122,14 +121,10 @@ class _RegisteredAdapter:
 class CapabilityRuntime:
     """Typed, fail-closed action broker between Jarvis and device adapters.
 
-    The runtime intentionally separates four concerns:
-
-    * the world model says what an entity *is* and claims it *can do*;
-    * a binding says which concrete adapter owns one operation;
-    * an action is a durable audit record of an attempted invocation;
-    * confirmation is a distinct state transition for physical/high-consequence work.
-
-    A model cannot bypass these checks by inventing an adapter name or capability.
+    The world model owns physical identity/capability declarations. Bindings map an
+    explicitly exposed operation to trusted in-process adapter code. Actions preserve
+    an audit trail and physical/high-consequence operations require a separate human
+    confirmation transition before execution.
     """
 
     PHYSICAL_RISKS = {"physical", "high_consequence"}
@@ -175,6 +170,27 @@ class CapabilityRuntime:
         self._actions = {row.id: row for row in snapshot.actions}
         self._action_order = [row.id for row in snapshot.actions]
 
+        # Confirmation secrets deliberately never persist to disk. Any physical action
+        # that depended on a pre-restart confirmation therefore expires rather than
+        # becoming executable through stale state after process recovery. Likewise an
+        # action that was executing when the process died is recorded as interrupted.
+        recovered = False
+        for action in self._actions.values():
+            if action.status in {"awaiting_confirmation", "confirmed"} and action.requires_confirmation:
+                action.status = "cancelled"
+                action.error = "confirmation_expired_on_restart"
+                action.completed_at = now_iso()
+                action.metadata["recovery"] = "fail_closed_restart"
+                recovered = True
+            elif action.status == "executing":
+                action.status = "failed"
+                action.error = "execution_interrupted_by_restart"
+                action.completed_at = now_iso()
+                action.metadata["recovery"] = "interrupted_restart"
+                recovered = True
+        if recovered:
+            self._persist()
+
     def _persist(self) -> None:
         if not self.autosave:
             return
@@ -188,7 +204,11 @@ class CapabilityRuntime:
         with self._lock:
             return CapabilityRuntimeSnapshot(
                 bindings=[row.model_copy(deep=True) for row in self._bindings.values()],
-                actions=[self._actions[action_id].model_copy(deep=True) for action_id in self._action_order if action_id in self._actions],
+                actions=[
+                    self._actions[action_id].model_copy(deep=True)
+                    for action_id in self._action_order
+                    if action_id in self._actions
+                ],
             )
 
     def register_adapter(
@@ -322,7 +342,9 @@ class CapabilityRuntime:
             confirmation_token: str | None = None
             if binding.requires_confirmation:
                 confirmation_token = secrets.token_urlsafe(24)
-                self._confirmation_hashes[action.id] = hashlib.sha256(confirmation_token.encode("utf-8")).hexdigest()
+                self._confirmation_hashes[action.id] = hashlib.sha256(
+                    confirmation_token.encode("utf-8")
+                ).hexdigest()
             self._actions[action.id] = action
             self._action_order.append(action.id)
             self._trim_actions()
@@ -344,7 +366,13 @@ class CapabilityRuntime:
                 rows = [row for row in rows if row.status == status]
             return [row.model_copy(deep=True) for row in rows]
 
-    def confirm(self, action_id: str, confirmation_token: str, *, confirmed_by: str = "human") -> CapabilityAction:
+    def confirm(
+        self,
+        action_id: str,
+        confirmation_token: str,
+        *,
+        confirmed_by: str = "human",
+    ) -> CapabilityAction:
         with self._lock:
             if action_id not in self._actions:
                 raise KeyError(action_id)
@@ -377,6 +405,7 @@ class CapabilityRuntime:
             if action.status in {"executing", "completed", "failed"}:
                 raise ValueError(f"Action cannot be cancelled from state {action.status}")
             action.status = "cancelled"
+            action.completed_at = now_iso()
             action.metadata["cancelled_by"] = cancelled_by
             self._confirmation_hashes.pop(action_id, None)
             self._persist()
@@ -390,8 +419,6 @@ class CapabilityRuntime:
             if action.requires_confirmation and action.status != "confirmed":
                 raise PermissionError("Physical/high-consequence action requires explicit confirmation")
             if not action.requires_confirmation and action.status not in {"planned", "confirmed"}:
-                raise ValueError(f"Action cannot execute from state {action.status}")
-            if action.requires_confirmation and action.status != "confirmed":
                 raise ValueError(f"Action cannot execute from state {action.status}")
             binding = self._bindings.get(action.binding_id)
             if binding is None or not binding.enabled:
