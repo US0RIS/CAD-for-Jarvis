@@ -48,10 +48,36 @@ function BranchRow({ branch, onActivate }: { branch: ProjectPayload['branches'][
 }
 
 function ComponentImage({ item }: { item: ComponentPayload }) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [requested, setRequested] = useState(false);
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [item.image?.uri]);
-  if (!item.image || failed) return <div className="component-image-fallback"><Package size={18}/></div>;
-  return <img src={item.image.uri} alt="" loading="lazy" onError={() => setFailed(true)}/>;
+
+  useEffect(() => {
+    setRequested(false);
+    setFailed(false);
+  }, [item.image?.uri]);
+
+  useEffect(() => {
+    const node = hostRef.current;
+    if (!node || requested || failed || !item.image?.uri) return;
+    if (!('IntersectionObserver' in window)) {
+      setRequested(true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setRequested(true);
+      observer.disconnect();
+    }, { rootMargin: '120px 0px', threshold: 0.01 });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [failed, item.image?.uri, requested]);
+
+  return <div ref={hostRef} style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center' }}>
+    {requested && item.image?.uri && !failed
+      ? <img src={item.image.uri} alt={`${item.manufacturer} ${item.model}`} decoding="async" onError={() => setFailed(true)}/>
+      : <div className="component-image-fallback"><Package size={18}/></div>}
+  </div>;
 }
 
 function ComponentRow({ item, inserting, onInsert }: { item: ComponentPayload; inserting: boolean; onInsert: (id: string) => void }) {
@@ -127,6 +153,7 @@ export default function App() {
   const [componentQuery, setComponentQuery] = useState('');
   const [componentCategory, setComponentCategory] = useState('');
   const [componentVoltage, setComponentVoltage] = useState('');
+  const [visibleComponentCount, setVisibleComponentCount] = useState(80);
   const [registryStats, setRegistryStats] = useState<RegistryStatsPayload | null>(null);
   const [insertingComponentId, setInsertingComponentId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -148,6 +175,7 @@ export default function App() {
   const jobBusy = Boolean(activeJob && !terminalStates.has(activeJob.state));
   const hasGeometry = Boolean(project?.parts.length);
   const sceneRevision = project ? `${project.active_branch}:${project.revision}` : 'loading';
+  const visibleComponents = useMemo(() => components.slice(0, visibleComponentCount), [components, visibleComponentCount]);
 
   const refreshProject = useCallback(async () => {
     const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;
@@ -211,6 +239,7 @@ export default function App() {
   }, [activeJob?.id, activeJob?.state, acceptJobSnapshot]);
 
   useEffect(() => {
+    setVisibleComponentCount(80);
     const timer = window.setTimeout(() => {
       const voltage = componentVoltage.trim() ? Number(componentVoltage) : undefined;
       void fetchComponents(componentQuery, componentCategory || undefined, Number.isFinite(voltage) ? voltage : undefined)
@@ -457,7 +486,10 @@ export default function App() {
           <div className="search-control"><Search size={14}/><input value={componentQuery} onChange={(event) => setComponentQuery(event.target.value)} placeholder="Search manufacturer, model, category…"/></div>
           <div className="component-filters"><select value={componentCategory} onChange={(event) => setComponentCategory(event.target.value)}><option value="">All categories</option>{registryStats?.categories.map((category) => <option value={category} key={category}>{category}</option>)}</select><input value={componentVoltage} onChange={(event) => setComponentVoltage(event.target.value)} placeholder="Voltage" inputMode="decimal"/></div>
           <div className="result-count">{components.length} results</div>
-          <div className="component-results">{components.map((item) => <ComponentRow key={item.id} item={item} inserting={insertingComponentId === item.id} onInsert={(id) => void insertLibraryComponent(id)}/>)}</div>
+          <div className="component-results">
+            {visibleComponents.map((item) => <ComponentRow key={item.id} item={item} inserting={insertingComponentId === item.id} onInsert={(id) => void insertLibraryComponent(id)}/>)}
+            {visibleComponents.length < components.length && <button className="wide-action" onClick={() => setVisibleComponentCount((count) => Math.min(components.length, count + 80))}>Load 80 more</button>}
+          </div>
         </div> : rightTab === 'properties' ? <PropertiesPanel project={project} selectedPart={selectedPart} onOpenCode={() => setBottomTab('code')}/> : <EngineeringWorkbench mode="analysis" project={project} selectedId={selectedId} activeJob={activeJob} onProject={setProject} onStartSimulation={() => void startSimulation()} onStartCampaign={() => void startCampaign()}/>} 
       </aside>
     </div>

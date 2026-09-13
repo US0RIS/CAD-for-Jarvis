@@ -3,7 +3,7 @@ from __future__ import annotations
 """Geometry-backed component thumbnails for the ForgeCAD catalog.
 
 The catalog thumbnail is rendered from the same canonical component geometry used by
-ForgeCAD's 3D scene.  This deliberately avoids arbitrary stock photography: if a
+ForgeCAD's 3D scene. This deliberately avoids arbitrary stock photography: if a
 component model improves, the thumbnail fingerprint changes and a new preview is cached.
 """
 
@@ -15,7 +15,7 @@ from typing import Any
 
 from . import component_registry, core
 
-THUMBNAIL_VERSION = 2
+THUMBNAIL_VERSION = 3
 WIDTH = 360
 HEIGHT = 250
 PADDING = 22.0
@@ -108,7 +108,10 @@ def _mesh_for_component(component_id: str) -> tuple[dict[str, Any], dict[str, An
     obj["id"] = f"thumbnail:{component_id}"
     dims = [abs(float(v)) for v in (component.get("dimensions_mm") or [20, 20, 20])[:3]]
     max_dim = max(dims or [20.0])
-    tolerance = max(0.42, min(1.35, max_dim / 95.0))
+    # Thumbnails are only 360 px wide. Keep their native tessellation intentionally
+    # coarser than the CAD scene so visible catalog rows cannot monopolize Forge Engine.
+    # A tolerance >= 0.60 also selects the viewport's coarser angular deflection path.
+    tolerance = max(0.72, min(1.60, max_dim / 80.0))
     return component, core.tessellate(obj, tolerance=tolerance)
 
 
@@ -163,10 +166,10 @@ def _render_svg(component: dict[str, Any], mesh: dict[str, Any]) -> bytes:
         raise ValueError("Component thumbnail projection returned no faces")
     faces.sort(key=lambda row: row[0])
 
-    # Extremely detailed supplier CAD can contain many thousands of viewport triangles.
-    # A 360 px catalog thumbnail cannot resolve all of them. Keep a stable bounded SVG
-    # size while preserving the full geometry in the actual CAD scene.
-    max_faces = 2600
+    # At catalog scale, hundreds of projected faces preserve the silhouette and product
+    # details while avoiding 100-300 KB SVGs for every visible row. The full 3D model is
+    # never simplified by this thumbnail-only cap.
+    max_faces = 900
     if len(faces) > max_faces:
         step = len(faces) / max_faces
         faces = [faces[min(len(faces) - 1, int(i * step))] for i in range(max_faces)]

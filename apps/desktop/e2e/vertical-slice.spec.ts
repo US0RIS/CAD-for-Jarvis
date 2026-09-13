@@ -10,21 +10,8 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   });
   expect(reset.ok()).toBeTruthy();
 
-  await page.goto('/');
-
-  await expect(page.getByText('ForgeCAD').first()).toBeVisible();
-  await expect(page.getByTestId('runtime-banner')).toBeVisible();
-  await expect(page.getByTestId('scene-canvas')).toBeVisible();
-  await expect(page.getByTestId('open-focad')).toBeVisible();
-  await expect(page.getByTestId('export-focad')).toBeVisible();
-  await expect(page.getByText('Untitled Design').first()).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText('No geometry').first()).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText('0 objects').first()).toBeVisible();
-  await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 20_000 });
-
-  // Regression for the release bug where the registry contained >1,000 parts but the
-  // workbench/API silently exposed only the first 30. Both the full library and filtered
-  // searches must be complete, not top-N recommendation lists.
+  // Verify the catalog contract before opening the renderer. This keeps API completeness
+  // independent of any thumbnails that the visible catalog rows may generate afterward.
   const statsResponse = await request.get('http://127.0.0.1:8765/v2/component-registry/stats', { headers });
   expect(statsResponse.ok()).toBeTruthy();
   const stats = await statsResponse.json() as { total: number };
@@ -40,14 +27,16 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   expect(gearSearch.items.length).toBeGreaterThan(30);
 
   // Thumbnail bytes are generated from the same canonical geometry as the 3D scene,
-  // then cached. A product thumbnail must therefore be an actual projected mesh rather
-  // than the former package icon/text placeholder.
-  const thumbnailResponse = await request.get('http://127.0.0.1:8765/v2/component-images/shaft.12x500');
-  expect(thumbnailResponse.ok()).toBeTruthy();
-  expect(thumbnailResponse.headers()['content-type']).toContain('image/svg+xml');
-  expect(thumbnailResponse.headers()['x-forgecad-thumbnail-source']).toBe('canonical-geometry');
-  const thumbnailSvg = await thumbnailResponse.text();
-  expect(thumbnailSvg).toContain('<polygon');
+  // then cached. Exercise two materially different products before the browser consumes
+  // those cached previews so the UI assertion is deterministic rather than timing-based.
+  for (const componentId of ['shaft.12x500', 'compute.raspberry_pi_5_8gb']) {
+    const thumbnailResponse = await request.get(`http://127.0.0.1:8765/v2/component-images/${componentId}`);
+    expect(thumbnailResponse.ok()).toBeTruthy();
+    expect(thumbnailResponse.headers()['content-type']).toContain('image/svg+xml');
+    expect(thumbnailResponse.headers()['x-forgecad-thumbnail-source']).toBe('canonical-geometry');
+    const thumbnailSvg = await thumbnailResponse.text();
+    expect(thumbnailSvg).toContain('<polygon');
+  }
 
   // .focad is a real portable interchange path, not only a renamed download. Export a
   // design through the production API and immediately import the exact bytes again.
@@ -65,6 +54,18 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   });
   expect(importResponse.ok()).toBeTruthy();
 
+  await page.goto('/');
+
+  await expect(page.getByText('ForgeCAD').first()).toBeVisible();
+  await expect(page.getByTestId('runtime-banner')).toBeVisible();
+  await expect(page.getByTestId('scene-canvas')).toBeVisible();
+  await expect(page.getByTestId('open-focad')).toBeVisible();
+  await expect(page.getByTestId('export-focad')).toBeVisible();
+  await expect(page.getByText('Untitled Design').first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('No geometry').first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('0 objects').first()).toBeVisible();
+  await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 20_000 });
+
   await page.getByRole('button', { name: 'Components', exact: true }).click();
   const search = page.getByPlaceholder('Search manufacturer, model, category…');
   await expect(search).toBeVisible();
@@ -73,13 +74,13 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   await search.fill('raspberry');
   const raspberry = page.getByTestId('component-compute.raspberry_pi_5_8gb');
   await expect(raspberry).toBeVisible({ timeout: 20_000 });
-  await expect(raspberry.locator('img')).toHaveAttribute('src', /\/v2\/component-images\/compute\.raspberry_pi_5_8gb/);
-  await expect.poll(async () => raspberry.locator('img').evaluate((node) => (node as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+  await expect(raspberry.locator('img')).toHaveAttribute('src', /\/v2\/component-images\/compute\.raspberry_pi_5_8gb/, { timeout: 20_000 });
+  await expect.poll(async () => raspberry.locator('img').evaluate((node) => (node as HTMLImageElement).naturalWidth), { timeout: 20_000 }).toBeGreaterThan(0);
 
   await search.fill('12mm precision shaft 500mm');
   const shaft = page.getByTestId('component-shaft.12x500');
   await expect(shaft).toBeVisible({ timeout: 20_000 });
-  await expect(shaft.locator('img')).toHaveAttribute('src', /\/v2\/component-images\/shaft\.12x500/);
+  await expect(shaft.locator('img')).toHaveAttribute('src', /\/v2\/component-images\/shaft\.12x500/, { timeout: 20_000 });
   await expect.poll(async () => shaft.locator('img').evaluate((node) => (node as HTMLImageElement).naturalWidth), { timeout: 20_000 }).toBeGreaterThan(0);
   await expect(raspberry).toBeHidden();
 
