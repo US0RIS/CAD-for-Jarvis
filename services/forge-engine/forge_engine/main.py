@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .engineering_state import PROJECT
 from .models import CreateJobRequest, EngineeringJob, JobState, OllamaState, RuntimeState, RuntimeStatus
-from .v110 import jarvis_bridge, project_bundle
+from .v110 import component_thumbnails, jarvis_bridge, project_bundle
 
 API_VERSION = "2"
 SESSION_TOKEN = os.environ.get("FORGECAD_SESSION_TOKEN", "")
@@ -163,6 +164,14 @@ async def components(q: str = "", category: str | None = None, voltage_v: float 
     # This route backs an interactive library browser, not an AI recommendation list.
     # Return every matching component so a search never silently becomes a top-30 list.
     items = PROJECT.search_components(q, category=category, constraints=constraints, limit=int(stats.get("total", 10000)))
+    port = int(os.environ.get("FORGECAD_PORT", "8765"))
+    for item in items:
+        component_id = quote(str(item["id"]), safe="")
+        item["image"] = {
+            "kind": "rendered",
+            "uri": f"http://127.0.0.1:{port}/v2/component-images/{component_id}",
+            "source": "ForgeCAD canonical geometry",
+        }
     return {"items": items, "query": q, "stats": stats}
 
 
@@ -184,12 +193,31 @@ def _fallback_svg(component: dict[str, Any]) -> bytes:
 @app.get("/v2/component-images/{component_id}")
 async def component_image(component_id: str) -> Response:
     try:
-        component = PROJECT.component(component_id)
+        rendered, digest = component_thumbnails.render_component_thumbnail(component_id, IMAGE_CACHE)
+        return Response(
+            rendered,
+            media_type="image/svg+xml",
+            headers={
+                "Cache-Control": "public, max-age=604800, immutable",
+                "ETag": f'"{digest}"',
+                "X-ForgeCAD-Thumbnail-Source": "canonical-geometry",
+            },
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Component not found") from exc
-    # The registry is intentionally offline-first. The fallback is generated from the
-    # authoritative component identity rather than hotlinking arbitrary supplier media.
-    return Response(_fallback_svg(component), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+    except Exception:
+        # Thumbnail rendering must never make the catalog unusable. If a supplier CAD
+        # asset or a native OpenCascade edge case fails, keep a labeled placeholder for
+        # that one item while the full 3D model remains independently diagnosable.
+        try:
+            component = PROJECT.component(component_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Component not found") from exc
+        return Response(
+            _fallback_svg(component),
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "no-cache", "X-ForgeCAD-Thumbnail-Source": "fallback"},
+        )
 
 
 @app.post("/v2/components/{component_id}/add", dependencies=[Depends(require_session)])

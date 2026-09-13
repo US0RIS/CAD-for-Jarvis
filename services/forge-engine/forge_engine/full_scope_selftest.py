@@ -14,7 +14,7 @@ import cadquery as cq
 
 def main() -> None:
     from .engineering_state import PROJECT
-    from .v110 import acceptance_design, component_registry, physical_components, premium_geometry, project_bundle, realistic_components, software, system_validation
+    from .v110 import acceptance_design, component_registry, component_thumbnails, physical_components, premium_geometry, project_bundle, realistic_components, software, system_validation
 
     stats = component_registry.registry_stats()
     assert stats["total"] >= 1400, stats
@@ -53,6 +53,20 @@ def main() -> None:
     assert 0.68 <= fill_ratio <= 0.86, {"fill_ratio": fill_ratio, "reason": "12 mm shaft regressed to non-cylindrical/envelope geometry"}
     assert abs(max(bb.xlen, bb.ylen) - 12.0) < 0.6, (bb.xlen, bb.ylen, bb.zlen)
     assert abs(bb.zlen - 50.0) < 0.8, (bb.xlen, bb.ylen, bb.zlen)
+
+    # Catalog thumbnails must come from canonical geometry, not generic icons or text
+    # placeholders. Exercise both a simple axial part and the detailed Raspberry Pi,
+    # then prove the deterministic disk cache returns the same rendered preview.
+    with tempfile.TemporaryDirectory() as thumbnail_temp:
+        thumbnail_cache = Path(thumbnail_temp)
+        shaft_svg, shaft_thumb_digest = component_thumbnails.render_component_thumbnail("shaft.12x50", thumbnail_cache)
+        assert shaft_svg.startswith(b"<svg") and b"<polygon" in shaft_svg, len(shaft_svg)
+        cached_shaft_svg, cached_digest = component_thumbnails.render_component_thumbnail("shaft.12x50", thumbnail_cache)
+        assert cached_shaft_svg == shaft_svg and cached_digest == shaft_thumb_digest
+        pi_svg, pi_thumb_digest = component_thumbnails.render_component_thumbnail("compute.raspberry_pi_5_8gb", thumbnail_cache)
+        assert pi_svg.startswith(b"<svg") and b"<polygon" in pi_svg, len(pi_svg)
+        assert len(pi_svg) > 2000, len(pi_svg)
+        assert pi_thumb_digest != shaft_thumb_digest
 
     acceptance = acceptance_design.build_project()
     assert len(acceptance["objects"]) >= 6
@@ -154,6 +168,9 @@ def main() -> None:
         "premium_seed_models": len(seed_ids),
         "premium_seed_categories": len(seed_categories),
         "shaft_12x50_fill_ratio": round(fill_ratio, 4),
+        "thumbnail_renderer": "canonical_geometry_svg",
+        "shaft_thumbnail_bytes": len(shaft_svg),
+        "pi_thumbnail_bytes": len(pi_svg),
         "focad_format": restored["manifest"]["format"],
         "focad_version": restored["manifest"]["format_version"],
         "acceptance_objects": len(acceptance["objects"]),
