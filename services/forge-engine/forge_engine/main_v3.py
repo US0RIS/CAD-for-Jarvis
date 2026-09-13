@@ -18,6 +18,7 @@ from . import main_v2 as v2
 from .v110 import core
 from .v300 import WORLD_MODEL_SCHEMA_VERSION
 from .v300.capability_runtime import CapabilityBinding, CapabilityRuntime
+from .v300.identity_resolution import resolve_entity_reference
 from .v300.world_model import (
     PhysicalWorldStore,
     ROOT_WORLD_ID,
@@ -103,8 +104,8 @@ async def initialize_physical_world() -> None:
     try:
         _sync_current_project(reason="engine_startup")
     except Exception:
-        # The engineering engine remains available even if a persisted world file is
-        # malformed or a source projection needs repair. /v3/health reports the fault.
+        # Engineering remains available even if world projection needs repair.
+        # /v3/health surfaces the stale-sync condition explicitly.
         pass
 
 
@@ -119,8 +120,8 @@ async def synchronize_world_after_v2_mutation(request: Request, call_next):
         try:
             _sync_current_project(reason=f"{request.method.upper()} {request.url.path}")
         except Exception:
-            # Do not turn an already-committed 2.x mutation into a misleading HTTP
-            # failure after the fact. v3 health exposes the stale-sync condition.
+            # Do not turn a committed 2.x mutation into a misleading HTTP failure.
+            # v3 health exposes the stale-sync state instead.
             pass
     return response
 
@@ -144,6 +145,29 @@ async def world_snapshot(include_events: bool = True) -> dict[str, Any]:
     if not include_events:
         snapshot["events"] = []
     return snapshot
+
+
+@app.get("/v3/world/events", dependencies=[Depends(legacy.require_session)])
+async def world_events(after_id: str | None = None, limit: int = 200) -> dict[str, Any]:
+    snapshot = WORLD.snapshot()
+    events = list(snapshot.events)
+    if after_id:
+        indexes = [index for index, event in enumerate(events) if event.id == after_id]
+        if not indexes:
+            raise HTTPException(
+                status_code=409,
+                detail="Requested world event is no longer available; refresh the world snapshot",
+            )
+        events = events[indexes[-1] + 1 :]
+    limit = max(1, min(1000, int(limit)))
+    rows = events[:limit]
+    return {
+        "revision": snapshot.revision,
+        "items": [row.model_dump(mode="json") for row in rows],
+        "count": len(rows),
+        "truncated": len(events) > limit,
+        "last_event_id": rows[-1].id if rows else after_id,
+    }
 
 
 @app.get("/v3/world/entities", dependencies=[Depends(legacy.require_session)])
@@ -301,9 +325,8 @@ async def plan_capability_action(request: ActionPlanRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "action": action.model_dump(mode="json"),
-        # This token is intentionally returned only at plan time. The runtime stores
-        # only its hash and requires a distinct confirmation transition before a
-        # physical/high-consequence action can execute.
+        # Confirmation tokens are returned only at plan time. Only a hash remains
+        # in memory and confirmation-dependent actions expire across engine restart.
         "confirmation_token": confirmation_token,
     }
 
@@ -343,6 +366,23 @@ async def cancel_capability_action(action_id: str, request: ActionCancelRequest)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return action.model_dump(mode="json")
+
+
+@app.get("/v3/jarvis/resolve", dependencies=[Depends(legacy.require_session)])
+async def resolve_jarvis_reference(
+    q: str,
+    kind: str | None = None,
+    capability: str | None = None,
+    max_candidates: int = 10,
+) -> dict[str, Any]:
+    resolution = resolve_entity_reference(
+        WORLD,
+        q,
+        kind=kind,
+        capability=capability,
+        max_candidates=max(1, min(50, int(max_candidates))),
+    )
+    return resolution.model_dump(mode="json")
 
 
 @app.get("/v3/jarvis/context", dependencies=[Depends(legacy.require_session)])
