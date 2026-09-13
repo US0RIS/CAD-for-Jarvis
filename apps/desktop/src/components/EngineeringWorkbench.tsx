@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, CheckCircle2, Download, FileUp, GitCompare, PackageOpen, RefreshCw, ShieldAlert, Upload } from 'lucide-react';
 import {
+  Activity, CheckCircle2, Download, FileUp, GitCompare, PackageOpen, RefreshCw,
+  ShieldAlert, Trophy, Upload, XCircle,
+} from 'lucide-react';
+import {
+  activateBranch,
   compareBranch,
   downloadProjectBundle,
   fetchRegistryStats,
@@ -13,6 +17,7 @@ import {
   type RegistryStatsPayload,
   type ValidationPayload,
 } from '../api/engine';
+import '../styles/engineering-workbench.css';
 
 interface Props {
   mode: 'design' | 'analysis';
@@ -21,13 +26,54 @@ interface Props {
   activeJob: JobPayload | null;
   onProject: (project: ProjectPayload) => void;
   onStartSimulation: () => void;
-  onStartCampaign: () => void;
+  onStartCampaign: (payload: Record<string, unknown>) => void;
 }
+
+type CampaignCandidate = {
+  branch: string;
+  parameters?: Record<string, number>;
+  metrics?: { mass_kg?: number; [key: string]: unknown };
+  structural?: { max_displacement_mm?: number; max_deflection_mm?: number; yield_fos?: number; [key: string]: unknown };
+  thermal?: { max_temperature_c?: number; [key: string]: unknown };
+  manufacturing?: { ok?: boolean; [key: string]: unknown };
+  verifier?: { passed?: boolean; gates?: Record<string, boolean>; [key: string]: unknown };
+  feasible?: boolean;
+  score?: number;
+  error?: string;
+};
+
+type CampaignResult = {
+  status?: string;
+  source_branch?: string;
+  winner_branch?: string | null;
+  objective?: string;
+  candidates?: CampaignCandidate[];
+  constraints?: Record<string, unknown>;
+  roles?: Record<string, unknown>;
+};
 
 function ResultBlock({ value }: { value: unknown }) {
   if (value == null) return null;
   const text = JSON.stringify(value, null, 2);
   return <pre style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 230, fontSize: 11 }}>{text.length > 6500 ? `${text.slice(0, 6500)}\n…` : text}</pre>;
+}
+
+function finiteNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function metric(value: unknown, unit = '', digits = 2) {
+  const number = finiteNumber(value);
+  if (number == null) return '—';
+  return `${number.toFixed(digits)}${unit}`;
+}
+
+function parameterSummary(parameters?: Record<string, number>) {
+  if (!parameters) return 'baseline geometry';
+  const rows = Object.entries(parameters);
+  if (!rows.length) return 'baseline geometry';
+  return rows.map(([key, value]) => `${key} ${Number(value).toFixed(2)} mm`).join(' · ');
 }
 
 export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onProject, onStartSimulation, onStartCampaign }: Props) {
@@ -36,11 +82,24 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
   const [comparison, setComparison] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [campaignObjective, setCampaignObjective] = useState<'mass' | 'deflection' | 'safety' | 'temperature'>('mass');
+  const [campaignProcess, setCampaignProcess] = useState<'cnc' | 'fdm'>('cnc');
+  const [campaignForce, setCampaignForce] = useState('100');
+  const [campaignDeflection, setCampaignDeflection] = useState('1');
+  const [campaignFos, setCampaignFos] = useState('1.5');
+  const [campaignTemperature, setCampaignTemperature] = useState('80');
+  const [campaignCandidates, setCampaignCandidates] = useState('7');
   const stepInput = useRef<HTMLInputElement | null>(null);
   const bundleInput = useRef<HTMLInputElement | null>(null);
   const activeBranch = project?.branches.find((branch) => branch.active) ?? null;
   const workingBranch = project?.branches.find((branch) => branch.status === 'working' && !branch.active) ?? project?.branches.find((branch) => branch.status === 'working') ?? null;
   const selected = useMemo(() => project?.parts.find((part) => part.id === selectedId) ?? null, [project, selectedId]);
+  const fabricatedParts = useMemo(() => project?.parts.filter((part) => !part.component_ref) ?? [], [project]);
+  const campaignResult = useMemo<CampaignResult | null>(() => {
+    if (activeJob?.kind !== 'campaign' || !activeJob.result || !Array.isArray((activeJob.result as CampaignResult).candidates)) return null;
+    return activeJob.result as CampaignResult;
+  }, [activeJob]);
+  const requirements = (validation?.requirements ?? []) as Array<Record<string, unknown>>;
 
   async function refresh() {
     try {
@@ -73,6 +132,18 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
     try {
       setBusy(true);
       setComparison(await compareBranch(workingBranch.name));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function activate(name: string) {
+    try {
+      setBusy(true);
+      setError(null);
+      onProject(await activateBranch(name));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -125,6 +196,24 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
     }
   }
 
+  function startConfiguredCampaign() {
+    const force = Math.max(0.001, finiteNumber(campaignForce) ?? 100);
+    const deflection = Math.max(0.0001, finiteNumber(campaignDeflection) ?? 1);
+    const fos = Math.max(0.01, finiteNumber(campaignFos) ?? 1.5);
+    const count = Math.max(3, Math.min(24, Math.round(finiteNumber(campaignCandidates) ?? 7)));
+    const payload: Record<string, unknown> = {
+      objective: campaignObjective,
+      process: campaignProcess,
+      force_n: force,
+      deflection_max_mm: deflection,
+      yield_fos_min: fos,
+      max_candidates: count,
+    };
+    if (campaignObjective === 'temperature') payload.max_temperature_c = Math.max(-273.15, finiteNumber(campaignTemperature) ?? 80);
+    if (campaignProcess === 'fdm') payload.manufacturing_resource = 'bambu-lab-p2s';
+    onStartCampaign(payload);
+  }
+
   if (mode === 'design') return <div className="component-library" data-testid="design-inspector">
     <h2>Canonical design</h2>
     <p>Purchased hardware is immutable engineering data. Human, AI and Jarvis edits share one typed operation model.</p>
@@ -164,7 +253,10 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
     </div>
   </div>;
 
-  return <div className="component-library" data-testid="analysis-workspace">
+  const campaignBusy = activeJob?.kind === 'campaign' && !['completed', 'failed', 'cancelled'].includes(activeJob.state);
+  const campaignTarget = selected && !selected.component_ref ? selected : fabricatedParts[0] ?? null;
+
+  return <div className="component-library engineering-analysis" data-testid="analysis-workspace">
     <h2>Engineering validation</h2>
     <p>Deterministic structural, modal, thermal, manufacturability, electrical and assembly screening.</p>
     {error && <div className="runtime-banner error"><ShieldAlert size={15}/><div><strong>Validation failed</strong><span>{error}</span></div></div>}
@@ -174,11 +266,52 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
       {(validation?.risks ?? []).slice(0, 8).map((risk, index) => <div className="history-row" key={`${risk.code}-${index}`}><span>{risk.severity}</span><strong>{risk.message}</strong><small>{risk.code ?? 'engineering_check'}</small></div>)}
     </div>
 
-    <div className="campaign-card">
-      <div className="campaign-title"><Activity size={18}/><div><strong>Analysis + optimization</strong><span>Real solver jobs run off the UI thread and are versioned with the design.</span></div></div>
-      <div className="filter-row"><button onClick={onStartSimulation}>Run engineering screen</button><button onClick={onStartCampaign}>Optimize variant</button></div>
-      {activeJob && <><p>{activeJob.kind}: {activeJob.state} · {activeJob.message ?? ''}</p><ResultBlock value={activeJob.result}/></>}
+    {requirements.length > 0 && <div className="campaign-card requirement-gates" data-testid="requirement-gates">
+      <strong>Requirement gates</strong>
+      <p>Deterministic metrics and recorded physical evidence are evaluated separately; evidence cannot override a failing numeric gate.</p>
+      <div className="requirement-list">{requirements.slice(0, 10).map((row, index) => {
+        const passed = row.passed === true;
+        const failed = row.passed === false;
+        const statusText = passed ? 'PASS' : failed ? 'FAIL' : String(row.verification_status ?? 'UNVERIFIED').toUpperCase();
+        return <div className="requirement-row" key={String(row.id ?? index)}>
+          <span className={`requirement-state ${passed ? 'good' : failed ? 'bad' : ''}`}>{statusText}</span>
+          <div><strong>{String(row.statement ?? row.description ?? row.id ?? 'Requirement')}</strong><small>{row.value != null ? `Measured ${String(row.value)} against ${String(row.op ?? '')} ${String(row.target ?? '')}` : String(row.verification_method ?? row.verification ?? 'Verification pending')}</small></div>
+        </div>;
+      })}</div>
+    </div>}
+
+    <div className="campaign-card campaign-console" data-testid="campaign-console">
+      <div className="campaign-title"><Activity size={18}/><div><strong>Autonomous variant campaign</strong><span>Generate sibling branches, screen each candidate, independently verify gates, and activate the best unverified result.</span></div></div>
+      <div className="campaign-target"><span>Target</span><strong>{campaignTarget?.name ?? 'No fabricated part available'}</strong><small>{selected?.component_ref ? 'Selected object is purchased hardware; ForgeCAD will optimize the first fabricated part instead.' : campaignTarget ? `${campaignTarget.role} · ${campaignTarget.material}` : 'Create or import custom geometry first.'}</small></div>
+      <div className="campaign-form">
+        <label><span>Objective</span><select value={campaignObjective} onChange={(event) => setCampaignObjective(event.target.value as typeof campaignObjective)}><option value="mass">Minimum mass</option><option value="deflection">Minimum deflection</option><option value="safety">Maximum safety factor</option><option value="temperature">Minimum temperature</option></select></label>
+        <label><span>Process</span><select value={campaignProcess} onChange={(event) => setCampaignProcess(event.target.value as typeof campaignProcess)}><option value="cnc">General / CNC</option><option value="fdm">Bambu P2S / FDM</option></select></label>
+        <label><span>Load</span><div className="campaign-input"><input value={campaignForce} onChange={(event) => setCampaignForce(event.target.value)} inputMode="decimal"/><b>N</b></div></label>
+        <label><span>Max deflection</span><div className="campaign-input"><input value={campaignDeflection} onChange={(event) => setCampaignDeflection(event.target.value)} inputMode="decimal"/><b>mm</b></div></label>
+        <label><span>Min yield FoS</span><div className="campaign-input"><input value={campaignFos} onChange={(event) => setCampaignFos(event.target.value)} inputMode="decimal"/><b>×</b></div></label>
+        <label><span>Candidates</span><div className="campaign-input"><input value={campaignCandidates} onChange={(event) => setCampaignCandidates(event.target.value)} inputMode="numeric"/><b>3–24</b></div></label>
+        {campaignObjective === 'temperature' && <label><span>Max temperature</span><div className="campaign-input"><input value={campaignTemperature} onChange={(event) => setCampaignTemperature(event.target.value)} inputMode="decimal"/><b>°C</b></div></label>}
+      </div>
+      <div className="campaign-actions"><button onClick={onStartSimulation} disabled={!project?.parts.length || campaignBusy}>Run engineering screen</button><button className="primary-action" data-testid="run-campaign" onClick={startConfiguredCampaign} disabled={!campaignTarget || campaignBusy}>{campaignBusy ? <Activity size={12} className="agent-spin"/> : <GitCompare size={12}/>}Run variant campaign</button></div>
+      {activeJob?.kind === 'campaign' && !campaignResult && <div className="campaign-running"><Activity size={12} className={campaignBusy ? 'agent-spin' : ''}/><div><strong>{activeJob.state}</strong><span>{activeJob.message ?? 'Evaluating design variants…'}</span></div></div>}
     </div>
+
+    {campaignResult && <div className="campaign-card campaign-results" data-testid="campaign-results">
+      <div className="campaign-title">{campaignResult.winner_branch ? <Trophy size={18}/> : <XCircle size={18}/>}<div><strong>{campaignResult.winner_branch ? 'Best candidate selected' : 'No feasible candidate'}</strong><span>{campaignResult.winner_branch ? `${campaignResult.winner_branch} · objective ${campaignResult.objective ?? 'mass'}` : 'Every candidate failed at least one deterministic gate.'}</span></div></div>
+      <div className="campaign-result-meta"><span>Source <b>{campaignResult.source_branch ?? '—'}</b></span><span>{campaignResult.candidates?.filter((row) => row.feasible).length ?? 0} feasible</span><span>{campaignResult.candidates?.length ?? 0} evaluated</span></div>
+      <div className="candidate-list">{(campaignResult.candidates ?? []).map((row, index) => {
+        const displacement = row.structural?.max_displacement_mm ?? row.structural?.max_deflection_mm;
+        const winner = row.branch === campaignResult.winner_branch;
+        const active = project?.active_branch === row.branch;
+        const failedGates = Object.entries(row.verifier?.gates ?? {}).filter(([, passed]) => !passed).map(([gate]) => gate);
+        return <div className={`candidate-row ${row.feasible ? 'feasible' : 'rejected'} ${winner ? 'winner' : ''}`} key={row.branch}>
+          <div className="candidate-rank">{winner ? <Trophy size={12}/> : index + 1}</div>
+          <div className="candidate-main"><strong>{row.branch}</strong><small>{parameterSummary(row.parameters)}</small><div className="candidate-metrics"><span>mass {metric(row.metrics?.mass_kg, ' kg', 3)}</span><span>defl. {metric(displacement, ' mm', 3)}</span><span>FoS {metric(row.structural?.yield_fos, '', 2)}</span><span>temp {metric(row.thermal?.max_temperature_c, ' °C', 1)}</span></div>{row.error && <em>{row.error}</em>}{!row.feasible && failedGates.length > 0 && <em>Failed: {failedGates.join(', ')}</em>}</div>
+          <div className="candidate-side"><span className={`candidate-state ${row.feasible ? 'good' : 'bad'}`}>{row.feasible ? winner ? 'WINNER' : 'PASS' : 'REJECT'}</span><button disabled={busy || active} onClick={() => void activate(row.branch)}>{active ? 'Active' : 'Open'}</button></div>
+        </div>;
+      })}</div>
+      <div className="campaign-disclaimer"><ShieldAlert size={11}/>Campaign passes are deterministic screening results. The selected branch remains unverified until real-world evidence is recorded and the design is explicitly marked working.</div>
+    </div>}
 
     <div className="campaign-card">
       <strong>Real component registry</strong>
