@@ -185,7 +185,7 @@ async def components(q: str = "", category: str | None = None, voltage_v: float 
 
 def _fallback_svg(component: dict[str, Any]) -> bytes:
     label = html.escape(str(component.get("model", "Component")))
-    manufacturer = html.escape(str(component.get("manufacturer", "")))
+    manufacturer = html.escape(str(component.get("manufacturer", ""))
     category = html.escape(str(component.get("category", "part")).upper())
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">'
@@ -269,7 +269,7 @@ async def branch_status(branch_name: str, request: BranchStatusRequest) -> dict[
     try:
         result = PROJECT.set_branch_status(branch_name, request.status, request.note, request.physical_verified)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Branch not found") from exc
     snapshot = PROJECT.snapshot()
     await broadcast({"type": "project.updated", "project": snapshot})
     return {"branch": result, "project": snapshot}
