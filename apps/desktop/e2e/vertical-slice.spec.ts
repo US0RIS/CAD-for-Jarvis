@@ -167,10 +167,17 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
 
   const manufacturingStatus = await request.get('http://127.0.0.1:8765/v2/manufacturing/p2s', { headers });
   expect(manufacturingStatus.ok()).toBeTruthy();
-  const manufacturing = await manufacturingStatus.json() as { fabricated_part_count: number; resource: { model: string }; parts: Array<{ fits_build_volume: boolean }>; plate_packing?: { plate_count: number } };
+  const manufacturing = await manufacturingStatus.json() as {
+    fabricated_part_count: number;
+    resource: { model: string };
+    parts: Array<{ fits_build_volume: boolean; recommended_orientation?: string; orientation_analysis?: { evaluated_orientations: number } }>;
+    plate_packing?: { plate_count: number };
+  };
   expect(manufacturing.fabricated_part_count).toBe(1);
   expect(manufacturing.resource.model).toBe('P2S');
   expect(manufacturing.parts[0]?.fits_build_volume).toBeTruthy();
+  expect(manufacturing.parts[0]?.orientation_analysis?.evaluated_orientations).toBe(24);
+  expect(manufacturing.parts[0]?.recommended_orientation).toBeTruthy();
   expect(manufacturing.plate_packing?.plate_count).toBe(1);
 
   const geometry3mf = await request.post('http://127.0.0.1:8765/v2/manufacturing/p2s/export', {
@@ -203,4 +210,20 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   expect(printEvidence?.outcome).toBe('success');
   expect(printEvidence?.package_sha256).toMatch(/^[0-9a-f]{64}$/);
   expect(printEvidence?.changes_design_status).toBe(false);
+
+  // ForgeCAD 2.0's optimizer must be visible and usable from the CAD workbench rather
+  // than existing only as a backend function. Use a deliberately permissive deflection
+  // gate here so the fixture has at least one feasible branch, while retaining the
+  // independent FoS gate and deterministic candidate ranking.
+  await page.getByRole('button', { name: 'Analyze', exact: true }).click();
+  const campaignConsole = page.getByTestId('campaign-console');
+  await expect(campaignConsole).toBeVisible();
+  await campaignConsole.locator('label').filter({ hasText: 'Max deflection' }).locator('input').fill('5');
+  await campaignConsole.locator('label').filter({ hasText: 'Candidates' }).locator('input').fill('3');
+  await page.getByTestId('run-campaign').click();
+  const campaignResults = page.getByTestId('campaign-results');
+  await expect(campaignResults).toBeVisible({ timeout: 90_000 });
+  await expect(campaignResults.getByText('Best candidate selected')).toBeVisible();
+  await expect(campaignResults.locator('.candidate-row')).toHaveCount(3);
+  await expect(campaignResults.getByText('WINNER', { exact: true })).toBeVisible();
 });
