@@ -42,7 +42,7 @@ jobs:
           # production-like server/browser stages below still exercise normal runtime.
           services/forge-engine/.venv/Scripts/python.exe -m forge_engine.v200.windows_smoke
       - name: Install desktop dependencies
-        run: pnpm install --frozen-lockfile=false
+        run: pnpm install --prod=false --frozen-lockfile=false
       - name: Typecheck and build Electron renderer
         run: |
           pnpm --filter @forgecad/desktop typecheck
@@ -115,7 +115,7 @@ jobs:
           services/forge-engine/.venv/bin/python -c "from forge_engine.v200 import design_intelligence as d; from forge_engine.engineering_state import PROJECT; a=d.bootstrap_architecture('notify me when a door is opened',PROJECT.snapshot()); c=d.build_planner_context('notify me when a door is opened',a,PROJECT.snapshot()); assert any(x['id']=='sensor.adafruit.magnetic_contact_375' for x in c['candidate_components']); print('macOS ForgeCAD 2.0 design intelligence: PASS')"
       - name: Install and compile shared desktop
         run: |
-          pnpm install --frozen-lockfile=false
+          pnpm install --prod=false --frozen-lockfile=false
           pnpm --filter @forgecad/desktop typecheck
           pnpm --filter @forgecad/desktop build
       - name: Smoke ForgeCAD 2.0 engine entrypoint
