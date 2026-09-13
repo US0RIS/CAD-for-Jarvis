@@ -185,7 +185,7 @@ async def components(q: str = "", category: str | None = None, voltage_v: float 
 
 def _fallback_svg(component: dict[str, Any]) -> bytes:
     label = html.escape(str(component.get("model", "Component")))
-    manufacturer = html.escape(str(component.get("manufacturer", ""))
+    manufacturer = html.escape(str(component.get("manufacturer", "")))
     category = html.escape(str(component.get("category", "part")).upper())
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">'
