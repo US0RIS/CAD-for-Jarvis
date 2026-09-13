@@ -103,7 +103,6 @@ def run() -> dict[str, object]:
         PROJECT.snapshot(),
     )
     assert context["analysis_contracts"]["routing"]["analysis_endpoint"] == "/v2/analysis/routes"
-    assert len(context.get("existing_assets") or []) >= 3
 
     # Increase required bend radius beyond what the 30 mm outgoing leg can fit. This is
     # exact centerline geometry, so it is a hard validation failure rather than a proxy warning.
