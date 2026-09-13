@@ -48,7 +48,7 @@ function maxTemperature(data: LooseRecord): number | null {
 function collisionCount(data: LooseRecord): number {
   const direct = array(data.collisions).length;
   if (direct) return direct;
-  return array(data.items).reduce((sum, row) => sum + array(record(row)?.collisions).length, 0);
+  return array(data.items).reduce<number>((sum, row) => sum + array(record(row)?.collisions).length, 0);
 }
 
 function detailFor(key: DomainKey, data: LooseRecord, count: number): string {
