@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('ForgeCAD production workbench starts blank, exposes the full catalog with geometry thumbnails, round-trips .focad, renders components, and moves parts', async ({ page, request }) => {
+test('ForgeCAD production workbench starts blank, exposes the full catalog with geometry thumbnails, round-trips .focad, renders components, moves parts, and prepares manufacturing', async ({ page, request }) => {
   // Each browser attempt gets a deterministic blank document. The engine process is
   // intentionally reused by CI, so a failed/retried browser test must not inherit CAD state.
   const headers = { 'X-ForgeCAD-Session': 'test-session', 'Content-Type': 'application/json' };
@@ -135,4 +135,48 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   await expect(page.getByText('No geometry').first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('0 objects').first()).toBeVisible();
   await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 20_000 });
+
+  // Manufacture is part of the workbench, not a detached exporter. Create one real
+  // custom body through the typed operation surface, then verify the UI sees the P2S,
+  // excludes no fabricated geometry, validates the body envelope, and exposes 3MF prep.
+  const fabricated = await request.post('http://127.0.0.1:8765/v2/operations', {
+    headers,
+    data: {
+      op: 'add',
+      args: {
+        name: 'Acceptance printable bracket',
+        kind: 'box',
+        params: { x: 42, y: 28, z: 5 },
+        material: 'abs',
+        semantic: { role: 'printable_bracket', tags: ['fabricated'], minimum_wall_mm: 2.4 },
+      },
+      reason: 'Manufacturing browser acceptance body',
+    },
+  });
+  expect(fabricated.ok()).toBeTruthy();
+  await page.reload();
+  await expect(page.getByText('1 objects').first()).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId('toolbar-manufacture').click();
+  await expect(page.getByTestId('manufacture-panel')).toBeVisible();
+  await expect(page.getByText('Bambu Lab P2S').first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('Acceptance printable bracket')).toBeVisible();
+  await expect(page.getByText('42.0 × 28.0 × 5.0 mm')).toBeVisible();
+  await expect(page.getByText('FIT', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Export geometry 3MF' })).toBeEnabled();
+
+  const manufacturingStatus = await request.get('http://127.0.0.1:8765/v2/manufacturing/p2s', { headers });
+  expect(manufacturingStatus.ok()).toBeTruthy();
+  const manufacturing = await manufacturingStatus.json() as { fabricated_part_count: number; resource: { model: string }; parts: Array<{ fits_build_volume: boolean }> };
+  expect(manufacturing.fabricated_part_count).toBe(1);
+  expect(manufacturing.resource.model).toBe('P2S');
+  expect(manufacturing.parts[0]?.fits_build_volume).toBeTruthy();
+
+  const geometry3mf = await request.post('http://127.0.0.1:8765/v2/manufacturing/p2s/export', {
+    headers,
+    data: { object_ids: [], tolerance_mm: 0.2 },
+  });
+  expect(geometry3mf.ok()).toBeTruthy();
+  expect(geometry3mf.headers()['content-type']).toContain('model/3mf');
+  expect(geometry3mf.headers()['x-forgecad-manufacturing-resource']).toBe('Bambu Lab P2S');
+  expect((await geometry3mf.body()).length).toBeGreaterThan(500);
 });
