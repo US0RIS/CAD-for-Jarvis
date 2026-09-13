@@ -62,7 +62,7 @@ function state(stack: ToleranceStack): { label: string; className: string } {
   return { label: 'NO SPEC', className: '' };
 }
 
-export function ToleranceSummary({ revision }: { revision?: string | null }) {
+export function ToleranceSummary({ revision }: { revision?: string | null | undefined }) {
   const [payload, setPayload] = useState<ToleranceStacksPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
 
