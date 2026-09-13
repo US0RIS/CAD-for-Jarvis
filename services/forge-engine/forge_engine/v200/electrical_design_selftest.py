@@ -88,6 +88,26 @@ def run() -> dict[str, object]:
         voltage_v=5.0,
     )
 
+    # Net metadata is applied by the v2 layer after the underlying v1.1 connection
+    # mutation. Prove that undoing a *subsequent* operation does not resurrect a stale
+    # pre-metadata connection snapshot.
+    core.execute(
+        "add_note",
+        {"text": "Electrical history sentinel"},
+        actor="human",
+        reason="Electrical self-test: history sentinel",
+    )
+    assert core.undo()
+    five_v_after_undo = next(
+        connection
+        for connection in core.PROJECT.get("connections", [])
+        if isinstance(connection, dict) and str(connection.get("id")) == five_v
+    )
+    assert five_v_after_undo["net_name"] == "+5V"
+    assert five_v_after_undo["net_class"] == "power"
+    assert float(five_v_after_undo["nominal_voltage_v"]) == 5.0
+    assert core.redo()
+
     schematic = electrical_design.compile_schematic(core.PROJECT)
     assert schematic["solver"] == "ForgeCAD ElectricalGraph"
     assert schematic["solver_version"] == "2.0.0"
@@ -181,6 +201,7 @@ def run() -> dict[str, object]:
         "bad_design_errors": failed["counts"]["error"],
         "parallel_source_conflict_detected": True,
         "repair_loop_validation_gated": True,
+        "history_metadata_preserved": True,
         "net_relabel_persisted": True,
     }
 
