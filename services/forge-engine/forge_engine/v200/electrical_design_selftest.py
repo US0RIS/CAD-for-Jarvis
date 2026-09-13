@@ -131,17 +131,27 @@ def run() -> dict[str, object]:
     assert five_v in relabelled_nets["VLOGIC"]["connection_ids"]
     assert twelve_v in {cid for net in relabelled["nets"] for cid in net["connection_ids"]}
 
-    # Deliberately miswire a second 5 V fan directly to the 12 V source. Existing
-    # deterministic interface metadata and the new canonical net analysis must expose
-    # the error rather than accepting a plausible-looking schematic.
-    bad_fan = _add_component("fan.noctua.nf_a4x10_5v")
+    # Add a second otherwise-valid regulator/fan branch and deliberately label its 5 V
+    # output as the same VLOGIC rail. Point-to-point interface checks accept each edge;
+    # only the v2 canonical-net layer can see that two independent power outputs have
+    # been electrically tied together without a verified current-sharing scheme.
+    regulator_2 = _add_component("power.pololu.d24v50f5")
+    fan_2 = _add_component("fan.noctua.nf_a4x10_5v")
     _connect(
         supply,
         "dc_out",
-        bad_fan,
-        "power",
-        net_name="+12V_BAD",
+        regulator_2,
+        "vin",
+        net_name="+12V",
         voltage_v=12.0,
+    )
+    _connect(
+        regulator_2,
+        "vout",
+        fan_2,
+        "power",
+        net_name="VLOGIC",
+        voltage_v=5.0,
     )
     failed = electrical_design.analyze_electrical(core.PROJECT)
     failed_codes = {
@@ -150,7 +160,18 @@ def run() -> dict[str, object]:
         if risk.get("severity") == "error"
     }
     assert not failed["ok"]
-    assert "voltage_mismatch" in failed_codes or "overvoltage" in failed_codes, failed["risks"]
+    assert "parallel_power_sources_unverified" in failed_codes, failed["risks"]
+
+    # The project-wide validation surface used by the autonomous repair loop must carry
+    # the same hard electrical failure.
+    project_validation = PROJECT.validation()
+    project_codes = {
+        str(risk.get("code"))
+        for risk in project_validation["risks"]
+        if risk.get("severity") == "error"
+    }
+    assert "parallel_power_sources_unverified" in project_codes
+    assert project_validation["electrical"]["ok"] is False
 
     return {
         "solver": schematic["solver"],
@@ -158,7 +179,8 @@ def run() -> dict[str, object]:
         "clean_power_nets": clean["coverage"]["power_nets"],
         "clean_errors": clean["counts"]["error"],
         "bad_design_errors": failed["counts"]["error"],
-        "miswire_detected": True,
+        "parallel_source_conflict_detected": True,
+        "repair_loop_validation_gated": True,
         "net_relabel_persisted": True,
     }
 
