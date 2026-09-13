@@ -13,7 +13,7 @@ on:
 
 jobs:
   transactional-design:
-    name: Architecture, parametric CAD, cached 3D, FEA, tolerances, dynamics, electrical, thermal, fluid, routing, safety, branches, campaigns, manufacturing, and evidence
+    name: Architecture, parametric CAD, cached 3D, FEA, tolerances, dynamics, electrical, thermal, fluid, routing, safety, kinematics, branches, campaigns, manufacturing, and evidence
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -130,6 +130,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v200.safety_selftest
+      - name: Run ForgeCAD 2.0 kinematics self-test
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v200-kinematics-selftest
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v200.kinematics_selftest
       - name: Run ForgeCAD 2.0 analysis contracts self-test
         env:
           PYTHONPATH: services/forge-engine
