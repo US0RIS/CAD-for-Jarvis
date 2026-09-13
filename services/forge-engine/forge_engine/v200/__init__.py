@@ -4,10 +4,11 @@ v1.1 remains the deterministic CAD/engineering execution substrate. v2.0 adds th
 system-architecture layer above it: goal decomposition, requirements, capability
 resolution, candidate discovery, plan quality gates, canonical requirement capture,
 a bounded design/validate/repair loop, manufacturing-resource integration including
-branch-safe oversized-part splitting, constraint-driven parametric sketches,
-branch-linked real-world evidence and feedback, real 3D solid finite-element screening
-for supported geometry, transform-independent canonical mesh caching, portable
-multi-branch workspaces, and branch-safe autonomous multi-variant engineering campaigns.
+branch-safe oversized-part splitting, constraint-driven parametric sketches, named
+expression-driven design parameters, branch-linked real-world evidence and feedback,
+real 3D solid finite-element screening for supported geometry, transform-independent
+canonical mesh caching, portable multi-branch workspaces, and branch-safe autonomous
+multi-variant engineering campaigns.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -37,6 +38,8 @@ from . import manufacturing_split as _manufacturing_split
 _manufacturing_split.install(_legacy_main)
 from . import scene_cache as _scene_cache
 _scene_cache.install()
+from . import parametric_expressions as _parametric_expressions
+_parametric_expressions.install(_legacy_main)
 from . import workspace_bundle as _workspace_bundle
 _workspace_bundle.install()
 from . import manufacturing_api as _manufacturing_api
