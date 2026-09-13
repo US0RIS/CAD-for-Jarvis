@@ -5,8 +5,7 @@ from __future__ import annotations
 The local planner should not have to infer what the deterministic solver supports from
 prose. These contracts travel in planner context and are also exposed through the local
 API. They describe *implemented* capability only; unsupported physics stays explicit so
-the model cannot quietly invent pressure/contact/moment support that the solver does not
-have.
+the model cannot quietly invent analysis support that ForgeCAD does not have.
 """
 
 from copy import deepcopy
@@ -196,6 +195,63 @@ DYNAMICS_ANALYSIS_CONTRACT: dict[str, Any] = {
 }
 
 
+ELECTRICAL_ANALYSIS_CONTRACT: dict[str, Any] = {
+    "id": "forgecad-electrical-graph-2.0",
+    "solver": "ForgeCAD ElectricalGraph",
+    "grade": "engineering_iteration",
+    "schematic_endpoint": "/v2/electrical/schematic",
+    "analysis_endpoint": "/v2/analysis/electrical",
+    "canonical_source": "frozen component interfaces + canonical project connections",
+    "connection_operation": {
+        "operation": "connect_interfaces",
+        "schema": {
+            "a_id": "$source",
+            "a_interface": "dc_out",
+            "b_id": "$load",
+            "b_interface": "power",
+            "kind": "electrical",
+            "net_name": "+5V",
+            "net_class": "power",
+            "nominal_voltage_v": 5.0,
+        },
+        "net_classes": ["power", "ground", "signal", "data", "mixed", "unknown"],
+        "same_name_policy": "Connections carrying the same explicit net_name compile into one canonical electrical net.",
+    },
+    "net_label_operation": {
+        "operation": "label_electrical_net",
+        "schema": {
+            "connection_id": "existing-connection-id",
+            "name": "+5V",
+            "net_class": "power",
+            "nominal_voltage_v": 5.0,
+        },
+    },
+    "outputs": [
+        "canonical named nets and member endpoints",
+        "source/sink interface topology",
+        "rail voltage candidates and conflicts",
+        "known current budget versus frozen source ratings",
+        "required electrical-interface coverage",
+        "voltage, current and logic-level compatibility risks",
+    ],
+    "unknown_policy": "Unknown electrical ratings remain unknown. Do not invent missing voltage/current/load data to make validation pass.",
+    "fail_closed": [
+        "conflicting modeled source voltages on one net",
+        "unverified parallel power outputs",
+        "known load current above a single modeled source rating",
+        "required modeled electrical inputs left unconnected",
+        "known voltage or logic-level incompatibility",
+    ],
+    "limitations": [
+        "no SPICE analog/transient/AC/noise simulation",
+        "no PCB routing or trace impedance/signal-integrity solver",
+        "no EMI/EMC, creepage/clearance or thermal-current-density certification analysis",
+        "external mains and deployment wiring may remain explicit verification boundaries",
+        "not certification evidence",
+    ],
+}
+
+
 MANUFACTURING_ANALYSIS_CONTRACT: dict[str, Any] = {
     "id": "bambu-lab-p2s-screening-2.0",
     "resource_id": "bambu-lab-p2s",
@@ -219,6 +275,7 @@ def contracts() -> dict[str, Any]:
         "structural": deepcopy(STRUCTURAL_ANALYSIS_CONTRACT),
         "tolerance": deepcopy(TOLERANCE_ANALYSIS_CONTRACT),
         "dynamics": deepcopy(DYNAMICS_ANALYSIS_CONTRACT),
+        "electrical": deepcopy(ELECTRICAL_ANALYSIS_CONTRACT),
         "manufacturing": deepcopy(MANUFACTURING_ANALYSIS_CONTRACT),
     }
 
