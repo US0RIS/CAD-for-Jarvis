@@ -10,6 +10,7 @@ do not cause an infinite redesign loop.
 
 import asyncio
 import json
+from copy import deepcopy
 from typing import Any
 
 from ..models import EngineeringJob, JobState, OllamaState
@@ -40,7 +41,7 @@ def validation_failures(validation: dict[str, Any] | None) -> list[dict[str, Any
             "kind": "requirement_failure",
             "code": str(requirement.get("id") or requirement.get("metric") or "requirement"),
             "message": str(requirement.get("message") or requirement.get("statement") or requirement.get("description") or "Requirement not satisfied"),
-            "actual": requirement.get("actual"),
+            "actual": requirement.get("actual", requirement.get("value")),
             "target": requirement.get("target"),
             "metric": requirement.get("metric"),
         })
@@ -83,6 +84,7 @@ async def run_agent_job_v2(legacy: Any, job: EngineeringJob, request: Any) -> No
         await legacy.update_job(job, state=JobState.PLANNING, progress=0.16, message="Decomposing goal into requirements and system functions")
         result: dict[str, Any]
         original_text = request.text or "Review and improve the design"
+        original_architecture: dict[str, Any] | None = None
 
         if legacy.DEMO_AGENT and ollama != OllamaState.READY:
             answer = "Created a safe experimental branch and kept the known-good baseline protected.\n\n- Applied the request through Forge Engine's typed operation layer.\n- Preserved the embedded device workspace with the design branch.\n- Ran deterministic validation before completing the task."
@@ -95,6 +97,8 @@ async def run_agent_job_v2(legacy: Any, job: EngineeringJob, request: Any) -> No
         elif request.apply_edits:
             await legacy.update_job(job, state=JobState.PLANNING, progress=0.24, message="Resolving functions to existing assets, catalog parts, software, and custom design")
             plan = await legacy.qwen_plan(original_text)
+            if isinstance(plan.get("architecture"), dict):
+                original_architecture = deepcopy(plan["architecture"])
             answer = str(plan.get("summary") or "Applied the planned engineering change through Forge Engine typed operations.")
             job.assistant_text = answer
             await legacy.broadcast({"type": "job.token", "job_id": job.id, "token": answer})
@@ -126,6 +130,10 @@ async def run_agent_job_v2(legacy: Any, job: EngineeringJob, request: Any) -> No
                 message=f"Repairing design · pass {repair_iteration + 1}/{MAX_REPAIR_ITERATIONS} · {len(failures)} hard failure{'s' if len(failures) != 1 else ''}",
             )
             repair_plan = await legacy.qwen_plan(repair_request(original_text, validation, repair_iteration))
+            if original_architecture is not None:
+                # Repair is another pass over the same system architecture, not a new
+                # user goal. This also prevents duplicate architecture notes/requirements.
+                repair_plan["architecture"] = deepcopy(original_architecture)
             if not repair_plan.get("commands"):
                 break
             result.setdefault("plans", []).append(repair_plan)
@@ -139,8 +147,6 @@ async def run_agent_job_v2(legacy: Any, job: EngineeringJob, request: Any) -> No
             repair_iteration += 1
             fingerprint = validation_fingerprint(next_validation)
             validation = next_validation
-            # If a repair produced exactly the same set of hard failures, another pass is
-            # unlikely to help a small local model; stop instead of burning cycles.
             if fingerprint and fingerprint == previous_fingerprint:
                 break
             previous_fingerprint = fingerprint
