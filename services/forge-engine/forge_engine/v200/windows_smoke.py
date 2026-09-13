@@ -20,29 +20,13 @@ import traceback
 
 
 def run() -> None:
-    from . import DESIGN_INTELLIGENCE_VERSION
-    from . import design_intelligence as design
-    from ..engineering_state import PROJECT
-
-    architecture = design.bootstrap_architecture(
-        "notify me when a door is opened",
-        PROJECT.snapshot(),
-    )
-    context = design.build_planner_context(
-        "notify me when a door is opened",
-        architecture,
-        PROJECT.snapshot(),
-    )
-    assert DESIGN_INTELLIGENCE_VERSION == "2.0.0"
-    assert any(
-        row.get("capability") == "physical_state_sensing"
-        for row in context["functions"]
-    )
-    assert any(
-        row.get("id") == "sensor.adafruit.magnetic_contact_375"
-        for row in context["candidate_components"]
-    )
-    print("ForgeCAD 2.0 Windows architecture smoke: PASS")
+    from .release_readiness import run as release_readiness
+    result = release_readiness()
+    assert result["version"] == "2.0.0"
+    assert result["validation_domains_present"] is True
+    assert result["planner_contracts_present"] is True
+    assert result["project_surface_present"] is True
+    print("ForgeCAD 2.0 Windows release smoke: PASS")
 
 
 def main() -> None:
