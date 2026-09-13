@@ -122,6 +122,11 @@ def _planner_system() -> str:
         "Use the same explicit net_name for electrically identical fan-out connections. Valid net_class values are power, ground, signal, data, mixed, unknown. Use nominal_voltage_v only when supported by frozen component data or an explicit requirement; never invent a rail voltage or missing current rating. "
         "Connect required modeled power/signal inputs when the architecture needs them. ForgeCAD compiles canonical nets and checks voltage/current/logic compatibility, required-interface coverage, conflicting sources, and known current budgets. It does not perform SPICE, PCB signal-integrity, or EMI/EMC analysis. "
         "label_electrical_net is only for an existing known connection_id; prefer setting net metadata directly on connect_interfaces when creating new wiring in the same plan. "
+        "Thermal behavior is also canonical engineering data when it matters to the design. Add heat generation with add_load {object_id:'$electronics',type:'heat',heat_w:12}. "
+        "Represent an explicit conductive path with add_constraint {type:'thermal_link',a_id:'$electronics',b_id:'$sink',conductance_w_k:2.5}; alternatively provide area_mm2, length_mm and thermal_w_mk for an explicit k*A/L link. "
+        "Represent environmental rejection with add_constraint {object_id:'$enclosure',type:'convection',ambient_c:25,h_w_m2k:8,exposed_fraction:0.8}, or a known sink with {object_id:'$cold_plate',type:'fixed_temperature',temperature_c:35}. "
+        "Encode a thermal requirement with {object_id:'$electronics',type:'temperature_limit',max_temperature_c:85}. Never infer contact conductance from bodies touching in CAD, and never invent convection coefficients, ambient conditions, heat dissipation or temperature limits. "
+        "ForgeCAD's ThermalNetwork is a steady-state lumped-body conductance model; it does not replace transient thermal analysis, radiation, CFD/airflow, or certification testing. "
         "When fit, clearance, preload, or assembled length depends on manufacturing variation, encode a canonical 1D tolerance stack with add_constraint rather than only mentioning tolerance in prose. "
         "A contributor uses {type:'dimension_tolerance',stack:'stack_name',name:'dimension',object_id:'$part',parameter:'x',coefficient:1,minus_mm:0.05,plus_mm:0.10,sigma_mm?:0.02}. "
         "Instead of object_id+parameter it may use design_parameter:'name' or a literal nominal_mm. Use negative coefficient for subtractive dimensions. Add one stack spec as "
@@ -130,7 +135,7 @@ def _planner_system() -> str:
         "When a fabricated body exceeds an available manufacturing resource, do not merely report that it is too large. For a Bambu Lab P2S use split_for_manufacturing with "
         "{id:'$part',resource_id:'bambu-lab-p2s',margin_mm:8,max_pieces:24,alignment_diameter_mm:3.2,alignment_depth_mm:8}. "
         "That operation creates a protected sibling manufacturing branch, preserves the unsplit source, generates actual clipped printable solids and optional alignment sockets, and leaves joint strength unverified. "
-        "After splitting, re-run manufacturing, structural/joint, assembly, tolerance, electrical, and requirement validation as applicable; never treat alignment sockets as proof that the seam is mechanically adequate. "
+        "After splitting, re-run manufacturing, structural/joint, assembly, tolerance, electrical, thermal, and requirement validation as applicable; never treat alignment sockets as proof that the seam is mechanically adequate. "
         "Prefer editable parametric geometry over a visually plausible but dimensionally arbitrary shape. Never use scaling to hide incorrect dimensions. "
         "Use object_id from existing_assets for existing transforms, connections, and code_write. When credentials or deployment-specific values are unknown, "
         "generate configurable placeholders and identify them in checks rather than refusing the design. "
@@ -192,6 +197,7 @@ async def qwen_reply(text: str, job: EngineeringJob) -> str:
         "When a current part is missing, explain whether ForgeCAD should reuse an asset, select a catalog candidate, synthesize a custom part, or implement the function in software. "
         "When the supplied design_parameters show a named relationship, preserve that relationship instead of replacing it with duplicated literal dimensions. "
         "Treat the compiled electrical graph as canonical topology/power evidence when present: distinguish known rail/current/logic incompatibilities from unknown ratings, and do not imply it replaces SPICE, PCB signal-integrity, EMI/EMC, or certification analysis. "
+        "Treat the thermal network as canonical steady-state thermal evidence when present: keep explicit heat, conductance, convection and sink assumptions visible, and do not imply the lumped network replaces transient thermal analysis, radiation, CFD or physical verification. "
         "Treat tolerance stacks as canonical engineering evidence: separate worst-case/RSS results from statistical yield, and never infer sigma from a drawing tolerance."
     )
     request = {
