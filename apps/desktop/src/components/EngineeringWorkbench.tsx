@@ -18,6 +18,7 @@ import {
   type RegistryStatsPayload,
   type ValidationPayload,
 } from '../api/engine';
+import { EngineeringDomainSummary } from './EngineeringDomainSummary';
 import { ToleranceSummary } from './ToleranceSummary';
 import '../styles/engineering-workbench.css';
 
@@ -160,7 +161,7 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
       const href = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = href;
-      link.download = `${(project?.name ?? 'ForgeCAD-Project').replace(/[^A-Za-z0-9_.-]+/g, '-')}.forgecad.zip`;
+      link.download = `${(project?.name ?? 'ForgeCAD-Project').replace(/[^A-Za-z0-9_.-]+/g, '-')}.focad`;
       link.click();
       URL.revokeObjectURL(href);
     } catch (cause) {
@@ -248,15 +249,17 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
       <p>{selected.component_ref ? `Registry component: ${selected.component_ref}` : 'Fabricated/custom part generated from exact CAD geometry.'}</p>
     </div>}
 
+    <EngineeringDomainSummary validation={validation} project={project} mode="design"/>
+
     <div className="campaign-card">
       <strong>Portable project + CAD import</strong>
-      <p>Bundles carry project state, frozen component snapshots, code and local CAD assets.</p>
+      <p><code>.focad</code> bundles carry project state, frozen component snapshots, code and local CAD assets.</p>
       <div className="filter-row">
-        <button disabled={busy} onClick={() => void exportBundle()}><Download size={13}/> Export bundle</button>
-        <button disabled={busy} onClick={() => bundleInput.current?.click()}><Upload size={13}/> Import bundle</button>
+        <button disabled={busy} onClick={() => void exportBundle()}><Download size={13}/> Export .focad</button>
+        <button disabled={busy} onClick={() => bundleInput.current?.click()}><Upload size={13}/> Import .focad</button>
         <button disabled={busy} data-testid="import-step" onClick={() => stepInput.current?.click()}><FileUp size={13}/> Import STEP</button>
       </div>
-      <input ref={bundleInput} hidden type="file" accept=".zip,.forgecad.zip" onChange={(event) => void onBundle(event.target.files?.[0])}/>
+      <input ref={bundleInput} hidden type="file" accept=".focad,.zip,.forgecad.zip" onChange={(event) => void onBundle(event.target.files?.[0])}/>
       <input ref={stepInput} hidden type="file" accept=".step,.stp" onChange={(event) => void onStep(event.target.files?.[0])}/>
     </div>
 
@@ -272,13 +275,15 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
 
   return <div className="component-library engineering-analysis" data-testid="analysis-workspace">
     <h2>Engineering validation</h2>
-    <p>Deterministic structural, modal, thermal, tolerance, manufacturability, electrical and assembly screening.</p>
+    <p>Deterministic structural, modal, thermal, tolerance, manufacturability, electrical, fluid, routing, kinematic, safety and assembly screening.</p>
     {error && <div className="runtime-banner error"><ShieldAlert size={15}/><div><strong>Validation failed</strong><span>{error}</span></div></div>}
     <div className="campaign-card">
       <div className="campaign-title">{validation?.ok ? <CheckCircle2 size={18}/> : <ShieldAlert size={18}/>}<div><strong>{validation?.ok ? 'Reality checks pass' : 'Engineering risks need attention'}</strong><span>{validation ? `${validation.counts.error} errors · ${validation.counts.warning} warnings · ${validation.counts.info} info` : 'Loading validation…'}</span></div></div>
       <button disabled={busy} onClick={() => void refresh()}><RefreshCw size={13}/> Re-run validation</button>
       {(validation?.risks ?? []).slice(0, 8).map((risk, index) => <div className="history-row" key={`${risk.code}-${index}`}><span>{risk.severity}</span><strong>{risk.message}</strong><small>{risk.code ?? 'engineering_check'}</small></div>)}
     </div>
+
+    <EngineeringDomainSummary validation={validation} project={project}/>
 
     {requirements.length > 0 && <div className="campaign-card requirement-gates" data-testid="requirement-gates">
       <strong>Requirement gates</strong>
