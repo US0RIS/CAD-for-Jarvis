@@ -1,0 +1,96 @@
+name: ForgeCAD 3.0 Browser Acceptance
+
+on:
+  push:
+    branches: [forgecad/3.0.0]
+    paths:
+      - 'apps/desktop/**'
+      - 'services/forge-engine/**'
+      - '.github/workflows/v300-browser-acceptance.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+
+jobs:
+  world-ui:
+    name: Physical world SYSTEM UI vertical slice
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Forge Engine
+        shell: pwsh
+        run: |
+          python -m venv services/forge-engine/.venv
+          services/forge-engine/.venv/Scripts/python.exe -m pip install --upgrade pip
+          services/forge-engine/.venv/Scripts/python.exe -m pip install -e services/forge-engine
+
+      - name: Install desktop dependencies
+        run: pnpm install --prod=false --frozen-lockfile=false
+
+      - name: Typecheck and build renderer
+        run: |
+          pnpm --filter @forgecad/desktop typecheck
+          pnpm --filter @forgecad/desktop build
+
+      - name: Install Chromium acceptance runtime
+        run: pnpm --filter @forgecad/desktop exec playwright install chromium
+
+      - name: Start ForgeCAD 3.0 production-like engine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE/services/forge-engine"
+          $env:FORGECAD_SESSION_TOKEN = 'test-session'
+          $env:FORGECAD_OLLAMA_MODEL = 'qwen3:8b'
+          $env:FORGECAD_DEMO_AGENT = '1'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-v300-browser-state"
+          $env:CI = 'false'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '0'
+          $python = "$env:GITHUB_WORKSPACE/services/forge-engine/.venv/Scripts/python.exe"
+          $p = Start-Process -FilePath $python -ArgumentList '-m','uvicorn','forge_engine.desktop_entry:app','--host','127.0.0.1','--port','8765','--log-level','warning' -WorkingDirectory "$env:GITHUB_WORKSPACE/services/forge-engine" -PassThru
+          $p.Id | Set-Content "$env:RUNNER_TEMP/forge-engine-v300.pid"
+          $deadline = (Get-Date).AddSeconds(60)
+          $healthy = $false
+          do {
+            try {
+              $r = Invoke-RestMethod http://127.0.0.1:8765/v3/health -TimeoutSec 2
+              if ($r.ok -and $r.api_version -eq '3' -and $r.engine_version -eq '3.0.0') { $healthy = $true; break }
+            } catch {}
+            Start-Sleep -Milliseconds 250
+          } while ((Get-Date) -lt $deadline)
+          if (-not $healthy) { throw 'ForgeCAD 3.0 engine did not become healthy.' }
+
+      - name: Run physical-world browser acceptance
+        run: pnpm --filter @forgecad/desktop exec playwright test e2e/v300-world.spec.ts
+
+      - name: Upload Playwright diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forgecad-v300-browser-diagnostics
+          path: |
+            apps/desktop/test-results/**
+            apps/desktop/playwright-report/**
+          if-no-files-found: ignore
+
+      - name: Stop Forge Engine
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:RUNNER_TEMP/forge-engine-v300.pid") {
+            $pidValue = Get-Content "$env:RUNNER_TEMP/forge-engine-v300.pid" | Select-Object -First 1
+            if ($pidValue) { Stop-Process -Id ([int]$pidValue) -Force -ErrorAction SilentlyContinue }
+          }
