@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity, AlertTriangle, Box, Check, Download, Printer, RefreshCw, Scissors,
-  Wrench,
+  Wrench, X,
 } from 'lucide-react';
 import { engineFetch, engineRawFetch, type ProjectPayload } from '../api/engine';
 import '../styles/manufacture.css';
@@ -43,6 +43,13 @@ type P2SStatus = {
   parts: ManufacturingPart[];
   all_parts_fit_individually: boolean;
   packing_status: string;
+  estimated_plate_count?: number | null;
+  plate_packing?: {
+    plate_count: number;
+    all_packable: boolean;
+    unplaced_object_ids: string[];
+    authoritative_arrangement: boolean;
+  };
   slicer: {
     name: string;
     cli_available: boolean;
@@ -67,6 +74,13 @@ type Props = {
   selectedId: string | null;
   onSelectPart: (id: string) => void;
   onDraftRedesign: (part: ManufacturingPart) => void;
+};
+
+type PreparedPackage = {
+  sha256: string;
+  stage: 'geometry-exchange' | 'bambu-studio-sliced';
+  filename: string;
+  branch: string;
 };
 
 function formatDimensions(bounds: number[] | null) {
@@ -100,9 +114,11 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
   const [status, setStatus] = useState<P2SStatus | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<'export' | 'slice' | null>(null);
+  const [busy, setBusy] = useState<'export' | 'slice' | 'evidence' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastAction, setLastAction] = useState<string | null>(null);
+  const [preparedPackage, setPreparedPackage] = useState<PreparedPackage | null>(null);
+  const [prototypeNote, setPrototypeNote] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -156,9 +172,44 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
       );
       const blob = await response.blob();
       const fallback = `${(project?.name || 'ForgeCAD-Design').replace(/[^a-z0-9._-]+/gi, '-')}-${slice ? 'P2S-sliced' : 'P2S'}.3mf`;
-      downloadBlob(blob, responseFilename(response, fallback));
+      const filename = responseFilename(response, fallback);
+      const sha256 = response.headers.get('X-ForgeCAD-Package-SHA256') ?? '';
+      const branch = response.headers.get('X-ForgeCAD-Branch') ?? project?.active_branch ?? 'main';
+      const stage = (response.headers.get('X-ForgeCAD-3MF-Stage') === 'bambu-studio-sliced' ? 'bambu-studio-sliced' : 'geometry-exchange') as PreparedPackage['stage'];
+      downloadBlob(blob, filename);
+      if (/^[0-9a-f]{64}$/i.test(sha256)) setPreparedPackage({ sha256, stage, filename, branch });
       setLastAction(slice ? 'Sliced P2S 3MF prepared by Bambu Studio.' : 'Geometry 3MF exported for Bambu Studio.');
       await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function recordPrototype(outcome: 'success' | 'failure') {
+    if (!preparedPackage || busy) return;
+    setBusy('evidence');
+    setError(null);
+    try {
+      const materialNames = Array.from(new Set(selectedParts.map((part) => part.material?.requested_filament || part.material?.design_material).filter(Boolean)));
+      await engineFetch('/v2/evidence/manufacturing', {
+        method: 'POST',
+        body: JSON.stringify({
+          package_sha256: preparedPackage.sha256,
+          resource_id: status?.resource.id ?? 'bambu-lab-p2s',
+          outcome,
+          material: materialNames.join(', ') || null,
+          machine_profile: status?.slicer.profiles.machine.path ?? null,
+          process_profile: status?.slicer.profiles.process.path ?? null,
+          filament_profiles: status?.slicer.profiles.filaments.map((profile) => profile.path).filter(Boolean) ?? [],
+          slicer: status?.slicer.name ?? 'Bambu Studio',
+          observations: prototypeNote.trim() ? [prototypeNote.trim()] : [],
+          note: prototypeNote.trim(),
+        }),
+      });
+      setLastAction(`Physical prototype ${outcome} recorded on ${preparedPackage.branch}.`);
+      setPrototypeNote('');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -195,6 +246,7 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
           <dt>Slicer</dt><dd>{status.slicer.name}</dd>
           <dt>CLI</dt><dd>{status.slicer.cli_available ? 'Detected' : 'Not detected'}</dd>
           <dt>Profiles</dt><dd>{status.slicer.profiles.complete ? 'Configured' : 'Incomplete'}</dd>
+          <dt>Plates</dt><dd>{status.estimated_plate_count ?? (status.fabricated_part_count ? 'Needs redesign' : '—')}</dd>
         </dl>
       </section>
 
@@ -247,6 +299,18 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
         {!selectedFit && selected.size > 0 && <div className="manufacture-hint warning"><AlertTriangle size={10}/>One or more selected bodies exceed the P2S build envelope. Redesign or split them before slicing.</div>}
         <div className="manufacture-hint"><Box size={10}/>3MF export includes fabricated bodies only. Purchased catalog components stay in the assembly but are excluded from the print package.</div>
       </section>
+
+      {preparedPackage && <section className="property-section manufacture-evidence-section" data-testid="manufacture-evidence">
+        <div className="property-section-title">PROTOTYPE EVIDENCE</div>
+        <div className="manufacture-package-row"><div><strong>{preparedPackage.filename}</strong><span>{preparedPackage.stage.replaceAll('-', ' ')} · branch {preparedPackage.branch}</span></div><button className="icon-button" title="Clear prepared-package evidence target" onClick={() => setPreparedPackage(null)}><X size={11}/></button></div>
+        <div className="manufacture-hash" title={preparedPackage.sha256}>SHA-256 {preparedPackage.sha256.slice(0, 12)}…{preparedPackage.sha256.slice(-8)}</div>
+        <textarea className="manufacture-evidence-note" value={prototypeNote} onChange={(event) => setPrototypeNote(event.target.value)} placeholder="Prototype observations, fit issues, print failure, measurements…"/>
+        <div className="manufacture-evidence-actions">
+          <button disabled={Boolean(busy)} onClick={() => void recordPrototype('failure')}><AlertTriangle size={11}/>{busy === 'evidence' ? 'Recording…' : 'Record failed print'}</button>
+          <button className="primary-action" disabled={Boolean(busy)} onClick={() => void recordPrototype('success')}><Check size={11}/>{busy === 'evidence' ? 'Recording…' : 'Record successful print'}</button>
+        </div>
+        <div className="manufacture-hint"><Activity size={10}/>Evidence is attached to this design branch and exact package hash. Recording a successful print does not silently mark the engineering design as physically verified.</div>
+      </section>}
 
       <section className="property-section">
         <div className="property-section-title">PHYSICAL HANDOFF</div>
