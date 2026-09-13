@@ -13,7 +13,7 @@ on:
 
 jobs:
   full-regression:
-    name: Existing engineering stack + v3 world model + desktop typecheck
+    name: Existing engineering stack + v3 world/capability model + desktop typecheck
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -45,6 +45,13 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v300.world_model_selftest
+      - name: Run capability action safety regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v300-capabilities
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v300.capability_runtime_selftest
       - name: Run v3 API vertical slice
         env:
           PYTHONPATH: services/forge-engine
