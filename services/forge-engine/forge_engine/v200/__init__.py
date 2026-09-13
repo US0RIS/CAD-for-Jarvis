@@ -9,11 +9,12 @@ expression-driven design parameters, branch-linked real-world evidence and feedb
 real 3D solid finite-element screening for supported geometry including canonical
 project loads/supports and parametric load cases, deterministic tolerance-stack
 analysis, assembly mass properties and rigid-body dynamics, canonical electrical
-schematics/net and rail screening, transform-independent canonical mesh caching,
-portable multi-branch workspaces, machine-readable analysis contracts, full
-engineering-state branch diffs, a project API surface for canonical engineering
-records, and branch-safe autonomous multi-variant engineering campaigns whose
-structural ranking uses canonical project SolidFEA when available.
+schematics/net and rail screening, canonical multi-body steady-state thermal networks,
+transform-independent canonical mesh caching, portable multi-branch workspaces,
+machine-readable analysis contracts, full engineering-state branch diffs, a project
+API surface for canonical engineering records, and branch-safe autonomous multi-variant
+engineering campaigns whose structural ranking uses canonical project SolidFEA when
+available.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -59,6 +60,8 @@ from . import electrical_history as _electrical_history
 _electrical_history.install()
 from . import electrical_validation as _electrical_validation
 _electrical_validation.install()
+from . import thermal_network as _thermal_network
+_thermal_network.install(_legacy_main)
 from . import workspace_bundle as _workspace_bundle
 _workspace_bundle.install()
 from . import manufacturing_api as _manufacturing_api
