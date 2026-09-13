@@ -82,6 +82,8 @@ from . import safety_analysis as _safety_analysis
 _safety_analysis.install(_legacy_main)
 from . import canonical_fingerprint as _canonical_fingerprint
 _canonical_fingerprint.install()
+from . import safety_evidence as _safety_evidence
+_safety_evidence.install()
 from . import campaign_intelligence as _campaign_intelligence
 _campaign_intelligence.install(_legacy_main)
 from . import feedback_intelligence as _feedback_intelligence
@@ -96,6 +98,8 @@ from . import fluid_contract as _fluid_contract
 _fluid_contract.install()
 from . import routing_contract as _routing_contract
 _routing_contract.install()
+from . import safety_contract as _safety_contract
+_safety_contract.install()
 from . import engineering_diff as _engineering_diff
 _engineering_diff.install()
 from . import project_surface as _project_surface
