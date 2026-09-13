@@ -2,7 +2,8 @@
 
 v1.1 remains the deterministic CAD/engineering execution substrate. v2.0 adds the
 system-architecture layer above it: goal decomposition, requirements, capability
-resolution, candidate discovery, plan quality gates, and canonical requirement capture.
+resolution, candidate discovery, plan quality gates, canonical requirement capture,
+and a bounded design/validate/repair loop.
 """
 
 DESIGN_INTELLIGENCE_VERSION = "2.0.0"
@@ -12,5 +13,8 @@ from . import intent_hotfix as _intent_hotfix
 _intent_hotfix.install()
 from . import execution_enrichment as _execution_enrichment
 _execution_enrichment.install()
+from . import agent_loop as _agent_loop
+from .. import main as _legacy_main
+_agent_loop.install(_legacy_main)
 
 __all__ = ["DESIGN_INTELLIGENCE_VERSION", "design_intelligence"]
