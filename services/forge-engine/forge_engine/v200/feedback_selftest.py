@@ -101,9 +101,10 @@ def run() -> dict[str, object]:
     assert requirement_delta["target"]["status"] == "passed"
     assert physical_compare["causality"] == "not_inferred"
 
-    # The failed source evidence is exact for the failed source branch. Candidate CAD
-    # mutations must make it historical rather than permanently failing every autonomous
-    # redesign before that redesign can be tested.
+    # The failed source evidence is exact for the failed source branch. An unchanged
+    # baseline candidate must remain failed; candidates whose CAD fingerprint changes
+    # must treat that physical failure as historical evidence rather than as proof that
+    # the new geometry also fails.
     campaign = PROJECT.run_campaign(
         object_id,
         {
@@ -120,7 +121,15 @@ def run() -> dict[str, object]:
     assert campaign["source_physical_feedback"]["manufacturing_outcomes"]["failure"] == 1
     assert campaign["feedback_semantics"]["evidence_is_stale_after_candidate_geometry_changes"] is True
     assert len(campaign["candidates"]) == 3
-    assert all(row["verifier"]["gates"]["requirements"] for row in campaign["candidates"] if "error" not in row)
+
+    evaluated = [row for row in campaign["candidates"] if "error" not in row]
+    exact_source = [row for row in evaluated if abs(float((row.get("parameters") or {}).get("z", -1.0)) - 5.0) <= 1e-9]
+    redesigned = [row for row in evaluated if abs(float((row.get("parameters") or {}).get("z", -1.0)) - 5.0) > 1e-9]
+    assert len(exact_source) == 1
+    assert exact_source[0]["verifier"]["gates"]["requirements"] is False
+    assert redesigned
+    assert all(row["verifier"]["gates"]["requirements"] for row in redesigned)
+    assert campaign["winner_branch"] != exact_source[0]["branch"]
 
     feedback_endpoint_model = feedback_intelligence.branch_feedback("main")
     assert feedback_endpoint_model["physical_verified"] is True
@@ -133,7 +142,8 @@ def run() -> dict[str, object]:
         "branch_evidence_comparison": True,
         "causality_not_inferred": physical_compare["causality"] == "not_inferred",
         "campaign_candidates": len(campaign["candidates"]),
-        "stale_failure_does_not_block_candidates": all(row["verifier"]["gates"]["requirements"] for row in campaign["candidates"] if "error" not in row),
+        "exact_failed_revision_remains_blocked": not exact_source[0]["verifier"]["gates"]["requirements"],
+        "redesigned_candidates_treat_old_failure_as_historical": all(row["verifier"]["gates"]["requirements"] for row in redesigned),
     }
 
 
