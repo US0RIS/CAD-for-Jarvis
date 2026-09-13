@@ -1,0 +1,217 @@
+name: ForgeCAD 3.0 Windows Release
+
+on:
+  push:
+    branches: [forgecad/3.0.0]
+    paths:
+      - 'apps/desktop/**'
+      - 'services/forge-engine/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/v300-windows-release.yml'
+  workflow_dispatch:
+
+jobs:
+  windows-release:
+    name: Build and validate ForgeCAD 3.0 Windows installer
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm clean checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git reset --hard HEAD
+          git clean -ffdx
+          if (git status --porcelain) { throw 'Working tree is not clean.' }
+          Write-Host "HEAD=$(git rev-parse HEAD)"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install and test engineering stack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine pyinstaller
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\services\forge-engine"
+          $env:CI = 'true'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '1'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-v300-release-selftest"
+          python -m forge_engine.full_scope_selftest
+          python -m forge_engine.v300.world_model_selftest
+          python -m forge_engine.v300.identity_resolution_selftest
+          python -m forge_engine.v300.planner_world_context_selftest
+          python -m forge_engine.v300.world_event_stream_selftest
+          python -m forge_engine.v300.capability_runtime_selftest
+          python -m forge_engine.v300.api_selftest
+
+      - name: Build standalone Forge Engine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --name forge-engine `
+            --collect-all cadquery `
+            --collect-all OCP `
+            --collect-all vtkmodules `
+            --collect-submodules forge_engine.v110 `
+            --collect-submodules forge_engine.v200 `
+            --collect-submodules forge_engine.v300 `
+            --distpath services/forge-engine/dist `
+            --workpath services/forge-engine/build/pyinstaller `
+            --specpath services/forge-engine/build `
+            services/forge-engine/forge_engine/desktop_entry.py
+          if (-not (Test-Path 'services/forge-engine/dist/forge-engine.exe')) { throw 'Forge Engine executable was not produced.' }
+
+      - name: Smoke standalone v3 engine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:FORGECAD_PORT = '8891'
+          $env:FORGECAD_SESSION_TOKEN = 'v300-release-smoke'
+          $env:FORGECAD_OLLAMA_MODEL = 'qwen3:8b'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-v300-standalone-state"
+          $env:CI = 'true'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '1'
+          $engine = "$env:GITHUB_WORKSPACE\services\forge-engine\dist\forge-engine.exe"
+          $p = Start-Process -FilePath $engine -PassThru -WindowStyle Hidden
+          try {
+            $deadline = (Get-Date).AddSeconds(75)
+            $health = $null
+            do {
+              try {
+                $health = Invoke-RestMethod http://127.0.0.1:8891/v3/health -TimeoutSec 2
+                if ($health.ok -and $health.api_version -eq '3') { break }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            if (-not ($health.ok -and $health.api_version -eq '3' -and $health.engine_version -eq '3.0.0')) { throw 'Standalone v3 health failed.' }
+            if (-not $health.project_sync.ok) { throw 'Standalone project-to-world sync is not healthy.' }
+
+            $headers = @{ 'X-ForgeCAD-Session' = 'v300-release-smoke' }
+            $context = Invoke-RestMethod http://127.0.0.1:8891/v3/jarvis/context -Headers $headers -TimeoutSec 30
+            if ([int]$context.world.entity_count -lt 7) { throw "Physical world is incomplete: $($context.world.entity_count) entities." }
+            if (-not (@($context.entities) | Where-Object { $_.source_links.component_ref -eq 'compute.raspberry_pi_5_8gb' })) { throw 'World projection is missing Raspberry Pi 5.' }
+
+            $events = Invoke-RestMethod http://127.0.0.1:8891/v3/world/events -Headers $headers -TimeoutSec 20
+            if ([int]$events.revision -lt 1) { throw 'World event surface has no revision.' }
+
+            $architectureBody = @{ text = 'inspect the Raspberry Pi and detect whether a door is open'; use_model = $false } | ConvertTo-Json
+            $architecture = Invoke-RestMethod http://127.0.0.1:8891/v2/design/architecture -Method Post -Headers $headers -ContentType 'application/json' -Body $architectureBody -TimeoutSec 30
+            if (-not $architecture.physical_world) { throw 'Packaged engineering planner is missing physical_world context.' }
+            if ([int]$architecture.physical_world.entity_count -lt 7) { throw 'Planner physical-world context is incomplete.' }
+
+            $focad = Join-Path $env:RUNNER_TEMP 'v300-standalone.focad'
+            Invoke-WebRequest http://127.0.0.1:8891/v2/project/export -Headers $headers -OutFile $focad -TimeoutSec 30
+            python -c "import zipfile,json; z=zipfile.ZipFile(r'$focad'); m=json.loads(z.read('manifest.json')); assert m['format']=='focad' and m['format_version']==1"
+            Write-Host "Standalone ForgeCAD 3.0 world: entities=$($context.world.entity_count) relations=$($context.world.relation_count)"
+          } finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Typecheck desktop
+        run: pnpm --filter @forgecad/desktop typecheck
+
+      - name: Build NSIS installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: pnpm --filter @forgecad/desktop dist:win
+
+      - name: Install and validate packaged copy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-3.0.0.exe' | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'ForgeCAD 3.0.0 installer was not produced.' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'ForgeCAD-3-Installed'
+          if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer failed with exit code $($install.ExitCode)." }
+
+          $app = Join-Path $installDir 'ForgeCAD.exe'
+          $engine = Join-Path $installDir 'resources\forge-engine\forge-engine.exe'
+          if (-not (Test-Path $app)) { throw "Installed desktop missing: $app" }
+          if (-not (Test-Path $engine)) { throw "Installed engine missing: $engine" }
+          $version = (Get-Item $app).VersionInfo.ProductVersion
+          if (-not $version.StartsWith('3.0.0')) { throw "Expected ProductVersion 3.0.0, got $version" }
+
+          $env:FORGECAD_PORT = '8892'
+          $env:FORGECAD_SESSION_TOKEN = 'v300-installed-smoke'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-v300-installed-state"
+          $env:CI = 'true'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '1'
+          $engineProcess = Start-Process -FilePath $engine -PassThru -WindowStyle Hidden
+          try {
+            $deadline = (Get-Date).AddSeconds(75)
+            $health = $null
+            do {
+              try {
+                $health = Invoke-RestMethod http://127.0.0.1:8892/v3/health -TimeoutSec 2
+                if ($health.ok -and $health.api_version -eq '3') { break }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            if (-not ($health.ok -and $health.engine_version -eq '3.0.0')) { throw 'Installed v3 health smoke failed.' }
+            $headers = @{ 'X-ForgeCAD-Session' = 'v300-installed-smoke' }
+            $world = Invoke-RestMethod http://127.0.0.1:8892/v3/world -Headers $headers -TimeoutSec 30
+            if (@($world.entities).Count -lt 7) { throw 'Installed physical world projection is incomplete.' }
+            $architectureBody = @{ text = 'inspect the current physical system'; use_model = $false } | ConvertTo-Json
+            $architecture = Invoke-RestMethod http://127.0.0.1:8892/v2/design/architecture -Method Post -Headers $headers -ContentType 'application/json' -Body $architectureBody -TimeoutSec 30
+            if (-not $architecture.physical_world) { throw 'Installed planner does not receive physical-world context.' }
+          } finally {
+            if (-not $engineProcess.HasExited) { Stop-Process -Id $engineProcess.Id -Force }
+          }
+
+          $appProcess = Start-Process -FilePath $app -ArgumentList '--disable-gpu' -PassThru
+          $childEngine = $null
+          try {
+            $deadline = (Get-Date).AddSeconds(45)
+            do {
+              Start-Sleep -Milliseconds 500
+              $appProcess.Refresh()
+              if ($appProcess.HasExited) { throw "Installed ForgeCAD exited during launch smoke with code $($appProcess.ExitCode)." }
+              $childEngine = Get-CimInstance Win32_Process -Filter "Name='forge-engine.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.ExecutablePath -eq $engine } | Select-Object -First 1
+            } while (-not $childEngine -and (Get-Date) -lt $deadline)
+            if (-not $childEngine) { throw 'Installed desktop did not start its bundled Forge Engine.' }
+            Write-Host "Installed ForgeCAD 3.0 launch: PASS desktop=$($appProcess.Id) engine=$($childEngine.ProcessId)"
+          } finally {
+            if (-not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force }
+            if ($childEngine) { Stop-Process -Id $childEngine.ProcessId -Force -ErrorAction SilentlyContinue }
+          }
+
+          $uninstaller = Get-ChildItem $installDir -Filter 'Uninstall*.exe' | Select-Object -First 1
+          if (-not $uninstaller) { throw 'Uninstaller missing.' }
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($uninstall.ExitCode)." }
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeCAD-3.0.0-Windows-Installer
+          path: apps/desktop/release/ForgeCAD-Setup-3.0.0.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
