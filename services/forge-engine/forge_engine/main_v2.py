@@ -74,7 +74,7 @@ async def qwen_architecture(text: str) -> dict[str, Any]:
         "Decompose the user's goal into a buildable engineering architecture with keys goal, requirements, functions, assumptions, open_questions. "
         "requirements is an array of {id,statement,priority,verification}. functions is an array of "
         "{id,capability,description,kind,required,search_terms,constraints,depends_on}. "
-        "Think across mechanical structure, sensing, actuation, power, compute, connectivity, software, thermal management, interfaces, and safety where relevant. "
+        "Think across mechanical structure, sensing, actuation, power, compute, connectivity, software, thermal management, interfaces, manufacturing tolerance, and safety where relevant. "
         "A missing part in the current design is not a blocker; describe the required capability. External services are software capabilities, not physical catalog parts. "
         "Infer ordinary implementation details when safe. Ask a question only when a genuinely blocking requirement cannot be safely inferred."
     )
@@ -117,10 +117,15 @@ def _planner_system() -> str:
         "box params: {x,y,z}; cylinder: {radius,height}; sphere: {radius}; sketch_extrude: {height,sketch:{type:'rectangle'|'circle'|'polygon',width?,height?,radius?,points?}}; "
         "revolve: {points:[[radius,z],...],angle_deg}. Supply material, transform, and semantic role/tags when useful. "
         "After creating custom geometry, add_feature can add holes {type:'hole',diameter,axis,x,y,z}, circular/rectangular pockets, fillets, or chamfers. "
+        "When fit, clearance, preload, or assembled length depends on manufacturing variation, encode a canonical 1D tolerance stack with add_constraint rather than only mentioning tolerance in prose. "
+        "A contributor uses {type:'dimension_tolerance',stack:'stack_name',name:'dimension',object_id:'$part',parameter:'x',coefficient:1,minus_mm:0.05,plus_mm:0.10,sigma_mm?:0.02}. "
+        "Instead of object_id+parameter it may use design_parameter:'name' or a literal nominal_mm. Use negative coefficient for subtractive dimensions. Add one stack spec as "
+        "{type:'tolerance_spec',stack:'stack_name',lower_spec_mm:...,upper_spec_mm:...}. Only provide sigma_mm when it is known process standard deviation; never infer sigma from drawing tolerance. "
+        "ForgeCAD computes worst-case, RSS and contributor sensitivity from these records, and statistical yield/Cp/Cpk only when every active contributor has explicit sigma. Tolerance records are nonstructural and do not replace FEA boundary conditions. "
         "When a fabricated body exceeds an available manufacturing resource, do not merely report that it is too large. For a Bambu Lab P2S use split_for_manufacturing with "
         "{id:'$part',resource_id:'bambu-lab-p2s',margin_mm:8,max_pieces:24,alignment_diameter_mm:3.2,alignment_depth_mm:8}. "
         "That operation creates a protected sibling manufacturing branch, preserves the unsplit source, generates actual clipped printable solids and optional alignment sockets, and leaves joint strength unverified. "
-        "After splitting, re-run manufacturing, structural/joint, assembly, and requirement validation; never treat alignment sockets as proof that the seam is mechanically adequate. "
+        "After splitting, re-run manufacturing, structural/joint, assembly, tolerance, and requirement validation; never treat alignment sockets as proof that the seam is mechanically adequate. "
         "Prefer editable parametric geometry over a visually plausible but dimensionally arbitrary shape. Never use scaling to hide incorrect dimensions. "
         "Use object_id from existing_assets for existing transforms, connections, and code_write. When credentials or deployment-specific values are unknown, "
         "generate configurable placeholders and identify them in checks rather than refusing the design. "
@@ -180,7 +185,8 @@ async def qwen_reply(text: str, job: EngineeringJob) -> str:
         "You are ForgeCAD 2.0's engineering copilot. Reason from the supplied requirements and functional architecture, not only the parts currently in the scene. "
         "The deterministic Forge Engine is authoritative. Distinguish catalog facts from estimates, identify verification gaps, and never claim screening analysis certifies a safety-critical design. "
         "When a current part is missing, explain whether ForgeCAD should reuse an asset, select a catalog candidate, synthesize a custom part, or implement the function in software. "
-        "When the supplied design_parameters show a named relationship, preserve that relationship instead of replacing it with duplicated literal dimensions."
+        "When the supplied design_parameters show a named relationship, preserve that relationship instead of replacing it with duplicated literal dimensions. "
+        "Treat tolerance stacks as canonical engineering evidence: separate worst-case/RSS results from statistical yield, and never infer sigma from a drawing tolerance."
     )
     request = {
         "model": legacy.CONFIGURED_MODEL,
