@@ -4,14 +4,15 @@ from __future__ import annotations
 
 The legacy branch comparison correctly showed object-level geometry changes, but a real
 engineering revision can fail without changing a body: load cases, constraints,
-requirements, BOM, wiring and named design parameters all matter. This layer enriches
-the existing comparison instead of replacing it, preserving physical-evidence feedback
-while adding deterministic deltas for the rest of canonical project state.
+requirements, BOM, wiring, routed cables/tubes, failure modes and named design parameters
+all matter. This layer enriches the existing comparison instead of replacing it,
+preserving physical-evidence feedback while adding deterministic deltas for the rest of
+canonical project state.
 """
 
 from copy import deepcopy
 import json
-from typing import Any, Callable
+from typing import Any
 
 from ..engineering_state import EngineeringProject
 from ..v110 import core
@@ -106,6 +107,8 @@ def engineering_state_diff(source: dict[str, Any], target: dict[str, Any]) -> di
         "loads": _row_diff(source.get("loads"), target.get("loads"), hints=("object_id", "type")),
         "constraints": _row_diff(source.get("constraints"), target.get("constraints"), hints=("object_id", "type")),
         "connections": _row_diff(source.get("connections"), target.get("connections"), hints=("kind",)),
+        "routes": _row_diff(source.get("routes"), target.get("routes"), hints=("name", "kind")),
+        "failure_modes": _row_diff(source.get("failure_modes"), target.get("failure_modes"), hints=("name", "category")),
         "bom": _row_diff(source.get("bom"), target.get("bom"), hints=("component_ref", "model", "description")),
         "joints": _row_diff(source.get("joints"), target.get("joints"), hints=("object_id", "type")),
         "settings": _mapping_diff(source.get("settings"), target.get("settings")),
@@ -124,13 +127,15 @@ def engineering_state_diff(source: dict[str, Any], target: dict[str, Any]) -> di
             "loads",
             "constraints",
             "connections",
+            "routes",
+            "failure_modes",
             "bom",
             "joints",
             "settings",
             "project_name",
             "physical_evidence",
         ],
-        "note": "Object geometry changes are reported by the top-level comparison; this engineering delta covers non-object canonical state. Physical evidence remains a separate evidence comparison and never implies causality.",
+        "note": "Object geometry changes are reported by the top-level comparison; this engineering delta covers non-object canonical state including routed cables/tubes and safety registers. Physical evidence remains a separate evidence comparison and never implies causality.",
     }
 
 
@@ -145,9 +150,9 @@ def _compare_branch(self: EngineeringProject, name: str) -> dict[str, Any]:
     result["engineering_state"] = delta
     result["total_engineering_change_count"] = int(result.get("count", 0)) + int(delta["count"])
     result["changed_domains"] = [
-        *( ["objects"] if int(result.get("count", 0)) else [] ),
+        *(["objects"] if int(result.get("count", 0)) else []),
         *delta["changed_categories"],
-        *( ["physical_evidence"] if (result.get("physical_evidence_comparison") or {}).get("evidence_only_in_source") or (result.get("physical_evidence_comparison") or {}).get("evidence_only_in_target") or (result.get("physical_evidence_comparison") or {}).get("requirement_differences") else [] ),
+        *(["physical_evidence"] if (result.get("physical_evidence_comparison") or {}).get("evidence_only_in_source") or (result.get("physical_evidence_comparison") or {}).get("evidence_only_in_target") or (result.get("physical_evidence_comparison") or {}).get("requirement_differences") else []),
     ]
     return result
 
