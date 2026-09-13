@@ -6,6 +6,7 @@ import {
 import {
   activateBranch,
   compareBranch,
+  createJob,
   downloadProjectBundle,
   fetchRegistryStats,
   fetchValidation,
@@ -26,7 +27,7 @@ interface Props {
   activeJob: JobPayload | null;
   onProject: (project: ProjectPayload) => void;
   onStartSimulation: () => void;
-  onStartCampaign: (payload: Record<string, unknown>) => void;
+  onStartCampaign: () => void;
 }
 
 type CampaignCandidate = {
@@ -196,7 +197,9 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
     }
   }
 
-  function startConfiguredCampaign() {
+  async function startConfiguredCampaign() {
+    const campaignTarget = selected && !selected.component_ref ? selected : fabricatedParts[0] ?? null;
+    if (!campaignTarget || !project) return;
     const force = Math.max(0.001, finiteNumber(campaignForce) ?? 100);
     const deflection = Math.max(0.0001, finiteNumber(campaignDeflection) ?? 1);
     const fos = Math.max(0.01, finiteNumber(campaignFos) ?? 1.5);
@@ -211,7 +214,17 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
     };
     if (campaignObjective === 'temperature') payload.max_temperature_c = Math.max(-273.15, finiteNumber(campaignTemperature) ?? 80);
     if (campaignProcess === 'fdm') payload.manufacturing_resource = 'bambu-lab-p2s';
-    onStartCampaign(payload);
+    try {
+      setError(null);
+      await createJob({
+        kind: 'campaign',
+        selected_object_id: campaignTarget.id,
+        branch: project.active_branch,
+        payload,
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
   if (mode === 'design') return <div className="component-library" data-testid="design-inspector">
@@ -292,7 +305,8 @@ export function EngineeringWorkbench({ mode, project, selectedId, activeJob, onP
         <label><span>Candidates</span><div className="campaign-input"><input value={campaignCandidates} onChange={(event) => setCampaignCandidates(event.target.value)} inputMode="numeric"/><b>3–24</b></div></label>
         {campaignObjective === 'temperature' && <label><span>Max temperature</span><div className="campaign-input"><input value={campaignTemperature} onChange={(event) => setCampaignTemperature(event.target.value)} inputMode="decimal"/><b>°C</b></div></label>}
       </div>
-      <div className="campaign-actions"><button onClick={onStartSimulation} disabled={!project?.parts.length || campaignBusy}>Run engineering screen</button><button className="primary-action" data-testid="run-campaign" onClick={startConfiguredCampaign} disabled={!campaignTarget || campaignBusy}>{campaignBusy ? <Activity size={12} className="agent-spin"/> : <GitCompare size={12}/>}Run variant campaign</button></div>
+      <div className="campaign-actions"><button onClick={onStartSimulation} disabled={!project?.parts.length || campaignBusy}>Run engineering screen</button><button className="primary-action" data-testid="run-campaign" onClick={() => void startConfiguredCampaign()} disabled={!campaignTarget || campaignBusy}>{campaignBusy ? <Activity size={12} className="agent-spin"/> : <GitCompare size={12}/>}Run variant campaign</button></div>
+      <div className="campaign-quick"><button onClick={onStartCampaign} disabled={!campaignTarget || campaignBusy}>Run default campaign</button><span>Uses ForgeCAD's conservative default gates.</span></div>
       {activeJob?.kind === 'campaign' && !campaignResult && <div className="campaign-running"><Activity size={12} className={campaignBusy ? 'agent-spin' : ''}/><div><strong>{activeJob.state}</strong><span>{activeJob.message ?? 'Evaluating design variants…'}</span></div></div>}
     </div>
 
