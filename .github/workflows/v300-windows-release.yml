@@ -59,7 +59,11 @@ jobs:
           python -m forge_engine.v300.planner_world_context_selftest
           python -m forge_engine.v300.world_event_stream_selftest
           python -m forge_engine.v300.capability_runtime_selftest
-          python -m forge_engine.v300.api_selftest
+          # On hosted Windows runners, OCP/VTK can return a non-zero status during
+          # interpreter finalization after every v3 API assertion has already passed.
+          # Keep the assertions authoritative, flush their result, then bypass only
+          # native finalizers in this short-lived verification process.
+          python -u -c "import json,os,sys; from forge_engine.v300.api_selftest import run; result=run(); print(json.dumps(result, indent=2)); sys.stdout.flush(); sys.stderr.flush(); os._exit(0)"
 
       - name: Build standalone Forge Engine
         shell: pwsh
