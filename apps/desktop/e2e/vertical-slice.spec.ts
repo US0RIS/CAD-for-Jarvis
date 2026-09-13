@@ -26,6 +26,15 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   const gearSearch = await gearResponse.json() as { items: unknown[] };
   expect(gearSearch.items.length).toBeGreaterThan(30);
 
+  // Every 2.0 analysis domain must exist in the packaged/runtime validation surface,
+  // even when the blank design has not requested a specific model yet.
+  const validationResponse = await request.get('http://127.0.0.1:8765/v2/validation', { headers });
+  expect(validationResponse.ok()).toBeTruthy();
+  const validation = await validationResponse.json() as Record<string, unknown>;
+  for (const domain of ['electrical', 'thermal', 'fluid', 'routing', 'safety', 'kinematics']) {
+    expect(validation[domain], `missing ForgeCAD 2.0 validation domain ${domain}`).toBeTruthy();
+  }
+
   // Thumbnail bytes are generated from the same canonical geometry as the 3D scene,
   // then cached. Exercise two materially different products before the browser consumes
   // those cached previews so the UI assertion is deterministic rather than timing-based.
@@ -240,11 +249,17 @@ test('ForgeCAD production workbench starts blank, exposes the full catalog with 
   expect(clearance?.statistical.available).toBe(true);
   expect(clearance?.statistical.yield_fraction).not.toBeNull();
 
-  // ForgeCAD 2.0's optimizer must be visible and usable from the CAD workbench rather
-  // than existing only as a backend function. Reload first so the renderer receives the
-  // direct-API tolerance mutations above, then verify the tolerance UI before campaigning.
+  // ForgeCAD 2.0's optimizer and system-level analyses must be visible and usable from
+  // the CAD workbench rather than existing only as backend functions.
   await page.reload();
   await page.getByRole('button', { name: 'Analyze', exact: true }).click();
+  const domainPanel = page.getByTestId('analysis-domains');
+  await expect(domainPanel).toBeVisible();
+  for (const domain of ['electrical', 'thermal', 'fluid', 'routing', 'safety', 'kinematics']) {
+    await expect(page.getByTestId(`analysis-domain-${domain}`)).toBeVisible();
+  }
+  await expect(page.getByTestId('canonical-engineering-state')).toBeVisible();
+
   const tolerancePanel = page.getByTestId('tolerance-stacks');
   await expect(tolerancePanel).toBeVisible();
   await expect(tolerancePanel.getByTestId('tolerance-stack-fixture_clearance')).toBeVisible({ timeout: 20_000 });
