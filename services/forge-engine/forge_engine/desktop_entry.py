@@ -10,12 +10,12 @@ from forge_engine.v300.world_event_stream import install_world_event_stream
 from forge_engine.v310.ecosystem_api import install as install_ecosystem_api
 from forge_engine.v310.feature_api import install as install_feature_api
 from forge_engine.v310.integration_api import install as install_integration_api
+from forge_engine.v600.api import install as install_v600_api
 
 
-# The packaged desktop engine is ForgeCAD 3.1's production entrypoint. The 3.0
-# physical-world integrations still install against the one canonical WORLD store;
-# 3.1 adds the engineering graph around that same state instead of creating a
-# parallel world/identity system.
+# ForgeCAD 6.0 development keeps 3.1 as the validated production substrate and
+# installs new semantic capabilities additively. A 6.0 capability does not replace
+# a 3.1 path until its own acceptance gate proves equivalent or stronger behavior.
 install_world_aware_planner(main_v31.v3.WORLD)
 install_world_event_stream(
     main_v31.app,
@@ -36,6 +36,12 @@ install_integration_api(
     main_v31.GRAPH,
     main_v31.v3.legacy.PROJECT.snapshot,
     main_v31.v3.WORLD,
+    main_v31.v3._sync_current_project,
+    main_v31._sync_graph,
+)
+install_v600_api(
+    main_v31.app,
+    main_v31.v3.legacy.require_session,
     main_v31.v3._sync_current_project,
     main_v31._sync_graph,
 )
