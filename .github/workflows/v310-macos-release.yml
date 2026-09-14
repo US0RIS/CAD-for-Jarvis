@@ -205,7 +205,7 @@ jobs:
 
           # The desktop supervisor intentionally chooses a fresh random loopback port
           # and session token. Launch with software WebGL on the headless runner, then
-          # discover the exact bundled engine child and verify the port it actually owns.
+          # discover the installed-engine runtime process that owns the listening port.
           export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v310-desktop-state"
           "$APP" --use-gl=swiftshader --enable-unsafe-swiftshader --disable-gpu-sandbox > "$RUNNER_TEMP/v310-desktop.log" 2>&1 &
           APP_PID=$!
@@ -218,14 +218,21 @@ jobs:
               cat "$RUNNER_TEMP/v310-desktop.log" || true
               exit 1
             fi
-            DESKTOP_ENGINE_PID=$(pgrep -P "$APP_PID" -f "$ENGINE" | head -n 1 || true)
-            if [ -n "$DESKTOP_ENGINE_PID" ]; then
-              DESKTOP_ENGINE_PORT=$(lsof -Pan -p "$DESKTOP_ENGINE_PID" -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {n=split($9,a,":"); print a[n]; exit}' || true)
-              if [ -n "$DESKTOP_ENGINE_PORT" ] && curl --fail --silent "http://127.0.0.1:$DESKTOP_ENGINE_PORT/v3.1/health" > "$RUNNER_TEMP/v310-desktop-health.json"; then
+            for PID in $(pgrep -f "$ENGINE" || true); do
+              COMMAND=$(ps -p "$PID" -o command= 2>/dev/null || true)
+              case "$COMMAND" in
+                "$ENGINE"*) ;;
+                *) continue ;;
+              esac
+              PORT=$(lsof -Pan -p "$PID" -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {n=split($9,a,":"); print a[n]; exit}' || true)
+              if [ -n "$PORT" ] && curl --fail --silent "http://127.0.0.1:$PORT/v3.1/health" > "$RUNNER_TEMP/v310-desktop-health.json"; then
+                DESKTOP_ENGINE_PID="$PID"
+                DESKTOP_ENGINE_PORT="$PORT"
                 DESKTOP_OK=1
                 break
               fi
-            fi
+            done
+            if [ "$DESKTOP_OK" -eq 1 ]; then break; fi
             sleep 0.25
           done
           if [ "$DESKTOP_OK" -ne 1 ]; then
@@ -234,6 +241,7 @@ jobs:
             exit 1
           fi
           python -c "import json; d=json.load(open('$RUNNER_TEMP/v310-desktop-health.json')); assert d['engine_version']=='3.1.0' and d['api_version']=='3.1' and d['engineering_graph']['ready']; print('installed desktop launch + bundled 3.1 engine: PASS')"
+          echo "Desktop engine pid=$DESKTOP_ENGINE_PID port=$DESKTOP_ENGINE_PORT"
           if grep -Fq '[ForgeCAD] Component catalog startup failed' "$RUNNER_TEMP/v310-desktop.log"; then
             cat "$RUNNER_TEMP/v310-desktop.log"
             exit 1
