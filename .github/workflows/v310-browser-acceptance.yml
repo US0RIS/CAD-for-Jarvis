@@ -1,0 +1,87 @@
+name: ForgeCAD 3.1 Browser Acceptance
+
+on:
+  push:
+    branches: [forgecad/3.1.0]
+    paths:
+      - 'apps/desktop/**'
+      - 'services/forge-engine/**'
+      - '.github/workflows/v310-browser-acceptance.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+
+jobs:
+  engineering-graph-ui:
+    name: Engineering graph, Product Lab, and physical-evidence UI vertical slice
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Forge Engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine
+
+      - name: Install desktop dependencies
+        run: pnpm install --prod=false --frozen-lockfile=false
+
+      - name: Typecheck and build renderer
+        run: |
+          pnpm --filter @forgecad/desktop typecheck
+          pnpm --filter @forgecad/desktop build
+
+      - name: Install Chromium acceptance runtime
+        run: pnpm --filter @forgecad/desktop exec playwright install --with-deps chromium
+
+      - name: Start ForgeCAD 3.1 production engine surface
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_SESSION_TOKEN: test-session
+          FORGECAD_OLLAMA_MODEL: qwen3:8b
+          FORGECAD_DEMO_AGENT: '1'
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v310-browser-state
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python -m uvicorn forge_engine.desktop_entry:app --host 127.0.0.1 --port 8765 --log-level warning > "${RUNNER_TEMP}/forgecad-v310-engine.log" 2>&1 &
+          echo $! > "${RUNNER_TEMP}/forgecad-v310-engine.pid"
+          python - <<'PY'
+          import json, time, urllib.request
+          deadline = time.time() + 60
+          while time.time() < deadline:
+              try:
+                  with urllib.request.urlopen('http://127.0.0.1:8765/v3.1/health', timeout=2) as response:
+                      body = json.load(response)
+                  if body.get('ok') and body.get('api_version') == '3.1' and body.get('engine_version') == '3.1.0' and body.get('engineering_graph', {}).get('ready'):
+                      break
+              except Exception:
+                  time.sleep(.25)
+          else:
+              raise SystemExit('ForgeCAD 3.1 engine did not become healthy')
+          PY
+
+      - name: Run ForgeCAD 3.1 integration browser acceptance
+        run: pnpm --filter @forgecad/desktop exec playwright test e2e/v310-integration.spec.ts
+
+      - name: Upload Playwright diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forgecad-v310-browser-diagnostics
+          path: |
+            apps/desktop/test-results/**
+            apps/desktop/playwright-report/**
+            ${{ runner.temp }}/forgecad-v310-engine.log
+          if-no-files-found: ignore
