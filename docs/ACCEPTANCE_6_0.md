@@ -49,7 +49,9 @@ A capability is never called complete merely because level 1 exists.
 
 ## Milestone 1 — Interface-Constrained Electromechanical Assembly
 
-Status: **IMPLEMENTING**
+Status: **IMPLEMENTED / CI VALIDATION PENDING**
+
+Implementation commit: `8817b59486226b322e7bbea305e7abdf141d335a`.
 
 This is dependency-critical because autonomous engineering cannot reliably design a product if component placement is still based on guessed transforms rather than declared physical interfaces.
 
