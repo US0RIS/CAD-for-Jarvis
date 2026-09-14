@@ -1,9 +1,11 @@
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
+import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import './styles/tokens.css';
 import './styles/app.css';
 import './styles/copilot-ux.css';
+import './styles/keyboard-shortcuts.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,6 +48,7 @@ catalogObserver.observe(root, { childList: true, subtree: true, attributes: true
 ReactDOM.createRoot(root).render(
   <QueryClientProvider client={queryClient}>
     <App />
+    <KeyboardShortcuts />
   </QueryClientProvider>,
 );
 
