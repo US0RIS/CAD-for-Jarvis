@@ -7,6 +7,7 @@ import uvicorn
 from forge_engine import main_v31
 from forge_engine.v300.planner_world_context import install_world_aware_planner
 from forge_engine.v300.world_event_stream import install_world_event_stream
+from forge_engine.v310.feature_api import install as install_feature_api
 
 
 # The packaged desktop engine is ForgeCAD 3.1's production entrypoint. The 3.0
@@ -20,6 +21,7 @@ install_world_event_stream(
     session_token=main_v31.v3.legacy.SESSION_TOKEN,
     jarvis_token_verifier=main_v31.v3.legacy.jarvis_bridge.verify_token,
 )
+install_feature_api(main_v31.app, main_v31.v3.legacy.require_session)
 app = main_v31.app
 
 
