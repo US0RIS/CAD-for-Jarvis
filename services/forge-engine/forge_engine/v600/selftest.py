@@ -29,7 +29,12 @@ def _ok(response, label: str):
 
 
 def _active_project(client: TestClient) -> dict:
-    return _ok(client.get("/v2/project"), "project snapshot").json()
+    # /v2/project is intentionally the compact desktop projection, not the raw
+    # canonical project. Exercise that public contract, then inspect a detached copy
+    # of the canonical store when the acceptance test needs engineering internals.
+    projected = _ok(client.get("/v2/project"), "project snapshot").json()
+    assert projected["active_branch"] == core.ACTIVE_DESIGN, projected
+    return json.loads(json.dumps(core.PROJECT))
 
 
 def _object_named(project: dict, name: str) -> dict:
