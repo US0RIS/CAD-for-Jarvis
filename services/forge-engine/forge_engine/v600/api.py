@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException
 
 from ..v110 import core
 from . import MILESTONE_VERSION
-from .assembly_constraints import MateRequest, apply_mate, solve_mate_transform, validate_constraint_set
+from .assembly_frame_constraints import MateRequest, apply_mate, solve_mate_transform, validate_constraint_set
 from .geometry_mounts import MountGeometryRequest, audit_mount_geometry, materialize_mount_geometry, plan_mount_geometry
 
 
@@ -47,6 +47,7 @@ def install(
                 "designed truth != observed state != inference",
                 "autonomous placement derives from declared engineering interfaces",
                 "purchased component engineering data remains immutable inside a design revision",
+                "fixed/prismatic placement resolves a complete right-handed interface frame rather than an arbitrary point-plus-axis rotation",
                 "a mechanical mount is not verified until declared mounting geometry is present in the fabricated B-rep",
                 "ambiguous component mounting topology fails closed rather than being guessed",
             ],
@@ -68,7 +69,7 @@ def install(
                 core.ensure_mutable("human", "6.0 interface-constrained mate")
                 result = apply_mate(core.PROJECT, request)
                 core.mark_simulations_stale(request.source_id)
-                core.push_history("v6_mate", "human", f"{request.mate_type} interface-constrained mate")
+                core.push_history("v6_mate", "human", f"{request.mate_type} full-interface-frame mate")
                 core.persist()
             if sync_world is not None:
                 sync_world(reason="v600_interface_mate")
