@@ -12,6 +12,7 @@ from . import MILESTONE_VERSION
 from .assembly_frame_constraints import MateRequest, apply_mate, solve_mate_transform, validate_constraint_set
 from .constraint_rank import analyze_constraint_rank
 from .geometry_mounts import MountGeometryRequest, audit_mount_geometry, materialize_mount_geometry, plan_mount_geometry
+from .mount_hardware import MountHardwareRequest, audit_mount_hardware, plan_mount_hardware, realize_mount_hardware
 
 
 _INSTALLED = False
@@ -36,6 +37,7 @@ def install(
             for obj in core.PROJECT.get("objects") or []
             if isinstance(obj, dict)
         )
+        hardware_realizations = len(core.PROJECT.get("mount_hardware_realizations") or [])
         return {
             "ok": constraints["ok"],
             "api_version": "6.0-dev",
@@ -46,6 +48,7 @@ def install(
             "assembly_constraints": constraints,
             "assembly_constraint_rank_summary": rank["summary"],
             "geometry_backed_mount_count": geometry_backed_mounts,
+            "mount_hardware_realization_count": hardware_realizations,
             "invariants": [
                 "designed truth != observed state != inference",
                 "autonomous placement derives from declared engineering interfaces",
@@ -53,6 +56,7 @@ def install(
                 "fixed/prismatic placement resolves a complete right-handed interface frame rather than an arbitrary point-plus-axis rotation",
                 "assembly mobility and redundant constraints are derived from the spatial constraint Jacobian rather than guessed from mate count",
                 "a mechanical mount is not verified until declared mounting geometry is present in the fabricated B-rep",
+                "standard mount hardware may be specified before supplier selection, but unresolved manufacturer/MPN remains explicitly unresolved",
                 "ambiguous component mounting topology fails closed rather than being guessed",
             ],
         }
@@ -145,5 +149,41 @@ def install(
             raise HTTPException(status_code=404, detail=f"Unknown object/interface: {exc.args[0]}") from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/v6/assembly/mounts/hardware/plan", dependencies=[Depends(require_session)])
+    async def mount_hardware_plan(request: MountHardwareRequest) -> dict[str, Any]:
+        try:
+            return plan_mount_hardware(core.PROJECT, request)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown object/interface: {exc.args[0]}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/v6/assembly/mounts/hardware/realize", dependencies=[Depends(require_session)])
+    async def mount_hardware_realize(request: MountHardwareRequest) -> dict[str, Any]:
+        try:
+            with core.LOCK:
+                core.ensure_mutable("human", "6.0 standards-backed mount hardware")
+                result = realize_mount_hardware(core.PROJECT, request)
+                core.mark_simulations_stale(request.host_id)
+                core.push_history(
+                    "v6_realize_mount_hardware",
+                    "human",
+                    f"Realize {request.component_interface} mount hardware for {request.component_id}",
+                )
+                core.persist()
+            if sync_world is not None:
+                sync_world(reason="v600_mount_hardware")
+            if sync_graph is not None:
+                result["graph_sync"] = sync_graph(reason="v600_mount_hardware")
+            return result
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown object/interface: {exc.args[0]}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/v6/assembly/mounts/hardware/audit", dependencies=[Depends(require_session)])
+    async def mount_hardware_audit(request: MountHardwareRequest) -> dict[str, Any]:
+        return audit_mount_hardware(core.PROJECT, request)
 
     _INSTALLED = True
