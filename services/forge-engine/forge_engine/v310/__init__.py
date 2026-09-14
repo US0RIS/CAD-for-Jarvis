@@ -27,6 +27,12 @@ _cad_features.install()
 from . import graph_runtime as _graph_runtime
 _graph_runtime.install()
 
+# Physical-world upserts carry audit timestamps. Strip only those bookkeeping values
+# at the derived engineering-graph boundary so a no-op world refresh cannot invalidate
+# engineering evidence or create false dirty state.
+from . import world_projection_stability as _world_projection_stability
+_world_projection_stability.install()
+
 __all__ = [
     "INTEGRATION_VERSION",
     "ENGINEERING_GRAPH_SCHEMA_VERSION",
