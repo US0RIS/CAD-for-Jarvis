@@ -46,6 +46,14 @@ jobs:
           CI: 'true'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v600.constraint_rank_selftest
+      - name: Run standards-backed mount hardware acceptance
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m2-hardware
+          FORGECAD_SESSION_TOKEN: test-session
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v600.mount_hardware_selftest
       - name: Preserve ForgeCAD 6.0 milestone 1 acceptance
         env:
           PYTHONPATH: services/forge-engine
