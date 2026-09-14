@@ -1,0 +1,185 @@
+name: ForgeCAD 3.1 Windows Release
+
+on:
+  push:
+    branches: [forgecad/3.1.0]
+    paths:
+      - 'apps/desktop/**'
+      - 'services/forge-engine/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/v310-windows-release.yml'
+  workflow_dispatch:
+
+jobs:
+  windows-release:
+    name: Build, install, and validate ForgeCAD 3.1 Windows
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install and validate source engineering stack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine pyinstaller
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\services\forge-engine"
+          $env:CI = 'false'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '0'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-v310-release-selftest"
+          $env:FORGECAD_SESSION_TOKEN = 'v310-source-selftest'
+          python -u -c "import json,os,sys; from forge_engine.v310.selftest import run; result=run(); print(json.dumps(result, indent=2)); sys.stdout.flush(); sys.stderr.flush(); os._exit(0)"
+
+      - name: Build standalone Forge Engine with 3.1 modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --name forge-engine `
+            --collect-all cadquery `
+            --collect-all OCP `
+            --collect-all vtkmodules `
+            --collect-submodules forge_engine.v110 `
+            --collect-submodules forge_engine.v200 `
+            --collect-submodules forge_engine.v300 `
+            --collect-submodules forge_engine.v310 `
+            --distpath services/forge-engine/dist `
+            --workpath services/forge-engine/build/pyinstaller `
+            --specpath services/forge-engine/build `
+            services/forge-engine/forge_engine/desktop_entry.py
+          if (-not (Test-Path 'services/forge-engine/dist/forge-engine.exe')) { throw 'Forge Engine executable was not produced.' }
+
+      - name: Smoke standalone 3.1 engine and feature graph
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:FORGECAD_PORT = '8893'
+          $env:FORGECAD_SESSION_TOKEN = 'v310-release-smoke'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-v310-standalone-state"
+          $env:CI = 'false'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '0'
+          $engine = "$env:GITHUB_WORKSPACE\services\forge-engine\dist\forge-engine.exe"
+          $process = Start-Process -FilePath $engine -PassThru -WindowStyle Hidden
+          try {
+            $deadline = (Get-Date).AddSeconds(75)
+            $health = $null
+            do {
+              try {
+                $health = Invoke-RestMethod http://127.0.0.1:8893/v3.1/health -TimeoutSec 2
+                if ($health.ok -and $health.api_version -eq '3.1') { break }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            if (-not ($health.ok -and $health.engine_version -eq '3.1.0' -and $health.engineering_graph.ready)) { throw 'Standalone 3.1 health/graph failed.' }
+
+            $headers = @{ 'X-ForgeCAD-Session' = 'v310-release-smoke' }
+            $partBody = @{ name='Packaged Feature Block'; kind='box'; params=@{x=30;y=20;z=6}; material='aluminum_6061_t6'; semantic=@{role='release_smoke'} } | ConvertTo-Json -Depth 5
+            $partResult = Invoke-RestMethod http://127.0.0.1:8893/v3.1/cad/parts -Method Post -Headers $headers -ContentType 'application/json' -Body $partBody -TimeoutSec 30
+            $part = @($partResult.project.objects | Where-Object { $_.name -eq 'Packaged Feature Block' })[0]
+            if (-not $part.id) { throw 'Packaged direct CAD part creation failed.' }
+            $featureBody = @{ type='slot'; name='Packaged Slot'; parameters=@{length=12;width=4;depth=6} } | ConvertTo-Json -Depth 5
+            $feature = Invoke-RestMethod "http://127.0.0.1:8893/v3.1/cad/objects/$($part.id)/features" -Method Post -Headers $headers -ContentType 'application/json' -Body $featureBody -TimeoutSec 30
+            if (-not $feature.feature.id) { throw 'Packaged feature-history mutation failed.' }
+            $node = Invoke-RestMethod "http://127.0.0.1:8893/v3.1/graph/nodes/cad:$($part.id)" -Headers $headers -TimeoutSec 30
+            if ($node.node.source_id -ne $part.id) { throw 'Packaged engineering graph did not project CAD identity.' }
+            $jarvis = Invoke-RestMethod http://127.0.0.1:8893/v3.1/jarvis/context -Headers $headers -TimeoutSec 30
+            if ($jarvis.engine_version -ne '3.1.0' -or -not $jarvis.engineering_graph_revision) { throw 'Packaged Jarvis 3.1 semantic context failed.' }
+          } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+
+      - name: Install desktop dependencies
+        run: pnpm install --prod=false --frozen-lockfile=false
+      - name: Typecheck desktop
+        run: pnpm --filter @forgecad/desktop typecheck
+      - name: Build NSIS installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: pnpm --filter @forgecad/desktop dist:win
+
+      - name: Install and validate packaged ForgeCAD 3.1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-3.1.0.exe' | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'ForgeCAD 3.1.0 installer was not produced.' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'ForgeCAD-3.1-Installed'
+          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer failed with exit code $($install.ExitCode)." }
+
+          $app = Join-Path $installDir 'ForgeCAD.exe'
+          $engine = Join-Path $installDir 'resources\forge-engine\forge-engine.exe'
+          if (-not (Test-Path $app) -or -not (Test-Path $engine)) { throw 'Installed ForgeCAD 3.1 payload is incomplete.' }
+          $version = (Get-Item $app).VersionInfo.ProductVersion
+          if (-not $version.StartsWith('3.1.0')) { throw "Expected ProductVersion 3.1.0, got $version" }
+
+          $env:FORGECAD_PORT = '8894'
+          $env:FORGECAD_SESSION_TOKEN = 'v310-installed-smoke'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-v310-installed-state"
+          $env:CI = 'false'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '0'
+          $engineProcess = Start-Process -FilePath $engine -PassThru -WindowStyle Hidden
+          try {
+            $deadline = (Get-Date).AddSeconds(75)
+            $health = $null
+            do {
+              try {
+                $health = Invoke-RestMethod http://127.0.0.1:8894/v3.1/health -TimeoutSec 2
+                if ($health.ok -and $health.api_version -eq '3.1') { break }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            if (-not ($health.ok -and $health.engine_version -eq '3.1.0' -and $health.engineering_graph.ready)) { throw 'Installed 3.1 engine/graph smoke failed.' }
+            $headers = @{ 'X-ForgeCAD-Session' = 'v310-installed-smoke' }
+            $context = Invoke-RestMethod http://127.0.0.1:8894/v3.1/jarvis/context -Headers $headers -TimeoutSec 30
+            if (-not $context.engineering_graph_revision) { throw 'Installed Jarvis engineering context is incomplete.' }
+          } finally {
+            if (-not $engineProcess.HasExited) { Stop-Process -Id $engineProcess.Id -Force }
+          }
+
+          $appProcess = Start-Process -FilePath $app -ArgumentList '--disable-gpu' -PassThru
+          $childEngine = $null
+          try {
+            $deadline = (Get-Date).AddSeconds(45)
+            do {
+              Start-Sleep -Milliseconds 500
+              $appProcess.Refresh()
+              if ($appProcess.HasExited) { throw "Installed ForgeCAD exited during launch smoke with code $($appProcess.ExitCode)." }
+              $childEngine = Get-CimInstance Win32_Process -Filter "Name='forge-engine.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -eq $engine } | Select-Object -First 1
+            } while (-not $childEngine -and (Get-Date) -lt $deadline)
+            if (-not $childEngine) { throw 'Installed desktop did not start its bundled 3.1 Forge Engine.' }
+          } finally {
+            if (-not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force }
+            if ($childEngine) { Stop-Process -Id $childEngine.ProcessId -Force -ErrorAction SilentlyContinue }
+          }
+
+          $uninstaller = Get-ChildItem $installDir -Filter 'Uninstall*.exe' | Select-Object -First 1
+          if (-not $uninstaller) { throw 'Uninstaller missing.' }
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($uninstall.ExitCode)." }
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeCAD-3.1.0-Windows-Installer
+          path: apps/desktop/release/ForgeCAD-Setup-3.1.0.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
