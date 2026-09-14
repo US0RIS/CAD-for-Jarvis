@@ -49,28 +49,39 @@ A capability is never called complete merely because level 1 exists.
 
 ## Milestone 1 — Interface-Constrained Electromechanical Assembly
 
-Status: **IMPLEMENTED / CI VALIDATION PENDING**
+Status: **PASS — maturity level 2 controlled capability**
 
-Implementation commit: `8817b59486226b322e7bbea305e7abdf141d335a`.
+Validated implementation SHA: `4a94320d6fc6e264ebce4ff6b95834f57f35e3a7`
 
-This is dependency-critical because autonomous engineering cannot reliably design a product if component placement is still based on guessed transforms rather than declared physical interfaces.
+Validation workflow: `ForgeCAD 6.0 milestone 1 regression`, run `34907732526`
+
+All four gates in that run passed:
+
+1. ForgeCAD 6.0 interface-constrained electromechanical vertical slice;
+2. complete ForgeCAD 3.1 integration regression;
+3. complete pre-3.1/full-scope engineering regression;
+4. independent existing 3D solid-FEA benchmark.
+
+This milestone is dependency-critical because autonomous engineering cannot reliably design a product if component placement is still based on guessed transforms rather than declared physical interfaces.
 
 Generic capabilities introduced by this milestone:
 
 - typed fixed/revolute/prismatic/cylindrical/planar mate contracts;
 - deterministic rigid placement from exact object/interface identity;
 - explicit aligned/opposed-axis semantics;
-- interface occupancy enforcement;
+- interface occupancy enforcement, including tested double-use rejection;
 - mate degrees-of-freedom records;
 - positional/angular residual validation;
 - canonical project `joint` + `connection` records rather than a parallel assembly store;
-- Engineering Graph propagation through the existing joint/connection projection.
+- Engineering Graph propagation through the existing joint/connection projection;
+- an additive `/v6` semantic API layered over the validated 3.1 substrate.
 
 ### Automated acceptance fixture
 
-The first fixture is a networked electromechanical actuator module built from:
+The accepted fixture is a networked electromechanical actuator module built from:
 
-- an editable fabricated chassis/deck;
+- an editable PETG fabricated chassis/deck with feature history and a harness pass-through slot;
+- an editable CNC aluminum actuator reaction rail;
 - Raspberry Pi 5 compute;
 - MEAN WELL LRS-75-12 power supply;
 - Pololu D24V50F5 regulator;
@@ -78,19 +89,43 @@ The first fixture is a networked electromechanical actuator module built from:
 - Adafruit 12 V push-pull solenoid;
 - branch-bound actuator software.
 
-Acceptance requires, in one canonical revision:
+The accepted canonical revision proves:
 
 1. purchased components retain exact registry identity and high-trust snapshots;
-2. mounted components are positioned by interface constraints, not hand-authored transforms;
-3. every constrained mechanical mate closes below configured positional/angular residual tolerances;
-4. exclusive mechanical interfaces cannot be double-used;
-5. explicit electrical interface connections exist from supply through conversion/control to the actuator;
+2. five mechanical placements are solved from declared interfaces instead of hand-authored transforms;
+3. every constrained mate closes below configured positional/angular residual tolerances;
+4. a second use of an occupied exclusive mount is rejected without mutating canonical state;
+5. explicit electrical connections exist from supply through conversion/control to the actuator;
 6. programmable hardware has code in the same branch;
 7. a canonical mass requirement verifies;
-8. a real 3D solid structural screening solve executes with explicit solver grade;
-9. FDM DFM screening executes against the fabricated part;
-10. Engineering Graph contains CAD, catalog component, joint, electrical, software, BOM and requirement identities;
-11. a fabrication archive preserves the exact graph revision, software and BOM;
-12. the complete ForgeCAD 3.1 integration regression remains green.
+8. the featured chassis is explicitly rejected by the existing solid solver rather than being silently approximated;
+9. the exact unfeatured load-bearing reaction rail completes a real 3D solid structural screening solve with `engineering_iteration` solver grade;
+10. FDM DFM screening executes against the fabricated chassis;
+11. the Engineering Graph contains CAD, catalog component, joint, connection, software, BOM and requirement identities;
+12. a fabrication archive preserves the graph revision, software, BOM and both custom fabricated parts;
+13. the complete ForgeCAD 3.1 and earlier engineering regressions remain green.
 
-Passing this milestone does **not** mean 6.0 is complete. It moves assembly placement from level 1/2 toward level 2 with a cross-domain acceptance fixture. External CAD/physical validation of mating accuracy remains later work.
+### Known limits after milestone 1
+
+Milestone 1 is deliberately **not** maturity level 3 or 4.
+
+- General featured B-rep solid FEA is still unsupported because ForgeCAD lacks a validated general-purpose volume/tetrahedral mesher. The milestone now tests that this case fails closed.
+- The current mate solver reliably validates interface position and primary axis in the controlled slice. Arbitrary industrial fixed-mate orientation still needs a secondary rotational datum/full interface frame and broader multi-mate/overconstraint solving.
+- A typed mounting interface does not yet prove that a fabricated part contains every required hole/fastener/insert feature implied by a purchased component's real mounting pattern. Geometry-backed interface synthesis/verification remains required.
+- Real supplier/CAD ingestion still needs to move from the existing curated/high-trust registry toward a broad refreshable component ecosystem.
+- No physical hardware has yet externally validated milestone-1 mating accuracy, fabrication fit, electrical operation, or deployment behavior.
+
+Passing this milestone therefore means the first cross-domain 6.0 vertical slice genuinely works as a controlled software capability. It does **not** mean ForgeCAD 6.0 is released or that industrial assembly/CAE/physical closure is complete.
+
+## Next dependency-critical work
+
+The next milestone should deepen **geometry-backed assembly truth** rather than add unrelated surface area:
+
+1. full interface frames with secondary rotational datums;
+2. geometric mounting-pattern compatibility, not kind-only matching;
+3. automatic synthesis/verification of mounting holes, fasteners, standoffs, inserts and clearances in custom fabricated parts;
+4. multi-mate constraint solving and explicit under/over-constrained assembly state;
+5. broad real-component ingestion with immutable source/revision provenance;
+6. external CAD/geometry validation for representative purchased-component mounts.
+
+This is the shortest path from milestone-1 controlled assembly toward a level-3 autonomous engineering substrate.
