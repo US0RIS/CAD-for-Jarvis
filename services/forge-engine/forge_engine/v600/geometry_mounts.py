@@ -3,13 +3,13 @@ from __future__ import annotations
 """ForgeCAD 6.0 milestone 2: geometry-backed mounting truth.
 
 Milestone 1 proved that exact interface identities can drive deterministic rigid
-placement.  This module closes the next gap: a purchased component's declared
+placement. This module closes the next gap: a purchased component's declared
 mounting pattern must correspond to actual editable geometry in the fabricated
 part that receives it.
 
-The implementation intentionally remains fail-closed.  It only materializes
+The implementation intentionally remains fail-closed. It only materializes
 mounts whose authoritative component snapshot contains enough pattern geometry
-to determine every hole center and diameter.  Ambiguous patterns are rejected
+to determine every hole center and diameter. Ambiguous patterns are rejected
 rather than guessed.
 """
 
@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field
 
 from ..v110 import core, physical_components
 from ..v310 import cad_features
-from . import assembly_constraints
 
 
 class MountGeometryRequest(BaseModel):
@@ -79,14 +78,7 @@ def _snapshot_interface(component: dict[str, Any], interface_id: str) -> dict[st
 
 
 def _interface_basis(interface: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
-    """Return a deterministic right-handed full interface frame.
-
-    Existing component data always declares the interface normal/axis.  A
-    secondary x datum can be supplied explicitly as ``x_axis`` (or metadata
-    ``x_axis``).  Legacy records without it use the object's +X direction
-    projected into the interface plane; if +X is parallel to the normal, +Y is
-    used.  The returned provenance string makes that distinction inspectable.
-    """
+    """Return a deterministic right-handed full interface frame."""
 
     z_axis = _unit(interface.get("axis", [0.0, 0.0, 1.0]))
     metadata = interface.get("metadata") or {}
@@ -232,6 +224,13 @@ def plan_mount_geometry(project: dict[str, Any], request: MountGeometryRequest) 
     source_origin = _vec(source_frame["world_origin_mm"])
     source_x = _unit(source_frame["world_x_axis"])
     source_y = _unit(source_frame["world_y_axis"])
+    host_plane_origin = _vec(host_frame["world_origin_mm"])
+    host_plane_normal = _unit(host_frame["world_z_axis"])
+    relative_origin = source_origin - host_plane_origin
+    axial_separation = float(np.dot(relative_origin, host_plane_normal))
+    in_plane_offset = relative_origin - host_plane_normal * axial_separation
+    pattern_origin_on_host = host_plane_origin + in_plane_offset
+
     host_transform = host.get("transform") or {}
     host_rotation = _rotation_xyz(host_transform.get("rotation_deg", [0.0, 0.0, 0.0]))
     host_origin = _vec(host_transform.get("position", [0.0, 0.0, 0.0]))
@@ -249,7 +248,15 @@ def plan_mount_geometry(project: dict[str, Any], request: MountGeometryRequest) 
     holes: list[dict[str, Any]] = []
     for index, offset in enumerate(pattern["hole_centers_mm"]):
         dx, dy, dz = [float(value) for value in offset]
-        world = source_origin + source_x * dx + source_y * dy + _unit(source_frame["world_z_axis"]) * dz
+        if abs(dz) > 1e-9:
+            raise ValueError(
+                "Host-hole materialization currently requires mounting-pattern centers to lie in the component interface plane"
+            )
+        # Preserve component clocking and any in-plane mate error, but deliberately
+        # remove the axial mate gap.  A standoff can separate the component from
+        # the host by several millimeters while the required drilled holes still
+        # belong on the host's physical mounting plane.
+        world = pattern_origin_on_host + source_x * dx + source_y * dy
         local = host_rotation.T @ (world - host_origin)
         holes.append(
             {
@@ -271,6 +278,8 @@ def plan_mount_geometry(project: dict[str, Any], request: MountGeometryRequest) 
         "host_id": str(host["id"]),
         "host_interface": request.host_interface,
         "connection_id": str(connection.get("id") or ""),
+        "mate_gap_mm": float((connection.get("constraint") or {}).get("gap_mm", axial_separation)),
+        "measured_axial_separation_mm": axial_separation,
         "component_snapshot_revision": (component.get("component_snapshot") or {}).get("revision"),
         "component_snapshot_trust": int((component.get("component_snapshot") or {}).get("trust_score", 0) or 0),
         "pattern": pattern,
@@ -369,8 +378,6 @@ def audit_mount_geometry(project: dict[str, Any], request: MountGeometryRequest)
                 }
             )
 
-    # Metadata alone is not enough: prove that a narrow witness cylinder through
-    # every expected center intersects essentially no final B-rep material.
     if not any(item["severity"] == "error" for item in findings):
         for hole in plan["holes"]:
             overlap = _witness_overlap_mm3(host, hole, plan["host_frame"])
@@ -471,8 +478,6 @@ def materialize_mount_geometry(project: dict[str, Any], request: MountGeometryRe
                 "component_snapshot_trust": plan["component_snapshot_trust"],
             }
         )
-        # Force OpenCascade to evaluate the mutated feature stack before the
-        # operation can become canonical.
         core.build_shape(host)
         audit = audit_mount_geometry(project, request)
         if not audit["ok"]:
