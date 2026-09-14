@@ -203,13 +203,21 @@ jobs:
           wait "$ENGINE_PID" 2>/dev/null || true
           trap - EXIT
 
-          # The desktop supervisor intentionally chooses a fresh random loopback port
-          # and session token. Launch with software WebGL on the headless runner, then
-          # discover the installed-engine runtime process that owns the listening port.
           export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v310-desktop-state"
           "$APP" --use-gl=swiftshader --enable-unsafe-swiftshader --disable-gpu-sandbox > "$RUNNER_TEMP/v310-desktop.log" 2>&1 &
           APP_PID=$!
-          trap 'kill "$APP_PID" 2>/dev/null || true; wait "$APP_PID" 2>/dev/null || true' EXIT
+          cleanup_desktop() {
+            kill "$APP_PID" 2>/dev/null || true
+            for _ in {1..20}; do
+              if ! kill -0 "$APP_PID" 2>/dev/null; then
+                break
+              fi
+              sleep 0.25
+            done
+            kill -KILL "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+          }
+          trap cleanup_desktop EXIT
           DESKTOP_OK=0
           DESKTOP_ENGINE_PID=''
           DESKTOP_ENGINE_PORT=''
@@ -246,8 +254,7 @@ jobs:
             cat "$RUNNER_TEMP/v310-desktop.log"
             exit 1
           fi
-          kill "$APP_PID" 2>/dev/null || true
-          wait "$APP_PID" 2>/dev/null || true
+          cleanup_desktop
           trap - EXIT
 
           shasum -a 256 "$DMG"
