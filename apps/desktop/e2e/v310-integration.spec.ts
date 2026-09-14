@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('ForgeCAD 3.1 exposes engineering graph, Product Lab, and physical evidence in SYSTEM', async ({ page, request }) => {
+test('ForgeCAD 3.1 exposes engineering graph, Product Lab, physical evidence, and feature history in SYSTEM', async ({ page, request }) => {
   const headers = { 'X-ForgeCAD-Session': 'test-session', 'Content-Type': 'application/json' };
 
   const reset = await request.post('http://127.0.0.1:8765/v2/operations', {
@@ -29,6 +29,8 @@ test('ForgeCAD 3.1 exposes engineering graph, Product Lab, and physical evidence
     data: { type: 'slot', name: 'Strap Slot', parameters: { length: 24, width: 5, depth: 14 } },
   });
   expect(feature.ok()).toBeTruthy();
+  const featurePayload = await feature.json() as { feature: { id: string; enabled: boolean } };
+  expect(featurePayload.feature.id).toMatch(/^feat-/);
 
   const profile = await request.put('http://127.0.0.1:8765/v3.1/product-profile', {
     headers,
@@ -124,4 +126,32 @@ test('ForgeCAD 3.1 exposes engineering graph, Product Lab, and physical evidence
   await expect(selected.getByText('Product Lab Wrist Housing', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(selected.getByText('DIRTY', { exact: true })).toBeVisible();
   await expect(selected.getByText(/physical inspection deviation: x_mm/)).toBeVisible();
+
+  // Direct feature history is a real editing surface, not a read-only projection.
+  const history = page.getByTestId('feature-history-panel');
+  await expect(history).toBeVisible();
+  await expect(history.getByText('Strap Slot', { exact: true })).toBeVisible();
+  const slotRow = page.getByTestId(`feature-row-${featurePayload.feature.id}`);
+  await slotRow.getByTitle('Suppress feature').click();
+  await expect(slotRow.getByTitle('Unsuppress feature')).toBeVisible({ timeout: 20_000 });
+  const suppressed = await request.get(`http://127.0.0.1:8765/v3.1/cad/objects/${part?.id}/features`, { headers });
+  expect(suppressed.ok()).toBeTruthy();
+  const suppressedPayload = await suppressed.json() as { items: Array<{ id: string; enabled: boolean }> };
+  expect(suppressedPayload.items.find((row) => row.id === featurePayload.feature.id)?.enabled).toBe(false);
+
+  await slotRow.getByTitle('Unsuppress feature').click();
+  await expect(slotRow.getByTitle('Suppress feature')).toBeVisible({ timeout: 20_000 });
+
+  await history.getByLabel('Feature type').selectOption('hole');
+  await history.getByLabel('Feature name').fill('Acceptance Hole');
+  await history.getByLabel('Hole Ø').fill('3.2');
+  await history.getByTestId('add-cad-feature').click();
+  await expect(history.getByText('Acceptance Hole', { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('scene-health')).toHaveText('3D READY', { timeout: 90_000 });
+
+  const finalFeatures = await request.get(`http://127.0.0.1:8765/v3.1/cad/objects/${part?.id}/features`, { headers });
+  expect(finalFeatures.ok()).toBeTruthy();
+  const finalFeaturePayload = await finalFeatures.json() as { count: number; items: Array<{ name: string; enabled: boolean }> };
+  expect(finalFeaturePayload.count).toBe(2);
+  expect(finalFeaturePayload.items.some((row) => row.name === 'Acceptance Hole' && row.enabled)).toBe(true);
 });
