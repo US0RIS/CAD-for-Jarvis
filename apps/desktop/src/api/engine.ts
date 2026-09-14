@@ -137,10 +137,16 @@ let projectRequest: Promise<ProjectPayload> | null = null;
 let sceneRequest: Promise<ScenePayload> | null = null;
 let componentRequestSerial = 0;
 let latestComponentRequest: Promise<ComponentSearchResult> | null = null;
+const localEngineEventSubscribers = new Set<(event: EngineEvent) => void>();
 
 function invalidateProjectRequests() {
   projectRequest = null;
   sceneRequest = null;
+}
+
+function publishLocalEngineEvent(event: EngineEvent) {
+  if (event.type === 'project.updated') invalidateProjectRequests();
+  for (const subscriber of localEngineEventSubscribers) subscriber(event);
 }
 
 function invalidateConnection() {
@@ -288,6 +294,7 @@ export async function addComponent(id: string) {
 export async function executeOperation(op: string, args: Record<string, unknown>, reason = '') {
   const result = await engineFetch<{ operation: Record<string, unknown>; project: ProjectPayload }>('/v2/operations', { method: 'POST', body: JSON.stringify({ op, args, reason }) });
   invalidateProjectRequests();
+  publishLocalEngineEvent({ type: 'project.updated', project: result.project });
   return result;
 }
 export async function newProject() {
@@ -336,6 +343,7 @@ export async function subscribeEngineEvents(onEvent: (event: EngineEvent) => voi
   let heartbeat: number | null = null;
   let reconnectTimer: number | null = null;
   let reconnectAttempt = 0;
+  localEngineEventSubscribers.add(onEvent);
 
   const clearHeartbeat = () => {
     if (heartbeat != null) window.clearInterval(heartbeat);
@@ -409,6 +417,7 @@ export async function subscribeEngineEvents(onEvent: (event: EngineEvent) => voi
   await connect();
   return () => {
     disposed = true;
+    localEngineEventSubscribers.delete(onEvent);
     clearHeartbeat();
     clearReconnect();
     const current = socket;
