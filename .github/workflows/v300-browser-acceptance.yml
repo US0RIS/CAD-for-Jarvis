@@ -73,8 +73,11 @@ jobs:
           } while ((Get-Date) -lt $deadline)
           if (-not $healthy) { throw 'ForgeCAD 3.0 engine did not become healthy.' }
 
-      - name: Run ForgeCAD 3.0 browser acceptance
-        run: pnpm --filter @forgecad/desktop exec playwright test e2e/v300-world.spec.ts e2e/keyboard-shortcuts.spec.ts
+      - name: Run keyboard shortcut acceptance
+        run: pnpm --filter @forgecad/desktop exec playwright test e2e/keyboard-shortcuts.spec.ts
+
+      - name: Run physical-world browser acceptance
+        run: pnpm --filter @forgecad/desktop exec playwright test e2e/v300-world.spec.ts
 
       - name: Upload Playwright diagnostics on failure
         if: failure()
