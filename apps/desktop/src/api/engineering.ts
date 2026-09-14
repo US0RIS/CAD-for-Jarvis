@@ -95,6 +95,21 @@ export interface ProductProfilePayload {
   };
 }
 
+export interface CadFeaturePayload {
+  id: string;
+  type: string;
+  name: string;
+  enabled: boolean;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+export interface CadFeatureListPayload {
+  object_id: string;
+  items: CadFeaturePayload[];
+  count: number;
+}
+
 export const fetchEngineeringHealth = () => engineFetch<EngineeringHealthPayload>('/v3.1/health');
 
 export function fetchEngineeringNodes(filters: { kind?: string; domain?: string; dirty?: boolean; limit?: number } = {}) {
@@ -119,5 +134,48 @@ export function updateProductProfile(profile: ProductProfilePayload['profile']) 
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(profile),
+  });
+}
+
+export const fetchCadFeatures = (objectId: string) =>
+  engineFetch<CadFeatureListPayload>(`/v3.1/cad/objects/${encodeURIComponent(objectId)}/features`);
+
+export function createCadFeature(objectId: string, feature: { type: string; name?: string; parameters?: Record<string, unknown> }) {
+  return engineFetch<{ ok: boolean; feature: CadFeaturePayload; active_design: string }>(`/v3.1/cad/objects/${encodeURIComponent(objectId)}/features`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: feature.type, name: feature.name, parameters: feature.parameters ?? {} }),
+  });
+}
+
+export function updateCadFeature(objectId: string, featureId: string, patch: Record<string, unknown>) {
+  return engineFetch<{ ok: boolean; feature: CadFeaturePayload }>(`/v3.1/cad/objects/${encodeURIComponent(objectId)}/features/${encodeURIComponent(featureId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ patch }),
+  });
+}
+
+export function deleteCadFeature(objectId: string, featureId: string) {
+  return engineFetch<{ ok: boolean }>(`/v3.1/cad/objects/${encodeURIComponent(objectId)}/features/${encodeURIComponent(featureId)}`, { method: 'DELETE' });
+}
+
+export function suppressCadFeature(objectId: string, featureId: string, suppressed: boolean) {
+  return engineFetch<{ ok: boolean; feature: CadFeaturePayload }>(`/v3.1/cad/objects/${encodeURIComponent(objectId)}/features/${encodeURIComponent(featureId)}/suppress`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ suppressed }),
+  });
+}
+
+export function duplicateCadFeature(objectId: string, featureId: string) {
+  return engineFetch<{ ok: boolean; feature: CadFeaturePayload }>(`/v3.1/cad/objects/${encodeURIComponent(objectId)}/features/${encodeURIComponent(featureId)}/duplicate`, { method: 'POST' });
+}
+
+export function reorderCadFeature(objectId: string, featureId: string, toIndex: number) {
+  return engineFetch<{ ok: boolean }>(`/v3.1/cad/objects/${encodeURIComponent(objectId)}/features/${encodeURIComponent(featureId)}/reorder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to_index: toIndex }),
   });
 }
