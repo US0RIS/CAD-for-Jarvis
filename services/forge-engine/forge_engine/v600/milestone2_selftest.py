@@ -195,8 +195,10 @@ def run() -> dict[str, object]:
         else:
             raise AssertionError("Ambiguous two-hole mounting topology must fail closed")
 
-        graph = _ok(client.post("/v3.1/graph/sync"), "sync graph after mount materialization").json()
-        assert graph["ready"] is True, graph
+        _ok(client.post("/v3.1/graph/sync"), "sync graph after mount materialization")
+        graph = _ok(client.get("/v3.1/graph"), "read graph after mount materialization").json()
+        ids = {row["id"] for row in graph["nodes"]}
+        assert f"cad:{plate_id}" in ids and f"cad:{pi_id}" in ids, ids
         health = _ok(client.get("/v6/health"), "v6 health").json()
         assert health["current_milestone"] == "geometry_backed_assembly_truth", health
         assert health["geometry_backed_mount_count"] >= 1, health
