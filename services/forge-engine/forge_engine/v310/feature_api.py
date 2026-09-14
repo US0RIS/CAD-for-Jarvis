@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -39,10 +39,20 @@ class PartCreate(BaseModel):
 _INSTALLED = False
 
 
-def install(app: Any, require_session: Callable[..., None]) -> None:
+def install(
+    app: Any,
+    require_session: Callable[..., None],
+    broadcast: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    project_snapshot: Callable[[], dict[str, Any]] | None = None,
+) -> None:
     global _INSTALLED
     if _INSTALLED:
         return
+
+    async def publish_project_update() -> None:
+        if broadcast is None or project_snapshot is None:
+            return
+        await broadcast({"type": "project.updated", "project": project_snapshot()})
 
     @app.get("/v3.1/cad/objects/{object_id}/features", dependencies=[Depends(require_session)])
     async def list_features(object_id: str) -> dict[str, Any]:
@@ -69,6 +79,7 @@ def install(app: Any, require_session: Callable[..., None]) -> None:
             )
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await publish_project_update()
         return {"ok": True, "project": result["project"], "active_design": result["active_design"]}
 
     @app.post("/v3.1/cad/objects/{object_id}/features", dependencies=[Depends(require_session)])
@@ -81,45 +92,56 @@ def install(app: Any, require_session: Callable[..., None]) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         obj = core.object_by_id(object_id)
+        await publish_project_update()
         return {"ok": True, "feature": deepcopy(obj.get("features", [])[-1]), "active_design": result["active_design"]}
 
     @app.patch("/v3.1/cad/objects/{object_id}/features/{feature_id}", dependencies=[Depends(require_session)])
     async def update_feature(object_id: str, feature_id: str, request: FeaturePatch) -> dict[str, Any]:
         try:
-            return core.execute("update_feature", {"id": object_id, "feature_id": feature_id, "patch": request.patch}, actor="human", reason="edit CAD feature")
+            result = core.execute("update_feature", {"id": object_id, "feature_id": feature_id, "patch": request.patch}, actor="human", reason="edit CAD feature")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Unknown CAD object/feature: {exc}") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await publish_project_update()
+        return result
 
     @app.delete("/v3.1/cad/objects/{object_id}/features/{feature_id}", dependencies=[Depends(require_session)])
     async def delete_feature(object_id: str, feature_id: str) -> dict[str, Any]:
         try:
-            return core.execute("delete_feature", {"id": object_id, "feature_id": feature_id}, actor="human", reason="delete CAD feature")
+            result = core.execute("delete_feature", {"id": object_id, "feature_id": feature_id}, actor="human", reason="delete CAD feature")
         except (KeyError, IndexError) as exc:
             raise HTTPException(status_code=404, detail=f"Unknown CAD object/feature: {exc}") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await publish_project_update()
+        return result
 
     @app.post("/v3.1/cad/objects/{object_id}/features/{feature_id}/reorder", dependencies=[Depends(require_session)])
     async def reorder_feature(object_id: str, feature_id: str, request: FeatureReorder) -> dict[str, Any]:
         try:
-            return core.execute("reorder_feature", {"id": object_id, "feature_id": feature_id, "to_index": request.to_index}, actor="human", reason="reorder CAD feature history")
+            result = core.execute("reorder_feature", {"id": object_id, "feature_id": feature_id, "to_index": request.to_index}, actor="human", reason="reorder CAD feature history")
         except (KeyError, IndexError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        await publish_project_update()
+        return result
 
     @app.post("/v3.1/cad/objects/{object_id}/features/{feature_id}/suppress", dependencies=[Depends(require_session)])
     async def suppress_feature(object_id: str, feature_id: str, request: FeatureSuppress) -> dict[str, Any]:
         try:
-            return core.execute("suppress_feature", {"id": object_id, "feature_id": feature_id, "suppressed": request.suppressed}, actor="human", reason="suppress CAD feature")
+            result = core.execute("suppress_feature", {"id": object_id, "feature_id": feature_id, "suppressed": request.suppressed}, actor="human", reason="suppress CAD feature")
         except (KeyError, IndexError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        await publish_project_update()
+        return result
 
     @app.post("/v3.1/cad/objects/{object_id}/features/{feature_id}/duplicate", dependencies=[Depends(require_session)])
     async def duplicate_feature(object_id: str, feature_id: str, name: str | None = None) -> dict[str, Any]:
         try:
-            return core.execute("duplicate_feature", {"id": object_id, "feature_id": feature_id, "name": name}, actor="human", reason="duplicate CAD feature")
+            result = core.execute("duplicate_feature", {"id": object_id, "feature_id": feature_id, "name": name}, actor="human", reason="duplicate CAD feature")
         except (KeyError, IndexError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        await publish_project_update()
+        return result
 
     _INSTALLED = True
