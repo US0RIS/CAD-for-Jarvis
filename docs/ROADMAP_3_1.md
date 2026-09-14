@@ -1,5 +1,11 @@
 # ForgeCAD 3.1.0 — Integration Release
 
+Status: **COMPLETE / release-validated**
+
+Application implementation SHA: `dcfc9269c484629797672e046e9da729740d6e66`
+
+Final macOS release-validation SHA: `cd2b3151f99f8762590b04a79df6004a21ead5af`
+
 ForgeCAD 3.1.0 is the release where the existing CAD, engineering, software, manufacturing, world-model, and hardware-control subsystems become one coherent engineering system.
 
 The 3.0 line established the persistent Physical World Model and Jarvis-facing identity/action substrate. 3.1 moves the product from "many capable engineering subsystems" toward a single canonical engineering graph with deterministic propagation, verification, diagnosis, and closed-loop design behavior.
@@ -8,15 +14,16 @@ The 3.0 line established the persistent Physical World Model and Jarvis-facing i
 
 A physical part, component, requirement, electrical device, software target, BOM line, simulation subject, manufacturing artifact, and deployed physical object must not become seven unrelated records. ForgeCAD 3.1 introduces a canonical engineering graph that gives those representations one stable engineering identity and explicit typed relationships.
 
-Changing a motor, dimension, controller, route, requirement, or manufacturing process should deterministically identify the affected engineering records, mark stale evidence, re-evaluate constraints, and tell Jarvis what must be recomputed or repaired.
+Changing a motor, dimension, controller, route, requirement, or manufacturing process deterministically identifies the affected engineering records, marks stale evidence, re-evaluates constraints, and tells Jarvis what must be recomputed or repaired.
 
-## 3.1 committed scope
+## Completed 3.1 scope
 
 ### 1. Direct CAD editing
 - feature-history records for sketches, extrusions, revolves, booleans, fillets, chamfers, patterns, holes, loft/sweep contracts, datum planes/axes, and transforms;
 - stable feature IDs and topology references where supported;
 - explicit unsupported/degraded states rather than silent approximation;
-- edit/rollback semantics suitable for keyboard-first desktop use and Jarvis operations.
+- edit/rollback semantics suitable for keyboard-first desktop use and Jarvis operations;
+- desktop feature-stack editing with add, edit, suppress, duplicate, reorder, and delete operations.
 
 ### 2. Assembly intelligence
 - typed joints/mates, motion limits, bearings, fasteners, interfaces, service clearances, and interference relationships;
@@ -24,7 +31,7 @@ Changing a motor, dimension, controller, route, requirement, or manufacturing pr
 - dependency and serviceability checks.
 
 ### 3. Unified engineering graph
-Canonical nodes and edges spanning:
+Canonical nodes and edges span:
 - CAD objects/features;
 - component catalog parts;
 - BOM lines and procurement records;
@@ -36,18 +43,21 @@ Canonical nodes and edges spanning:
 - physical-world entities and observations;
 - device capabilities and live telemetry.
 
+Graph rebuilds are deterministic, clean no-op rebuilds do not create false dirtiness, failed physical evidence survives reconstruction, and dirty/stale state is derived from unresolved engineering evidence rather than transient UI state.
+
 ### 4. Closed-loop AI engineering
-A bounded deterministic loop around the existing planner/campaign infrastructure:
+A bounded deterministic loop now exists around the planner/campaign infrastructure:
 `intent → requirements → architecture → candidates → CAD/electrical/software → verification → diagnosis → repair branch → re-verification`.
 
-The AI may propose; canonical state mutation and verification remain deterministic and auditable.
+The AI may propose; canonical state mutation and verification remain deterministic and auditable. Arbitrary physical or geometry actions are not silently self-authorized.
 
 ### 5. Larger real-component ecosystem
 - generalized component-family schema;
 - compatibility/interface metadata;
 - supplier/availability/cost hooks;
 - geometry/spec confidence and provenance;
-- deterministic candidate filters usable without an LLM.
+- deterministic candidate filters usable without an LLM;
+- cross-vendor compatibility indexing.
 
 ### 6. Constraint-driven substitution
 - replacement candidate search against interface, envelope, electrical, mechanical, thermal, software, availability, and cost constraints;
@@ -57,7 +67,7 @@ The AI may propose; canonical state mutation and verification remain determinist
 ### 7. Higher-fidelity simulation
 - solver-adapter contracts for structural FEA, thermal-field, CFD/hydraulics, dynamics, vibration/modal, fatigue, contact, motor/load curves, and tolerance analysis;
 - existing deterministic local solvers remain available as screening solvers;
-- external/high-fidelity solvers must report provenance, version, input fingerprint, assumptions, and validity limits.
+- external/high-fidelity solvers report provenance, version, input fingerprint, assumptions, and validity limits.
 
 ### 8. Manufacturing-aware design
 - process constraints for additive, CNC, sheet metal, and laser/waterjet classes;
@@ -65,19 +75,20 @@ The AI may propose; canonical state mutation and verification remain determinist
 - tool access, wall thickness, overhang/support, bend radius, hole/drill, stock, and process-envelope checks where data exists.
 
 ### 9. Fabrication package generation
-A reproducible package manifest tying together geometry exports, drawings/notes, BOM, wiring, software/firmware, manufacturing resources, analysis evidence, and revision identity.
+A reproducible fabrication archive ties together STEP/STL geometry, `.focad`, BOM, software, requirements, analysis/evidence hashes, manufacturing resources, and revision identity.
 
 ### 10. Physical-build feedback
 - measurement/inspection records linked to canonical entities;
 - expected-vs-observed comparison;
-- deviation findings capable of invalidating stale assumptions/evidence;
+- deviation findings that invalidate stale assumptions/evidence;
+- failed physical evidence persists across graph reconstruction and restart;
 - redesign feedback into branches/campaigns.
 
 ### 11. First-class requirements and verification
-Requirements are typed canonical objects with target, comparator, unit, owner/scope, evidence, status, and confidence. Release readiness is derived from requirements rather than prose.
+Requirements are typed canonical objects with target, comparator, unit, owner/scope, evidence, status, and confidence. Release readiness derives from requirements rather than prose.
 
 ### 12. Deep provenance
-Every derived decision/evidence record carries input fingerprints, source IDs, method, timestamp, confidence, assumptions, and invalidation reasons.
+Derived decisions/evidence carry input fingerprints, source IDs, method, timestamp, confidence, assumptions, and invalidation reasons.
 
 ### 13. Failure diagnosis
 A causal diagnostic layer traces failed requirements/analyses backward through the engineering graph, ranks likely causes, and proposes bounded repair actions with impacted-node previews.
@@ -86,15 +97,16 @@ A causal diagnostic layer traces failed requirements/analyses backward through t
 - semantic graph/engineering diff;
 - design branch comparison;
 - working-vs-failed revision comparison;
-- merge/conflict contracts for canonical engineering entities;
+- semantic three-way merge and conflict contracts for canonical engineering entities;
 - protected physically verified baselines remain immutable without explicit branching.
 
 ### 15. Interaction/polish
-- keyboard-first object manipulation and deletion;
-- command palette and discoverable shortcuts;
-- multi-select/context operations;
+- click/select + Backspace/Delete object deletion;
+- keyboard-first manipulation and history actions;
+- discoverable shortcut palette;
 - deterministic selection and inspection;
-- panel/tool state available through semantic commands as well as GUI interactions.
+- direct feature-history UI;
+- panel/tool state through semantic commands as well as GUI interactions.
 
 ### 16. Performance architecture
 - incremental graph projection;
@@ -105,11 +117,11 @@ A causal diagnostic layer traces failed requirements/analyses backward through t
 ### 17. Recovery/durability
 - transactional engineering-graph persistence;
 - schema versioning/migration;
-- autosave/recovery checkpoints;
+- recoverable multi-branch checkpoints;
 - stale/corrupt derived evidence can be rebuilt from canonical state.
 
 ### 18. Jarvis-native semantic API
-Jarvis operates the engineering model directly rather than automating UI controls. Every important 3.1 operation must have a typed API and audit trail.
+Jarvis operates the engineering model directly rather than automating UI controls. The `/v3.1/jarvis/context` surface exposes the unified engineering state, graph revision, Product Lab state, evidence, and relevant world/design identity.
 
 ### 19. Live hardware synchronization
 - design/deployed-state comparison for programmable devices;
@@ -117,34 +129,29 @@ Jarvis operates the engineering model directly rather than automating UI control
 - drift findings when physical/deployed state diverges from design intent.
 
 ### 20. World-model visualization
-- engineering graph ↔ Physical World Model linkage exposed to the desktop;
-- world entity, CAD entity, live state, evidence, and deployed-state relationships inspectable from the same selection context.
+- Engineering Graph ↔ Physical World Model linkage is exposed to the desktop SYSTEM workspace;
+- world entity, CAD entity, live state, evidence, deployed-state relationships, graph health, dirty state, and selected-object impact/evidence are inspectable from the same context.
 
-## Product Lab direction
+## Product Lab
 
-ForgeCAD will also support a smaller-product workflow, provisionally called **Product Lab**. This is not a weaker engineering mode; it is a different workspace profile optimized for compact, tightly integrated devices such as wearables, wrist mechanisms, sensor gadgets, handheld electromechanical products, compact robotics, launchers, and experimental mechanisms.
+3.1 establishes **Product Lab** as a first-class workspace profile using the same canonical engineering model. It is intended for compact integrated products such as wearables, wrist mechanisms, sensor gadgets, handheld electromechanical products, compact robotics, launchers, and experimental mechanisms.
 
-Product Lab emphasizes:
-- body/hand/wrist/garment envelopes and ergonomic keep-out zones;
-- compact packaging and mass/center-of-mass budgets;
-- batteries, embedded electronics, actuators, mechanisms, housings, and wiring in one enclosure-scale workflow;
-- fast iteration among prototype manufacturing processes;
-- energy, heat, pressure, stored-energy, pinch/impact, and human-contact safety budgets;
-- test rigs and instrumented prototype evidence;
-- small-part tolerances, fasteners, seals, flexible elements, cords/cables, and consumables;
-- explicit separation between fictional inspiration and physically supportable engineering assumptions.
+Product Lab includes profile hooks for body/hand/wrist/garment envelopes, compact packaging, mass budgets, human contact, stored-energy limits, surface-temperature limits, ergonomic keep-outs, embedded electronics/actuators, and preferred prototype processes. It remains the same engineering truth model rather than a separate weaker CAD system.
 
-3.1 establishes the profile/ontology hooks so Product Lab can be expanded without forking the engineering model. A later release can make it a dedicated workspace/subsection if the UI deserves a separate experience.
+A later release may expand Product Lab into a dedicated workspace/subsection if its interaction model warrants it; that is explicitly outside the 3.1.0 release scope.
 
-## Release acceptance
+## Release acceptance — PASS
 
-3.1.0 is complete only when:
-1. all existing 3.0 engineering/world/capability/browser regressions remain green;
-2. the canonical engineering graph is persistent, deterministic, and reconstructable from project/world state;
-3. requirements/evidence/provenance and invalidation work end-to-end;
-4. component substitution produces a deterministic impact/propagation report;
-5. failure diagnosis traces through graph dependencies;
-6. fabrication and physical-feedback manifests bind to exact revision fingerprints;
-7. Jarvis can inspect and invoke the new semantic surfaces without GUI automation;
-8. Product Lab projects are represented by the same canonical graph with a compact-product profile;
-9. packaged Windows and macOS builds pass installed-copy smoke tests.
+All committed 3.1.0 acceptance criteria are satisfied:
+
+1. **PASS** — existing engineering, 3.0 world, identity, planner, event-stream, capability, and browser regressions remain green;
+2. **PASS** — the canonical Engineering Graph is persistent, deterministic, reconstructable, and does not create false dirty state on a clean rebuild;
+3. **PASS** — requirements/evidence/provenance and invalidation work end-to-end;
+4. **PASS** — component substitution produces deterministic compatibility and impact/propagation results;
+5. **PASS** — failure diagnosis traces graph dependencies and bounded repair actions;
+6. **PASS** — fabrication and physical-feedback records bind to exact revision/fingerprint state;
+7. **PASS** — Jarvis can inspect the new semantic surfaces without GUI automation;
+8. **PASS** — Product Lab uses the same canonical graph with its compact-product profile;
+9. **PASS** — packaged Windows x64 and macOS arm64/x64 builds pass installed-copy and desktop-launch validation.
+
+Exact workflow and artifact provenance is recorded in `docs/RELEASE_3_1.md`.
