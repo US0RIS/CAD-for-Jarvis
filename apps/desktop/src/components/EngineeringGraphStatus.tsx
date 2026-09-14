@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Boxes, GitBranch, Microscope, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react';
+import { Boxes, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react';
 import {
   fetchEngineeringHealth,
   fetchEngineeringImpact,
@@ -10,6 +10,7 @@ import {
   type EngineeringNodeDetailPayload,
   type ProductProfilePayload,
 } from '../api/engineering';
+import { FeatureHistoryPanel } from './FeatureHistoryPanel';
 
 const divider = '1px solid var(--border-subtle, #22313b)';
 
@@ -143,6 +144,8 @@ export function EngineeringGraphStatus({ selectedObjectId = null }: { selectedOb
       </div>
       {detail.node.dirty_reasons.slice(0, 2).map((reason) => <div key={reason} style={{ fontSize: 8.8, opacity: .65, marginTop: 4 }}>{reason}</div>)}
     </div> : null}
+
+    <FeatureHistoryPanel objectId={selectedObjectId}/>
   </div>;
 }
 
