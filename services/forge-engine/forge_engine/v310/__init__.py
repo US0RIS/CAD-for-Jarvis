@@ -16,6 +16,12 @@ from ..v110 import core as _core
 # Externally visible project/bundle metadata follows the active 3.1 release line.
 _core.APP_VERSION = INTEGRATION_VERSION
 
+# Feature-history extensions deliberately patch the existing deterministic core so
+# every caller (desktop, Jarvis, campaigns, export, analysis) observes the same CAD
+# semantics rather than a 3.1-only parallel geometry path.
+from . import cad_features as _cad_features
+_cad_features.install()
+
 __all__ = [
     "INTEGRATION_VERSION",
     "ENGINEERING_GRAPH_SCHEMA_VERSION",
