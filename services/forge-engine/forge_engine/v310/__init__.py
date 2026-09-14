@@ -22,6 +22,11 @@ _core.APP_VERSION = INTEGRATION_VERSION
 from . import cad_features as _cad_features
 _cad_features.install()
 
+# Engineering-graph runtime policy establishes clean initial baselines and keeps
+# project containment edges from turning every small edit into whole-project dirtiness.
+from . import graph_runtime as _graph_runtime
+_graph_runtime.install()
+
 __all__ = [
     "INTEGRATION_VERSION",
     "ENGINEERING_GRAPH_SCHEMA_VERSION",
