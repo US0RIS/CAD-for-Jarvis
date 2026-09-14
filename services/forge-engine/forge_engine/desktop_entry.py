@@ -23,7 +23,12 @@ install_world_event_stream(
     session_token=main_v31.v3.legacy.SESSION_TOKEN,
     jarvis_token_verifier=main_v31.v3.legacy.jarvis_bridge.verify_token,
 )
-install_feature_api(main_v31.app, main_v31.v3.legacy.require_session)
+install_feature_api(
+    main_v31.app,
+    main_v31.v3.legacy.require_session,
+    main_v31.v3.legacy.broadcast,
+    main_v31.v3.legacy.PROJECT.snapshot,
+)
 install_ecosystem_api(main_v31.app, main_v31.v3.legacy.require_session)
 install_integration_api(
     main_v31.app,
