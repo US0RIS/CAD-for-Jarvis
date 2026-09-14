@@ -82,7 +82,7 @@ jobs:
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v300.capability_runtime_selftest
       - name: Install desktop dependencies
-        run: pnpm install --frozen-lockfile=false
+        run: pnpm install --prod=false --frozen-lockfile=false
       - name: Typecheck and build desktop
         run: |
           pnpm --filter @forgecad/desktop typecheck
