@@ -54,6 +54,7 @@ const templates: FeatureTemplate[] = [
   { type: 'chamfer', label: 'Chamfer', fields: [{ key: 'distance', label: 'Distance', defaultValue: 1, min: .05, step: .05 }] },
   { type: 'shell', label: 'Shell', fields: [{ key: 'thickness', label: 'Wall', defaultValue: 1.5, min: .05, step: .05 }] },
 ];
+const defaultTemplate = templates[0]!;
 
 function initialValues(template: FeatureTemplate) {
   return Object.fromEntries(template.fields.map((field) => [field.key, field.defaultValue])) as Record<string, number>;
@@ -66,14 +67,14 @@ function scalarParameters(feature: CadFeaturePayload) {
 
 export function FeatureHistoryPanel({ objectId, onChanged }: { objectId: string | null; onChanged?: () => void }) {
   const [features, setFeatures] = useState<CadFeaturePayload[]>([]);
-  const [templateType, setTemplateType] = useState(templates[0].type);
+  const [templateType, setTemplateType] = useState(defaultTemplate.type);
   const [featureName, setFeatureName] = useState('');
-  const [values, setValues] = useState<Record<string, number>>(initialValues(templates[0]));
+  const [values, setValues] = useState<Record<string, number>>(initialValues(defaultTemplate));
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const template = useMemo(() => templates.find((row) => row.type === templateType) ?? templates[0], [templateType]);
+  const template = useMemo(() => templates.find((row) => row.type === templateType) ?? defaultTemplate, [templateType]);
 
   const reload = useCallback(async () => {
     if (!objectId) {
@@ -94,7 +95,7 @@ export function FeatureHistoryPanel({ objectId, onChanged }: { objectId: string 
   useEffect(() => { void reload(); }, [reload]);
 
   const chooseTemplate = (type: string) => {
-    const next = templates.find((row) => row.type === type) ?? templates[0];
+    const next = templates.find((row) => row.type === type) ?? defaultTemplate;
     setTemplateType(next.type);
     setValues(initialValues(next));
   };
@@ -148,7 +149,7 @@ export function FeatureHistoryPanel({ objectId, onChanged }: { objectId: string 
     </div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 4 }}>
       {template.fields.map((field) => <label key={field.key} style={{ fontSize: 8.5, opacity: .8 }}>
-        <span style={{ display: 'block', opacity: .55, marginBottom: 2 }}>{field.label} mm{field.key === 'angle_deg' ? ' / deg' : ''}</span>
+        <span style={{ display: 'block', opacity: .55, marginBottom: 2 }}>{field.label}{field.key === 'angle_deg' ? ' deg' : ' mm'}</span>
         <input
           aria-label={`${template.label} ${field.label}`}
           type="number"
