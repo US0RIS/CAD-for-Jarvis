@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException
 from ..v110 import core
 from . import MILESTONE_VERSION
 from .assembly_frame_constraints import MateRequest, apply_mate, solve_mate_transform, validate_constraint_set
+from .constraint_rank import analyze_constraint_rank
 from .geometry_mounts import MountGeometryRequest, audit_mount_geometry, materialize_mount_geometry, plan_mount_geometry
 
 
@@ -29,6 +30,7 @@ def install(
     @app.get("/v6/health")
     async def v6_health() -> dict[str, Any]:
         constraints = validate_constraint_set(core.PROJECT)
+        rank = analyze_constraint_rank(core.PROJECT)
         geometry_backed_mounts = sum(
             len((obj.get("semantic") or {}).get("geometry_backed_mounts") or [])
             for obj in core.PROJECT.get("objects") or []
@@ -42,12 +44,14 @@ def install(
             "current_milestone": "geometry_backed_assembly_truth",
             "completed_milestones": ["interface_constrained_electromechanical_assembly"],
             "assembly_constraints": constraints,
+            "assembly_constraint_rank_summary": rank["summary"],
             "geometry_backed_mount_count": geometry_backed_mounts,
             "invariants": [
                 "designed truth != observed state != inference",
                 "autonomous placement derives from declared engineering interfaces",
                 "purchased component engineering data remains immutable inside a design revision",
                 "fixed/prismatic placement resolves a complete right-handed interface frame rather than an arbitrary point-plus-axis rotation",
+                "assembly mobility and redundant constraints are derived from the spatial constraint Jacobian rather than guessed from mate count",
                 "a mechanical mount is not verified until declared mounting geometry is present in the fabricated B-rep",
                 "ambiguous component mounting topology fails closed rather than being guessed",
             ],
@@ -84,6 +88,13 @@ def install(
     @app.get("/v6/assembly/constraints", dependencies=[Depends(require_session)])
     async def assembly_constraints() -> dict[str, Any]:
         return validate_constraint_set(core.PROJECT)
+
+    @app.get("/v6/assembly/constraint-rank", dependencies=[Depends(require_session)])
+    async def assembly_constraint_rank() -> dict[str, Any]:
+        try:
+            return analyze_constraint_rank(core.PROJECT)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/v6/assembly/mates", dependencies=[Depends(require_session)])
     async def assembly_mates() -> dict[str, Any]:
