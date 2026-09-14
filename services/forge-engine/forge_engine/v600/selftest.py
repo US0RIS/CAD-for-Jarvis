@@ -239,7 +239,13 @@ def run() -> dict[str, object]:
         ids = {row["id"] for row in graph["nodes"]}
         assert f"cad:{deck_id}" in ids and f"cad:{rail_id}" in ids and f"cad:{pi_id}" in ids, ids
         assert f"software:{pi_id}" in ids, ids
-        assert any(row["kind"] == "joint" and row["properties"].get("solver") == "forgecad.v600.interface_mate" for row in graph["nodes"]), graph
+        v6_joints = [
+            row
+            for row in graph["nodes"]
+            if row["kind"] == "joint" and str(row["properties"].get("solver") or "").startswith("forgecad.v600.")
+        ]
+        assert len(v6_joints) >= len(mates), v6_joints
+        assert all(row["properties"].get("type") == "fixed" for row in v6_joints), v6_joints
         assert any(row["kind"] == "connected_to" for row in graph["edges"]), graph
 
         archive = _ok(
