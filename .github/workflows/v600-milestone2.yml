@@ -38,6 +38,14 @@ jobs:
           CI: 'true'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v600.frame_mate_selftest
+      - name: Run spatial constraint-rank acceptance
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m2-rank
+          FORGECAD_SESSION_TOKEN: test-session
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v600.constraint_rank_selftest
       - name: Preserve ForgeCAD 6.0 milestone 1 acceptance
         env:
           PYTHONPATH: services/forge-engine
