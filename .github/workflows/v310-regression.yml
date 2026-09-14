@@ -1,0 +1,89 @@
+name: ForgeCAD 3.1 integration regression
+
+on:
+  push:
+    branches: [forgecad/3.1.0]
+    paths:
+      - 'services/forge-engine/**'
+      - 'apps/desktop/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/v310-regression.yml'
+  workflow_dispatch:
+
+jobs:
+  integration-regression:
+    name: 3.1 graph + CAD + requirements + fabrication + recovery + desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Forge Engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine
+      - name: Run ForgeCAD 3.1 integration selftest
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v310
+          FORGECAD_SESSION_TOKEN: test-session
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v310.selftest
+      - name: Run complete pre-3.1 engineering regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v310-legacy
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '1'
+        run: python -m forge_engine.full_scope_selftest
+      - name: Run 3.0 physical world regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v310-world
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v300.world_model_selftest
+      - name: Run 3.0 identity resolution regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v310-identity
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v300.identity_resolution_selftest
+      - name: Run 3.0 world-aware planner regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v310-planner
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v300.planner_world_context_selftest
+      - name: Run 3.0 world event regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v310-events
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v300.world_event_stream_selftest
+      - name: Run 3.0 capability safety regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v310-capabilities
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v300.capability_runtime_selftest
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile=false
+      - name: Typecheck and build desktop
+        run: |
+          pnpm --filter @forgecad/desktop typecheck
+          pnpm --filter @forgecad/desktop build
