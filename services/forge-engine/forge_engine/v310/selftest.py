@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import zipfile
 
 from fastapi.testclient import TestClient
@@ -21,6 +22,13 @@ def run() -> dict[str, object]:
     # Establish a deterministic blank canonical workspace before app startup.
     PROJECT.new_project()
     with TestClient(app) as client:
+        # Exercise the same authenticated boundary used by the packaged desktop and
+        # Jarvis. CI sets FORGECAD_SESSION_TOKEN; local selftests remain compatible
+        # with an unset token because require_session permits loopback development.
+        session_token = os.environ.get("FORGECAD_SESSION_TOKEN", "")
+        if session_token:
+            client.headers.update({"X-ForgeCAD-Session": session_token})
+
         _assert_ok(client.post("/v3.1/graph/sync"), "initial graph sync")
         health = _assert_ok(client.get("/v3.1/health"), "v3.1 health").json()
         assert health["api_version"] == "3.1", health
