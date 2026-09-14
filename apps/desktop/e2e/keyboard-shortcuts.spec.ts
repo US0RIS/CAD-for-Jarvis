@@ -33,11 +33,11 @@ test('ForgeCAD keyboard workflow supports deletion, undo, tools, panels, and typ
 
   // Tool shortcuts operate without requiring toolbar clicks.
   await page.keyboard.press('r');
-  await expect(page.getByRole('button', { name: 'Rotate' })).toHaveClass(/active/);
+  await expect(page.getByRole('button', { name: 'Rotate', exact: true })).toHaveClass(/active/);
   await page.keyboard.press('s');
-  await expect(page.getByRole('button', { name: 'Scale' })).toHaveClass(/active/);
+  await expect(page.getByRole('button', { name: 'Scale', exact: true })).toHaveClass(/active/);
   await page.keyboard.press('g');
-  await expect(page.getByRole('button', { name: 'Move' })).toHaveClass(/active/);
+  await expect(page.getByRole('button', { name: 'Move', exact: true })).toHaveClass(/active/);
 
   // Right-panel and bottom-dock shortcuts are direct and discoverable.
   await page.keyboard.press('Control+2');
@@ -55,12 +55,12 @@ test('ForgeCAD keyboard workflow supports deletion, undo, tools, panels, and typ
   await page.keyboard.press('Backspace');
   await expect(search).toHaveValue('senso');
   await expect(page.locator('.object-row')).toHaveCount(1);
-  await expect(page.getByRole('button', { name: 'Move' })).toHaveClass(/active/);
+  await expect(page.getByRole('button', { name: 'Move', exact: true })).toHaveClass(/active/);
 
   // Ctrl+J opens Copilot and places the caret in its prompt.
   await search.blur();
   await page.keyboard.press('Control+j');
-  await expect(page.getByRole('button', { name: 'Copilot' })).toHaveClass(/active/);
+  await expect(page.getByRole('button', { name: 'Copilot', exact: true })).toHaveClass(/active/);
   await expect(page.getByRole('textbox', { name: 'Copilot request' })).toBeFocused();
 
   // F1 exposes the complete shortcut reference and Escape closes it.
