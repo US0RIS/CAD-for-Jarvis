@@ -10,6 +10,7 @@ import {
   type WorldHealthPayload,
   type WorldRelationPayload,
 } from '../api/world';
+import { EngineeringGraphStatus } from './EngineeringGraphStatus';
 
 function compactValue(value: unknown) {
   if (value == null) return '—';
@@ -114,7 +115,7 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
 
   return <div
     data-testid="world-system-panel"
-    style={{ display: 'grid', gridTemplateColumns: '210px minmax(220px, .85fr) minmax(320px, 1.5fr)', gap: 8, padding: 8, height: '100%', minHeight: 0, overflow: 'hidden' }}
+    style={{ display: 'grid', gridTemplateColumns: '230px minmax(220px, .85fr) minmax(320px, 1.5fr)', gap: 8, padding: 8, height: '100%', minHeight: 0, overflow: 'hidden' }}
   >
     <section style={{ ...cardStyle, padding: 10, display: 'flex', flexDirection: 'column', gap: 9, overflow: 'auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -135,6 +136,7 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
       <StatusLine icon={<ShieldCheck size={12}/>} label="Project sync" value={health?.project_sync.ok ? 'Current' : 'Needs attention'} good={Boolean(health?.project_sync.ok)}/>
       <StatusLine icon={<Wifi size={12}/>} label="Adapters" value={String(health?.capability_runtime.registered_adapters.length ?? 0)} good/>
       <StatusLine icon={<Activity size={12}/>} label="Pending actions" value={String(health?.capability_runtime.awaiting_confirmation ?? 0)} good={(health?.capability_runtime.awaiting_confirmation ?? 0) === 0}/>
+      <EngineeringGraphStatus selectedObjectId={selectedObjectId}/>
       <div style={{ borderTop: '1px solid var(--border-subtle, #22313b)', paddingTop: 8 }}>
         <div style={{ fontSize: 10, opacity: .55, marginBottom: 5 }}>RECENT WORLD CHANGES</div>
         {recentEvents.length ? recentEvents.map((event) => <div key={event.id} style={{ fontSize: 10.5, lineHeight: 1.35, marginBottom: 5 }}>
