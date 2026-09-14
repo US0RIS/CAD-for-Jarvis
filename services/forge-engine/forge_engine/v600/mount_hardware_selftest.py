@@ -71,9 +71,10 @@ def run() -> dict[str, object]:
                     "source_interface": "mount",
                     "target_interface": "pi_mount",
                     "mate_type": "fixed",
+                    "gap_mm": 6.0,
                 },
             ),
-            "mate Pi",
+            "mate Pi on six millimeter standoffs",
         )
 
         geometry_request = {
@@ -88,6 +89,7 @@ def run() -> dict[str, object]:
             "materialize M2.5 reference clearance",
         ).json()
         assert materialized["audit"]["ok"] is True, materialized
+        assert abs(float(materialized["audit"]["plan"]["mate_gap_mm"]) - 6.0) < 1e-9, materialized
         assert all(abs(float(row["diameter"]) - 3.1) < 1e-9 for row in materialized["created"]), materialized
 
         hardware_request = {
@@ -103,6 +105,7 @@ def run() -> dict[str, object]:
             "bottom_screw_length_mm": 6.0,
             "minimum_thread_engagement_mm": 2.0,
             "clearance_tolerance_mm": 0.05,
+            "stack_tolerance_mm": 0.05,
             "screw_standard": "ISO 4762",
         }
         plan = _ok(
@@ -112,6 +115,8 @@ def run() -> dict[str, object]:
         assert plan["thread"] == "M2.5", plan
         assert plan["quantity"] == 4, plan
         assert abs(float(plan["reference_clearance_hole_mm"]) - 3.1) < 1e-9, plan
+        assert abs(float(plan["mate_gap_mm"]) - 6.0) < 1e-9, plan
+        assert abs(float(plan["measured_axial_separation_mm"]) - 6.0) < 1e-9, plan
         assert abs(float(plan["top_screw_engagement_mm"]) - 2.4) < 1e-9, plan
         assert abs(float(plan["bottom_screw_engagement_mm"]) - 2.0) < 1e-9, plan
         assert len(plan["bom"]) == 3, plan
@@ -191,9 +196,10 @@ def run() -> dict[str, object]:
                     "source_interface": "mount",
                     "target_interface": "pi_mount",
                     "mate_type": "fixed",
+                    "gap_mm": 6.0,
                 },
             ),
-            "mate negative Pi",
+            "mate negative Pi on six millimeter standoffs",
         )
         _ok(
             client.post(
@@ -222,6 +228,7 @@ def run() -> dict[str, object]:
             "mount_positions": 4,
             "canonical_bom_lines": 3,
             "supplier_identity_preserved_as_unknown": True,
+            "standoff_gap_geometry_consistent": True,
             "engagement_checked": True,
             "undersized_clearance_rejected": True,
         }
