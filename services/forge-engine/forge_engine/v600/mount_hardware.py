@@ -8,7 +8,7 @@ without inventing a supplier or manufacturer part number.
 
 The current controlled capability covers a double-sided female-female threaded
 standoff: one screw passes through the purchased component into the standoff and
-a second screw passes through the fabricated host into the opposite end.  More
+a second screw passes through the fabricated host into the opposite end. More
 retention strategies remain later work.
 """
 
@@ -19,13 +19,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..v110 import core
 from .geometry_mounts import MountGeometryRequest, audit_mount_geometry, plan_mount_geometry
 
 
-# Engineering-reference clearance subset.  These are intentionally tagged with
-# their source instead of being represented as manufacturer truth.  The values
-# match Accu's published general metric clearance-hole table.
 _CLEARANCE_REFERENCE: dict[str, dict[str, Any]] = {
     "M2": {"major_diameter_mm": 2.0, "clearance_hole_mm": 2.6},
     "M2.5": {"major_diameter_mm": 2.5, "clearance_hole_mm": 3.1},
@@ -55,6 +51,7 @@ class MountHardwareRequest(BaseModel):
     bottom_screw_length_mm: float = Field(gt=0.0, le=100.0)
     minimum_thread_engagement_mm: float = Field(default=2.0, gt=0.0, le=20.0)
     clearance_tolerance_mm: float = Field(default=0.05, gt=0.0, le=1.0)
+    stack_tolerance_mm: float = Field(default=0.05, gt=0.0, le=1.0)
     screw_standard: str = "ISO 4762"
 
 
@@ -133,7 +130,6 @@ def plan_mount_hardware(project: dict[str, Any], request: MountHardwareRequest) 
     thread = _parse_thread(metadata.get("fastener"))
     reference = _CLEARANCE_REFERENCE[thread]
 
-    # Discover the already-materialized mount binding and its actual hole diameter.
     base_plan = plan_mount_geometry(
         project,
         MountGeometryRequest(
@@ -144,6 +140,19 @@ def plan_mount_hardware(project: dict[str, Any], request: MountHardwareRequest) 
         ),
     )
     binding_id = str(base_plan["binding_id"])
+    mate_gap = float(base_plan.get("mate_gap_mm", 0.0))
+    measured_separation = float(base_plan.get("measured_axial_separation_mm", mate_gap))
+    if abs(mate_gap - float(request.standoff_height_mm)) > float(request.stack_tolerance_mm):
+        raise ValueError(
+            f"Canonical mate gap is {mate_gap:.3f} mm but the declared standoff height is "
+            f"{request.standoff_height_mm:.3f} mm ± {request.stack_tolerance_mm:.3f} mm"
+        )
+    if abs(measured_separation - mate_gap) > float(request.stack_tolerance_mm):
+        raise ValueError(
+            f"Observed interface separation {measured_separation:.3f} mm does not match canonical mate gap "
+            f"{mate_gap:.3f} mm ± {request.stack_tolerance_mm:.3f} mm"
+        )
+
     features = _binding_features(host, binding_id)
     if not features:
         raise ValueError("Mount hardware cannot be realized before geometry-backed mounting holes exist")
@@ -152,8 +161,6 @@ def plan_mount_hardware(project: dict[str, Any], request: MountHardwareRequest) 
         raise ValueError("Mount hardware requires one consistent positive host-hole diameter across the pattern")
     actual_clearance = float(diameters[0])
 
-    # Re-audit against the actual materialized diameter rather than the source
-    # component's smaller through-hole diameter.
     geometry_request = MountGeometryRequest(
         component_id=request.component_id,
         host_id=request.host_id,
@@ -261,6 +268,8 @@ def plan_mount_hardware(project: dict[str, Any], request: MountHardwareRequest) 
         "clearance_reference": deepcopy(_REFERENCE),
         "host_thickness_mm": host_thickness,
         "component_mount_thickness_mm": float(request.component_mount_thickness_mm),
+        "mate_gap_mm": mate_gap,
+        "measured_axial_separation_mm": measured_separation,
         "standoff_height_mm": float(request.standoff_height_mm),
         "standoff_thread_depth_mm": float(request.standoff_thread_depth_mm),
         "top_screw_engagement_mm": top_engagement,
@@ -325,6 +334,7 @@ def realize_mount_hardware(project: dict[str, Any], request: MountHardwareReques
         "thread": plan["thread"],
         "quantity": plan["quantity"],
         "host_clearance_hole_mm": plan["host_clearance_hole_mm"],
+        "mate_gap_mm": plan["mate_gap_mm"],
         "standoff_height_mm": plan["standoff_height_mm"],
         "top_screw_engagement_mm": plan["top_screw_engagement_mm"],
         "bottom_screw_engagement_mm": plan["bottom_screw_engagement_mm"],
