@@ -13,7 +13,7 @@ on:
 
 jobs:
   world-ui:
-    name: Physical world SYSTEM UI vertical slice
+    name: Physical world and keyboard UI vertical slices
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -73,8 +73,8 @@ jobs:
           } while ((Get-Date) -lt $deadline)
           if (-not $healthy) { throw 'ForgeCAD 3.0 engine did not become healthy.' }
 
-      - name: Run physical-world browser acceptance
-        run: pnpm --filter @forgecad/desktop exec playwright test e2e/v300-world.spec.ts
+      - name: Run ForgeCAD 3.0 browser acceptance
+        run: pnpm --filter @forgecad/desktop exec playwright test e2e/v300-world.spec.ts e2e/keyboard-shortcuts.spec.ts
 
       - name: Upload Playwright diagnostics on failure
         if: failure()
