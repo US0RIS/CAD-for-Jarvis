@@ -22,14 +22,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e services/forge-engine
-      - name: Run ForgeCAD 6.0 milestone 2 acceptance
+      - name: Run geometry-backed mount acceptance
         env:
           PYTHONPATH: services/forge-engine
-          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m2
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m2-mount
           FORGECAD_SESSION_TOKEN: test-session
           CI: 'true'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v600.milestone2_selftest
+      - name: Run full interface-frame mate acceptance
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m2-frame
+          FORGECAD_SESSION_TOKEN: test-session
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v600.frame_mate_selftest
       - name: Preserve ForgeCAD 6.0 milestone 1 acceptance
         env:
           PYTHONPATH: services/forge-engine
