@@ -203,13 +203,16 @@ export function KeyboardShortcuts() {
       }
       if (mod && ['1', '2', '3', '4'].includes(key)) {
         event.preventDefault();
-        const tabs = ['Properties', 'Components', 'Analyze', 'Manufacture'];
-        clickButtonByText(tabs[Number(key) - 1], '.right-tabs button');
+        const tabs = ['Properties', 'Components', 'Analyze', 'Manufacture'] as const;
+        const tab = tabs[Number(key) - 1];
+        if (tab) clickButtonByText(tab, '.right-tabs button');
         return;
       }
       if (event.altKey && ['1', '2', '3', '4'].includes(key)) {
         event.preventDefault();
-        clickTestId(['tab-history', 'tab-code', 'tab-simulations', 'tab-system'][Number(key) - 1]);
+        const dockTabs = ['tab-history', 'tab-code', 'tab-simulations', 'tab-system'] as const;
+        const dockTab = dockTabs[Number(key) - 1];
+        if (dockTab) clickTestId(dockTab);
         return;
       }
       if (event.altKey && lower === 'd') {
