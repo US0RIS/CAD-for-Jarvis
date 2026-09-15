@@ -1,6 +1,6 @@
 [project]
 name = "forge-engine"
-version = "6.0.1"
+version = "6.1.0"
 description = "Local canonical engineering, integration-graph and physical-world service for ForgeCAD"
 requires-python = ">=3.12"
 dependencies = [
