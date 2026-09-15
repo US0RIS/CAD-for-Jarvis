@@ -226,7 +226,10 @@ test('a branch switch waits for the in-flight code save and preserves the edited
   await page.locator('.object-row').first().click();
   await page.getByTestId('tab-code').click();
   await expect(page.getByTestId('code-workspace')).toBeVisible();
-  await expect(page.locator('.tree-file').filter({ hasText: 'main.py' })).toBeVisible({ timeout: 30_000 });
+  const mainFile = page.locator('.tree-file').filter({ hasText: 'main.py' });
+  await expect(mainFile).toBeVisible({ timeout: 30_000 });
+  await mainFile.click();
+  await expect(page.locator('.editor-toolbar')).toContainText('main.py');
 
   const editorInput = page.locator('.monaco-editor textarea.inputarea').first();
   await editorInput.waitFor({ state: 'attached', timeout: 30_000 });
