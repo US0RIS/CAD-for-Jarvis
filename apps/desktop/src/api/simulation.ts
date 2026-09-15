@@ -94,6 +94,19 @@ export interface ThermalTransientInput {
   max_samples?: number;
 }
 
+export interface ThermalFieldInput {
+  object_id: string;
+  duration_s: number;
+  timestep_s: number;
+  initial_temperature_c: number;
+  heat_w: number;
+  convection_h_w_m2k: number;
+  ambient_temperature_c: number;
+  emissivity?: number;
+  grid?: [number, number, number];
+  max_samples?: number;
+}
+
 export interface AerodynamicInput {
   solver?: 'integral' | 'openfoam';
   object_ids?: string[];
@@ -162,6 +175,11 @@ export const runGravityLoadPath = (gravity: [number, number, number] = [0, 0, -9
 export const runTransientThermal = (input: ThermalTransientInput) => engineFetch<Record<string, unknown>>('/v6/simulation/thermal/transient', {
   method: 'POST',
   body: JSON.stringify(input),
+});
+
+export const runThermalField = (input: ThermalFieldInput) => engineFetch<Record<string, unknown>>('/v6/simulation/thermal/field', {
+  method: 'POST',
+  body: JSON.stringify({ emissivity: 0, grid: [12, 8, 6], max_samples: 120, ...input }),
 });
 
 export const runAerodynamics = (input: AerodynamicInput) => engineFetch<Record<string, unknown>>('/v6/simulation/aerodynamics', {
