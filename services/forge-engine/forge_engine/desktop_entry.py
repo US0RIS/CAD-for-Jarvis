@@ -14,6 +14,7 @@ from forge_engine.v600.api import install as install_v600_api
 from forge_engine.v600.milestone3_api import install as install_v600_milestone3_api
 from forge_engine.v600.milestone4_api import install as install_v600_milestone4_api
 from forge_engine.v600.milestone5_api import install as install_v600_milestone5_api
+from forge_engine.v600.milestone6_api import install as install_v600_milestone6_api
 
 
 # ForgeCAD 6.0 development keeps 3.1 as the validated production substrate and
@@ -65,6 +66,12 @@ install_v600_milestone4_api(
     main_v31._sync_graph,
 )
 install_v600_milestone5_api(
+    main_v31.app,
+    main_v31.v3.legacy.require_session,
+    main_v31.GRAPH,
+    main_v31._sync_graph,
+)
+install_v600_milestone6_api(
     main_v31.app,
     main_v31.v3.legacy.require_session,
     main_v31.GRAPH,
