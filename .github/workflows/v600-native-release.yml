@@ -1,0 +1,433 @@
+name: ForgeCAD 6.0 Native Release
+
+on:
+  push:
+    branches: [forgecad/6.0.0]
+    paths:
+      - 'apps/desktop/**'
+      - 'services/forge-engine/**'
+      - 'scripts/validate_v600_runtime.py'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'docs/ACCEPTANCE_6_0.md'
+      - 'docs/RELEASE_6_0.md'
+      - '.github/workflows/v600-native-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  source-gate:
+    name: Validate ForgeCAD 6.0 source release candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      release_complete: ${{ steps.release-mode.outputs.release_complete }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - id: release-mode
+        name: Read staged release flag
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, re
+          text = open('services/forge-engine/forge_engine/v600/__init__.py', encoding='utf-8').read()
+          match = re.search(r'^RELEASE_COMPLETE\s*=\s*(True|False)\s*$', text, re.MULTILINE)
+          if not match:
+              raise SystemExit('RELEASE_COMPLETE flag is missing')
+          value = 'true' if match.group(1) == 'True' else 'false'
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
+              stream.write(f'release_complete={value}\n')
+          print(f'ForgeCAD release_complete={value}')
+          PY
+      - name: Install Forge Engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine
+      - name: Run cross-domain 6.0 release candidate
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-native-rc
+          FORGECAD_SESSION_TOKEN: native-source-gate
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v600.release_candidate_selftest
+      - name: Run external chemistry gate
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-native-m6
+          FORGECAD_SESSION_TOKEN: native-source-gate
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v600.milestone6_selftest
+      - name: Preserve integration and FEA regressions
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_SESSION_TOKEN: native-source-gate
+          CI: 'true'
+        run: |
+          export FORGECAD_ACCEPTANCE_WORKSPACE=0
+          export FORGECAD_DATA_DIR="${RUNNER_TEMP}/forgecad-v310-native"
+          python -m forge_engine.v310.selftest
+          export FORGECAD_ACCEPTANCE_WORKSPACE=1
+          export FORGECAD_DATA_DIR="${RUNNER_TEMP}/forgecad-legacy-native"
+          python -m forge_engine.full_scope_selftest
+          export FORGECAD_DATA_DIR="${RUNNER_TEMP}/forgecad-fea-native"
+          python -m forge_engine.v200.structural_fea_selftest
+
+  windows:
+    name: Build, install, and validate Windows x64
+    needs: source-gate
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install release build dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine pyinstaller
+      - name: Build standalone Forge Engine 6.0
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -Recurse -Force services/forge-engine/dist,services/forge-engine/build/pyinstaller -ErrorAction SilentlyContinue
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --name forge-engine `
+            --collect-all cadquery `
+            --collect-all OCP `
+            --collect-all vtkmodules `
+            --collect-all cantera `
+            --collect-submodules forge_engine.v110 `
+            --collect-submodules forge_engine.v200 `
+            --collect-submodules forge_engine.v300 `
+            --collect-submodules forge_engine.v310 `
+            --collect-submodules forge_engine.v600 `
+            --distpath services/forge-engine/dist `
+            --workpath services/forge-engine/build/pyinstaller `
+            --specpath services/forge-engine/build `
+            services/forge-engine/forge_engine/desktop_entry.py
+          if (-not (Test-Path 'services/forge-engine/dist/forge-engine.exe')) { throw 'Forge Engine 6.0 executable was not produced.' }
+      - name: Smoke standalone 6.0 engine and packaged Cantera
+        shell: pwsh
+        env:
+          EXPECT_RELEASE_COMPLETE: ${{ needs.source-gate.outputs.release_complete }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:FORGECAD_PORT = '8893'
+          $env:FORGECAD_SESSION_TOKEN = 'v600-native-standalone'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-v600-native-standalone"
+          $env:CI = 'false'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '0'
+          $engine = "$env:GITHUB_WORKSPACE\services\forge-engine\dist\forge-engine.exe"
+          $process = Start-Process -FilePath $engine -PassThru -WindowStyle Hidden
+          try {
+            python scripts/validate_v600_runtime.py --url http://127.0.0.1:8893 --token v600-native-standalone --expect-release-complete $env:EXPECT_RELEASE_COMPLETE --timeout 90
+          } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+      - name: Install desktop dependencies
+        run: pnpm install --prod=false --frozen-lockfile=false
+      - name: Typecheck desktop
+        run: pnpm --filter @forgecad/desktop typecheck
+      - name: Build NSIS installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: pnpm --filter @forgecad/desktop dist:win
+      - name: Install and validate packaged ForgeCAD 6.0
+        shell: pwsh
+        env:
+          EXPECT_RELEASE_COMPLETE: ${{ needs.source-gate.outputs.release_complete }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Get-ChildItem 'apps/desktop/release/ForgeCAD-Setup-6.0.0.exe' | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'ForgeCAD 6.0.0 installer was not produced.' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'ForgeCAD-6.0-Installed'
+          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer failed with exit code $($install.ExitCode)." }
+          $app = Join-Path $installDir 'ForgeCAD.exe'
+          $engine = Join-Path $installDir 'resources\forge-engine\forge-engine.exe'
+          if (-not (Test-Path $app) -or -not (Test-Path $engine)) { throw 'Installed ForgeCAD 6.0 payload is incomplete.' }
+          $version = (Get-Item $app).VersionInfo.ProductVersion
+          if (-not $version.StartsWith('6.0.0')) { throw "Expected ProductVersion 6.0.0, got $version" }
+
+          $env:FORGECAD_PORT = '8894'
+          $env:FORGECAD_SESSION_TOKEN = 'v600-native-installed'
+          $env:FORGECAD_DATA_DIR = "$env:RUNNER_TEMP\forgecad-v600-native-installed"
+          $env:CI = 'false'
+          $env:FORGECAD_ACCEPTANCE_WORKSPACE = '0'
+          $engineProcess = Start-Process -FilePath $engine -PassThru -WindowStyle Hidden
+          try {
+            python scripts/validate_v600_runtime.py --url http://127.0.0.1:8894 --token v600-native-installed --expect-release-complete $env:EXPECT_RELEASE_COMPLETE --timeout 90
+          } finally {
+            if (-not $engineProcess.HasExited) { Stop-Process -Id $engineProcess.Id -Force }
+          }
+
+          $appProcess = Start-Process -FilePath $app -ArgumentList '--disable-gpu' -PassThru
+          $childEngine = $null
+          try {
+            $deadline = (Get-Date).AddSeconds(60)
+            do {
+              Start-Sleep -Milliseconds 500
+              $appProcess.Refresh()
+              if ($appProcess.HasExited) { throw "Installed ForgeCAD exited during launch smoke with code $($appProcess.ExitCode)." }
+              $childEngine = Get-CimInstance Win32_Process -Filter "Name='forge-engine.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -eq $engine } | Select-Object -First 1
+            } while (-not $childEngine -and (Get-Date) -lt $deadline)
+            if (-not $childEngine) { throw 'Installed desktop did not start its bundled Forge Engine 6.0.' }
+          } finally {
+            if (-not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force }
+            if ($childEngine) { Stop-Process -Id $childEngine.ProcessId -Force -ErrorAction SilentlyContinue }
+          }
+
+          $uninstaller = Get-ChildItem $installDir -Filter 'Uninstall*.exe' | Select-Object -First 1
+          if (-not $uninstaller) { throw 'Uninstaller missing.' }
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($uninstall.ExitCode)." }
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeCAD-6.0.0-Windows-x64-Installer
+          path: apps/desktop/release/ForgeCAD-Setup-6.0.0.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  macos:
+    name: Build, install, and validate macOS ${{ matrix.arch }}
+    needs: source-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      EXPECT_RELEASE_COMPLETE: ${{ needs.source-gate.outputs.release_complete }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install release build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine pyinstaller
+      - name: Build native standalone Forge Engine 6.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf services/forge-engine/dist services/forge-engine/build/pyinstaller
+          python -m PyInstaller --noconfirm --clean --onedir --name forge-engine \
+            --collect-all cadquery \
+            --collect-all OCP \
+            --collect-all vtkmodules \
+            --collect-all cantera \
+            --collect-submodules forge_engine.v110 \
+            --collect-submodules forge_engine.v200 \
+            --collect-submodules forge_engine.v300 \
+            --collect-submodules forge_engine.v310 \
+            --collect-submodules forge_engine.v600 \
+            --distpath services/forge-engine/dist \
+            --workpath services/forge-engine/build/pyinstaller \
+            --specpath services/forge-engine/build \
+            services/forge-engine/forge_engine/desktop_entry.py
+          chmod +x services/forge-engine/dist/forge-engine/forge-engine
+          file services/forge-engine/dist/forge-engine/forge-engine
+          case "${{ matrix.arch }}" in
+            arm64) file services/forge-engine/dist/forge-engine/forge-engine | grep -q 'arm64' ;;
+            x64) file services/forge-engine/dist/forge-engine/forge-engine | grep -q 'x86_64' ;;
+          esac
+      - name: Smoke standalone 6.0 engine and packaged Cantera
+        shell: bash
+        run: |
+          set -euo pipefail
+          export FORGECAD_PORT=8893
+          export FORGECAD_SESSION_TOKEN=v600-native-standalone
+          export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v600-native-standalone"
+          export CI=false
+          export FORGECAD_ACCEPTANCE_WORKSPACE=0
+          ENGINE="services/forge-engine/dist/forge-engine/forge-engine"
+          "$ENGINE" > "$RUNNER_TEMP/v600-native-engine.log" 2>&1 &
+          ENGINE_PID=$!
+          trap 'kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true' EXIT
+          python scripts/validate_v600_runtime.py --url http://127.0.0.1:8893 --token v600-native-standalone --expect-release-complete "$EXPECT_RELEASE_COMPLETE" --timeout 90
+          kill "$ENGINE_PID" 2>/dev/null || true
+          wait "$ENGINE_PID" 2>/dev/null || true
+          trap - EXIT
+      - name: Install desktop dependencies
+        run: pnpm install --prod=false --frozen-lockfile=false
+      - name: Typecheck desktop
+        run: pnpm --filter @forgecad/desktop typecheck
+      - name: Build native DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @forgecad/desktop build
+          pnpm --filter @forgecad/desktop exec electron-builder --mac dmg --${{ matrix.arch }}
+      - name: Validate DMG, installed engine, and desktop launch
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="apps/desktop/release/ForgeCAD-6.0.0-${{ matrix.arch }}.dmg"
+          test -f "$DMG"
+          MOUNT="$RUNNER_TEMP/forgecad-v600-mount"
+          INSTALLED="$RUNNER_TEMP/forgecad-v600-installed/ForgeCAD.app"
+          mkdir -p "$MOUNT" "$(dirname "$INSTALLED")"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true' EXIT
+          test -d "$MOUNT/ForgeCAD.app"
+          /usr/bin/ditto "$MOUNT/ForgeCAD.app" "$INSTALLED"
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INSTALLED/Contents/Info.plist")
+          test "$VERSION" = "6.0.0"
+          codesign --verify --deep --strict --verbose=2 "$INSTALLED"
+          ENGINE="$INSTALLED/Contents/Resources/forge-engine/forge-engine/forge-engine"
+          APP="$INSTALLED/Contents/MacOS/ForgeCAD"
+          test -x "$ENGINE"
+          test -x "$APP"
+          file "$ENGINE"
+          case "${{ matrix.arch }}" in
+            arm64) file "$ENGINE" | grep -q 'arm64' ;;
+            x64) file "$ENGINE" | grep -q 'x86_64' ;;
+          esac
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+
+          export FORGECAD_PORT=8894
+          export FORGECAD_SESSION_TOKEN=v600-native-installed
+          export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v600-native-installed"
+          export CI=false
+          export FORGECAD_ACCEPTANCE_WORKSPACE=0
+          "$ENGINE" > "$RUNNER_TEMP/v600-native-installed-engine.log" 2>&1 &
+          ENGINE_PID=$!
+          trap 'kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true' EXIT
+          python scripts/validate_v600_runtime.py --url http://127.0.0.1:8894 --token v600-native-installed --expect-release-complete "$EXPECT_RELEASE_COMPLETE" --timeout 90
+          kill "$ENGINE_PID" 2>/dev/null || true
+          wait "$ENGINE_PID" 2>/dev/null || true
+          trap - EXIT
+
+          export FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v600-desktop-state"
+          "$APP" --use-gl=swiftshader --enable-unsafe-swiftshader --disable-gpu-sandbox > "$RUNNER_TEMP/v600-native-desktop.log" 2>&1 &
+          APP_PID=$!
+          cleanup_desktop() {
+            kill "$APP_PID" 2>/dev/null || true
+            for _ in {1..20}; do
+              if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            kill -KILL "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+          }
+          trap cleanup_desktop EXIT
+          DESKTOP_OK=0
+          for i in {1..300}; do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              cat "$RUNNER_TEMP/v600-native-desktop.log" || true
+              exit 1
+            fi
+            for PID in $(pgrep -f "$ENGINE" || true); do
+              COMMAND=$(ps -p "$PID" -o command= 2>/dev/null || true)
+              case "$COMMAND" in "$ENGINE"*) ;; *) continue ;; esac
+              PORT=$(lsof -Pan -p "$PID" -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {n=split($9,a,":"); print a[n]; exit}' || true)
+              if [ -n "$PORT" ] && curl --fail --silent "http://127.0.0.1:$PORT/v6/health" > "$RUNNER_TEMP/v600-native-desktop-health.json"; then
+                DESKTOP_OK=1
+                break
+              fi
+            done
+            if [ "$DESKTOP_OK" -eq 1 ]; then break; fi
+            sleep 0.25
+          done
+          if [ "$DESKTOP_OK" -ne 1 ]; then
+            cat "$RUNNER_TEMP/v600-native-desktop.log" || true
+            ps -ax -o pid=,ppid=,command= | grep -F 'forge-engine' || true
+            exit 1
+          fi
+          python - <<'PY'
+          import json, os
+          data=json.load(open(os.path.join(os.environ['RUNNER_TEMP'],'v600-native-desktop-health.json')))
+          expected=os.environ['EXPECT_RELEASE_COMPLETE'].lower() == 'true'
+          assert data['ok'] and data['api_version']=='6.0' and data['engine_version']=='6.0.0'
+          assert data['release_complete'] is expected
+          print('installed desktop launch + bundled 6.0 engine: PASS')
+          PY
+          cleanup_desktop
+          trap - EXIT
+          shasum -a 256 "$DMG"
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeCAD-6.0.0-macOS-${{ matrix.arch }}-Installer
+          path: apps/desktop/release/ForgeCAD-6.0.0-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish:
+    name: Publish ForgeCAD 6.0.0
+    needs: [source-gate, windows, macos]
+    if: needs.source-gate.outputs.release_complete == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ForgeCAD-6.0.0-*
+          merge-multiple: true
+          path: dist-release
+      - name: Generate SHA-256 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist-release
+          sha256sum ForgeCAD-Setup-6.0.0.exe ForgeCAD-6.0.0-arm64.dmg ForgeCAD-6.0.0-x64.dmg > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Create or refresh GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v6.0.0 >/dev/null 2>&1; then
+            gh release upload v6.0.0 dist-release/ForgeCAD-Setup-6.0.0.exe dist-release/ForgeCAD-6.0.0-arm64.dmg dist-release/ForgeCAD-6.0.0-x64.dmg dist-release/SHA256SUMS.txt --clobber
+          else
+            gh release create v6.0.0 \
+              dist-release/ForgeCAD-Setup-6.0.0.exe \
+              dist-release/ForgeCAD-6.0.0-arm64.dmg \
+              dist-release/ForgeCAD-6.0.0-x64.dmg \
+              dist-release/SHA256SUMS.txt \
+              --target "$GITHUB_SHA" \
+              --title 'ForgeCAD 6.0.0' \
+              --notes-file docs/RELEASE_6_0.md
+          fi

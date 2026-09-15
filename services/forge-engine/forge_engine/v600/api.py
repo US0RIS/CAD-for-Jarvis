@@ -8,10 +8,11 @@ from typing import Any, Callable
 from fastapi import Depends, HTTPException
 
 from ..v110 import core
-from . import MILESTONE_VERSION
+from . import MILESTONE_VERSION, RELEASE_COMPLETE
 from . import manufacturer_cad_registration, manufacturer_truth
 from .assembly_frame_constraints import MateRequest, apply_mate, solve_mate_transform, validate_constraint_set
 from .constraint_rank import analyze_constraint_rank
+from .external_solvers import solver_inventory
 from .geometry_mounts import MountGeometryRequest, audit_mount_geometry, materialize_mount_geometry, plan_mount_geometry
 from .mount_access import MountAccessRequest, audit_mount_access, plan_mount_access
 from .mount_hardware import MountHardwareRequest, audit_mount_hardware, plan_mount_hardware, realize_mount_hardware
@@ -41,6 +42,9 @@ def install(
     async def v6_health() -> dict[str, Any]:
         constraints = validate_constraint_set(core.PROJECT)
         rank = analyze_constraint_rank(core.PROJECT)
+        solvers = solver_inventory()
+        validated_solver_ids = set(solvers.get("validated_release_solver_ids") or [])
+        runtime_ready = bool(constraints["ok"] and "cantera" in validated_solver_ids)
         geometry_backed_mounts = sum(
             len((obj.get("semantic") or {}).get("geometry_backed_mounts") or [])
             for obj in core.PROJECT.get("objects") or []
@@ -48,22 +52,34 @@ def install(
         )
         hardware_realizations = len(core.PROJECT.get("mount_hardware_realizations") or [])
         return {
-            "ok": constraints["ok"],
-            "api_version": "6.0-dev",
+            "ok": runtime_ready,
+            "api_version": "6.0",
+            "engine_version": MILESTONE_VERSION,
             "milestone_version": MILESTONE_VERSION,
-            "release_complete": False,
-            "current_milestone": "revision_bound_physical_feedback",
+            "release_complete": RELEASE_COMPLETE,
+            "release_stage": "released" if RELEASE_COMPLETE else "native_installer_validation",
+            "current_milestone": "forgecad_6_0_release" if RELEASE_COMPLETE else "forgecad_6_0_release_candidate",
             "completed_milestones": [
                 "interface_constrained_electromechanical_assembly",
                 "geometry_backed_assembly_truth",
                 "evidence_preserving_analysis_refresh_repair",
                 "bounded_multi_strategy_autonomous_repair",
+                "revision_bound_physical_feedback",
+                "external_solver_chemistry",
             ],
             "assembly_constraints": constraints,
             "assembly_constraint_rank_summary": rank["summary"],
             "geometry_backed_mount_count": geometry_backed_mounts,
             "mount_hardware_realization_count": hardware_realizations,
             "physical_retest_cycle_count": len(core.PROJECT.get("physical_retest_cycles") or []),
+            "physical_artifact_count": len(core.PROJECT.get("physical_test_artifacts") or []),
+            "physical_metrology_record_count": len(core.PROJECT.get("physical_metrology_records") or []),
+            "physical_test_run_count": len(core.PROJECT.get("physical_test_runs") or []),
+            "physical_specimen_count": len(core.PROJECT.get("physical_specimens") or []),
+            "prediction_residual_count": len(core.PROJECT.get("physical_prediction_residuals") or []),
+            "chemistry_study_count": len(core.PROJECT.get("chemistry_studies") or []),
+            "chemistry_run_count": len(core.PROJECT.get("chemistry_runs") or []),
+            "external_solvers": solvers,
             "manufacturer_mount_truth": manufacturer_truth.summary(),
             "manufacturer_cad_registration": manufacturer_cad_registration.summary(),
             "maturity": {
@@ -72,7 +88,15 @@ def install(
                 "milestone_3": 2,
                 "milestone_4": 2,
                 "milestone_5": 2,
+                "milestone_6": 2,
+                "cross_domain_release_candidate": 3,
                 "physical_hardware_validation": False,
+            },
+            "validation_truth": {
+                "software_release_complete": RELEASE_COMPLETE,
+                "real_hardware_validation_complete": False,
+                "ci_physical_fixtures_are_synthetic": True,
+                "release_is_not_certification": True,
             },
             "invariants": [
                 "designed truth != observed state != inference",
@@ -89,6 +113,12 @@ def install(
                 "a repair candidate cannot reuse solver evidence made stale by its own geometry mutation",
                 "autonomous repair may select only among explicitly authorized strategies that survive canonical requirement re-verification",
                 "physical evidence applies only to the exact engineering fingerprint that was actually tested",
+                "measurement acceptance uses declared calibration and uncertainty when a metrology contract requires them",
+                "repeatability contracts use explicit procedure/run/specimen/environment identity and conservative worst-run aggregation",
+                "a fabrication package hash proves package byte identity, not physical specimen authenticity",
+                "prediction-vs-observation residuals diagnose model mismatch but do not prove a causal mechanism",
+                "missing external solvers fail closed rather than silently falling back to invented physics",
+                "Cantera chemistry results remain prediction evidence tied to the exact mechanism provenance and design fingerprint",
                 "passing one physical retest verifies only its scoped requirement and never silently marks the entire design physically verified",
             ],
         }

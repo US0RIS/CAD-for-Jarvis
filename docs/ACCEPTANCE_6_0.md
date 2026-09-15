@@ -1,131 +1,156 @@
 # ForgeCAD 6.0 Acceptance Contract
 
-Status: **IN DEVELOPMENT — do not treat 6.0 as released**
+Status: **SOFTWARE SOURCE ACCEPTED — NATIVE INSTALLER VALIDATION PENDING**
 
 Baseline: validated ForgeCAD 3.1.0 branch state at `a9d67726f97561e6f664529b44ca016fda012ff0`.
 
-ForgeCAD 6.0 is the direct continuation of the original product goal: one AI-native physical-engineering environment in which CAD, purchased components, assemblies, electronics, software, requirements, analysis, manufacturing, physical observations, deployed state, and Jarvis all refer to the same canonical engineering identities.
+Current validated 6.0 source RC: `4a4b318cac65d2290a39d64a357c219da311de6e`.
 
-The release invariant remains:
+Source release-candidate workflow: `ForgeCAD 6.0 release candidate`, run `34925058122` — **PASS**.
+
+ForgeCAD 6.0 is the direct continuation of the original product goal: one AI-native physical-engineering environment in which CAD, purchased components, assemblies, electronics, software, requirements, analysis, manufacturing, chemistry, physical observations, deployed state, and Jarvis refer to the same canonical engineering identities.
+
+The release invariant is:
 
 ```text
 designed truth != observed state != inference
 ```
 
-and 6.0 adds:
+and autonomous engineering follows:
 
 ```text
-autonomous engineering action -> declared engineering inputs -> deterministic canonical mutation -> explicit verification
+declared engineering inputs -> deterministic canonical mutation -> explicit verification/evidence
 ```
 
-## Capability maturity rubric
-
-Every material capability is tracked at one of four levels:
+## Maturity rubric
 
 1. **Infrastructure** — schema/API/adapter exists.
 2. **Controlled capability** — works in a narrow deterministic case.
-3. **Realistic robustness** — works across representative real projects and failure modes.
-4. **External validation** — checked against independent ground truth, industrial software, or real hardware.
+3. **Realistic robustness** — works across a representative integrated product/failure path.
+4. **External/physical validation** — checked against independent ground truth, industrial software, or real hardware as appropriate.
 
-A capability is never called complete merely because level 1 exists.
+A software release may be complete without falsely claiming level-4 real-hardware validation. `/v6/health` exposes those states separately.
 
 ## Release-level acceptance target
 
-6.0 is not complete until a user can state a physical-product goal and ForgeCAD can, within explicit authority boundaries:
+The 6.0 software line must be able to keep one physical-product lineage coherent while it:
 
-- derive inspectable requirements and functional architecture;
-- select exact real purchased components with immutable revision snapshots, provenance, interfaces, and procurement identity;
-- create editable custom fabricated geometry where required;
-- build and validate assembly, electrical, thermal/fluid, software, routing, manufacturing, safety and verification state in one canonical model;
-- run appropriate screening analysis and invoke high-fidelity external solvers without fabricating solver results;
-- keep hardware and software on the same design lineage;
-- generate reproducible fabrication/deployment packages;
-- ingest physical measurements, photos/observations and deployed-state evidence without silently rewriting design truth;
-- compare working and failed physical revisions semantically;
-- diagnose failures, create repair branches and re-verify them;
-- expose the same semantic engineering operations to Jarvis without GUI automation;
-- resolve sensed physical objects back to engineering identities with explicit confidence/provenance;
-- provide a 3D-first desktop interaction model in which engineering context follows the physical object.
+- derives/holds inspectable requirements and functional architecture;
+- selects exact purchased components with immutable revision/provenance/interface identity;
+- creates editable custom fabricated geometry;
+- reasons over assembly constraints, mount geometry, hardware/access, electrical/software, thermal/fluid, tolerance, safety, manufacturing, and chemistry state;
+- executes screening analysis and validated external solvers without fabricating unsupported results;
+- keeps programmable hardware and its software on the same branch/revision lineage;
+- generates fabrication/deployment packages tied to exact engineering state;
+- records observations and physical test evidence without rewriting designed truth;
+- compares revisions semantically, diagnoses failures, branches repairs, and re-verifies affected requirements;
+- exposes the same semantic operations to Jarvis and the Physical World model rather than relying on GUI automation.
+
+The final **release** gate additionally requires native install-and-run validation for Windows x64, macOS arm64, and macOS x64. Merely building archives is insufficient.
 
 ## Milestone 1 — Interface-Constrained Electromechanical Assembly
 
-Status: **PASS — maturity level 2 controlled capability**
+Status: **PASS — level 2**.
 
-Validated implementation SHA: `4a94320d6fc6e264ebce4ff6b95834f57f35e3a7`
+Validated implementation SHA: `4a94320d6fc6e264ebce4ff6b95834f57f35e3a7`.
 
-Validation workflow: `ForgeCAD 6.0 milestone 1 regression`, run `34907732526`
+Validation workflow run: `34907732526`.
 
-All four gates in that run passed:
+Introduced typed mechanical mates, exact object/interface identity, deterministic rigid placement, interface occupancy, explicit mate DOF, residual validation, and canonical `joint` + `connection` storage. The fixture is a networked actuator module containing custom fabricated chassis/rail geometry, Raspberry Pi 5, MEAN WELL supply, Pololu regulator, Adafruit MOSFET driver/solenoid, electrical connectivity, software, requirements, DFM, structural screening, graph propagation, and fabrication output.
 
-1. ForgeCAD 6.0 interface-constrained electromechanical vertical slice;
-2. complete ForgeCAD 3.1 integration regression;
-3. complete pre-3.1/full-scope engineering regression;
-4. independent existing 3D solid-FEA benchmark.
+The featured chassis continues to fail closed in the legacy solid solver rather than being silently approximated. An unfeatured load-bearing reaction rail is solved through the validated engineering-iteration structural path.
 
-This milestone is dependency-critical because autonomous engineering cannot reliably design a product if component placement is still based on guessed transforms rather than declared physical interfaces.
+## Milestone 2 — Geometry-Backed Assembly Truth
 
-Generic capabilities introduced by this milestone:
+Status: **PASS — level 2**.
 
-- typed fixed/revolute/prismatic/cylindrical/planar mate contracts;
-- deterministic rigid placement from exact object/interface identity;
-- explicit aligned/opposed-axis semantics;
-- interface occupancy enforcement, including tested double-use rejection;
-- mate degrees-of-freedom records;
-- positional/angular residual validation;
-- canonical project `joint` + `connection` records rather than a parallel assembly store;
-- Engineering Graph propagation through the existing joint/connection projection;
-- an additive `/v6` semantic API layered over the validated 3.1 substrate.
+6.0 now uses complete right-handed mechanical interface frames where required rather than pretending a point + primary axis fully constrains arbitrary fixed orientation. It also adds explicit constraint-rank/mobility analysis, geometry-backed mount realization/audit, manufacturer mount truth with coordinates/datums/provenance, standards-backed mount hardware, and assembly-access envelopes.
 
-### Automated acceptance fixture
+Ambiguous mounting topology, occupied exclusive interfaces, impossible access, missing geometric realization, or contradictory constraints fail closed rather than being guessed.
 
-The accepted fixture is a networked electromechanical actuator module built from:
+## Milestone 3 — Evidence-Preserving Analysis Refresh/Repair
 
-- an editable PETG fabricated chassis/deck with feature history and a harness pass-through slot;
-- an editable CNC aluminum actuator reaction rail;
-- Raspberry Pi 5 compute;
-- MEAN WELL LRS-75-12 power supply;
-- Pololu D24V50F5 regulator;
-- Adafruit MOSFET driver;
-- Adafruit 12 V push-pull solenoid;
-- branch-bound actuator software.
+Status: **PASS — level 2**.
 
-The accepted canonical revision proves:
+Analysis results are revision/fingerprint-bound. Geometry-changing repair invalidates affected solver evidence; the repair path must refresh analysis and requirement verification rather than reusing stale results. Engineering Graph evidence remains inspectable and stale state is explicit.
 
-1. purchased components retain exact registry identity and high-trust snapshots;
-2. five mechanical placements are solved from declared interfaces instead of hand-authored transforms;
-3. every constrained mate closes below configured positional/angular residual tolerances;
-4. a second use of an occupied exclusive mount is rejected without mutating canonical state;
-5. explicit electrical connections exist from supply through conversion/control to the actuator;
-6. programmable hardware has code in the same branch;
-7. a canonical mass requirement verifies;
-8. the featured chassis is explicitly rejected by the existing solid solver rather than being silently approximated;
-9. the exact unfeatured load-bearing reaction rail completes a real 3D solid structural screening solve with `engineering_iteration` solver grade;
-10. FDM DFM screening executes against the fabricated chassis;
-11. the Engineering Graph contains CAD, catalog component, joint, connection, software, BOM and requirement identities;
-12. a fabrication archive preserves the graph revision, software, BOM and both custom fabricated parts;
-13. the complete ForgeCAD 3.1 and earlier engineering regressions remain green.
+## Milestone 4 — Bounded Autonomous Repair
 
-### Known limits after milestone 1
+Status: **PASS — level 2**.
 
-Milestone 1 is deliberately **not** maturity level 3 or 4.
+ForgeCAD may choose only among explicitly authorized repair strategies. Candidate branches are evaluated against canonical requirements/evidence, and selection is bounded by the allowed strategy set rather than open-ended mutation. Failed candidates do not overwrite the known-working lineage.
 
-- General featured B-rep solid FEA is still unsupported because ForgeCAD lacks a validated general-purpose volume/tetrahedral mesher. The milestone now tests that this case fails closed.
-- The current mate solver reliably validates interface position and primary axis in the controlled slice. Arbitrary industrial fixed-mate orientation still needs a secondary rotational datum/full interface frame and broader multi-mate/overconstraint solving.
-- A typed mounting interface does not yet prove that a fabricated part contains every required hole/fastener/insert feature implied by a purchased component's real mounting pattern. Geometry-backed interface synthesis/verification remains required.
-- Real supplier/CAD ingestion still needs to move from the existing curated/high-trust registry toward a broad refreshable component ecosystem.
-- No physical hardware has yet externally validated milestone-1 mating accuracy, fabrication fit, electrical operation, or deployment behavior.
+## Milestone 5 — Revision-Bound Physical Feedback
 
-Passing this milestone therefore means the first cross-domain 6.0 vertical slice genuinely works as a controlled software capability. It does **not** mean ForgeCAD 6.0 is released or that industrial assembly/CAE/physical closure is complete.
+Status: **PASS — level 2 software contract; real-hardware validation remains false**.
 
-## Next dependency-critical work
+The physical-feedback stack now includes exact design fingerprints, artifacts, metrology/calibration/uncertainty contracts, repeated-run and multi-specimen evidence, conservative aggregation, prediction-vs-observation residuals, scoped requirement retests, and semantic revision comparison.
 
-The next milestone should deepen **geometry-backed assembly truth** rather than add unrelated surface area:
+CI exercises these contracts with synthetic evidence. Synthetic CI evidence is never labeled as a real fabricated specimen or real-hardware validation.
 
-1. full interface frames with secondary rotational datums;
-2. geometric mounting-pattern compatibility, not kind-only matching;
-3. automatic synthesis/verification of mounting holes, fasteners, standoffs, inserts and clearances in custom fabricated parts;
-4. multi-mate constraint solving and explicit under/over-constrained assembly state;
-5. broad real-component ingestion with immutable source/revision provenance;
-6. external CAD/geometry validation for representative purchased-component mounts.
+## Milestone 6 — External Solvers and Chemistry
 
-This is the shortest path from milestone-1 controlled assembly toward a level-3 autonomous engineering substrate.
+Status: **PASS — level 2 external-solver capability**.
+
+Validated runtime checkpoint: workflow run `34924195243` — **PASS**.
+
+6.0 adds a fail-closed external-solver inventory. Cantera is the validated release solver for:
+
+- thermochemistry;
+- chemical equilibrium;
+- reaction kinetics;
+- homogeneous zero-dimensional reactor networks.
+
+Chemistry studies are canonical engineering records tied to an exact physical object and design fingerprint. Packaged Cantera YAML mechanisms carry SHA-256 provenance. Equilibrium and time-dependent reactor results are written back as prediction evidence, never as physical measurements. Unsafe/arbitrary mechanism paths, stale design contracts, unavailable solvers, and invalid species fail closed.
+
+CalculiX, Gmsh, and OpenFOAM may be detected as optional tools; availability alone is explicitly not treated as proof that a production case generator/mesher exists for arbitrary ForgeCAD models.
+
+## Cross-domain 6.0 release candidate
+
+Status: **PASS — integrated software maturity level 3**.
+
+Validated SHA: `4a4b318cac65d2290a39d64a357c219da311de6e`.
+
+Validation workflow run: `34925058122` — all steps passed.
+
+One canonical project lineage carries:
+
+- the M1 real-component actuator rig;
+- custom CAD and fabrication output;
+- mechanical/electrical/software state;
+- structural analysis;
+- rail-attached thermal and low-pressure liquid-loop models;
+- tolerance-stack and safety state;
+- bounded branch/redesign/retest behavior;
+- an externally solved Cantera chemistry characterization cell;
+- Engineering Graph evidence;
+- Jarvis semantic context;
+- Physical World identity.
+
+The run also independently reran Milestone 6, the complete Milestone 5 physical-feedback stack, Milestones 4–1, ForgeCAD 3.1, the historical full-scope regression, and the existing structural FEA benchmark.
+
+## Native release gate
+
+The staged `6.0.0` source identity is **not published** until all of the following pass on binaries built from that source:
+
+1. Windows x64 Forge Engine packaging includes v600 and Cantera data/binaries.
+2. The standalone packaged Windows engine reports `/v6/health` as `6.0.0`, reports Cantera available, resolves packaged `gri30.yaml`, and executes a chemistry study.
+3. The Windows NSIS installer installs cleanly; the installed engine repeats that runtime validation; the Electron desktop launches its bundled engine; uninstall succeeds.
+4. Native macOS arm64 and x64 Forge Engine builds contain the expected architecture and Cantera runtime.
+5. Each DMG mounts, copies, passes bundle-version/codesign checks, and the installed engine repeats the packaged chemistry validation.
+6. Each installed macOS desktop launches its bundled 6.0 engine.
+7. Only after all native jobs pass may `RELEASE_COMPLETE` become true and the final binaries be rebuilt from that exact source.
+8. The publish job creates/updates GitHub release `v6.0.0` and emits SHA-256 hashes for all three installers.
+
+## Truth boundaries retained in 6.0.0
+
+Even after the software release is complete:
+
+- `physical_hardware_validation` remains false until real hardware evidence exists for a specific project/revision;
+- general arbitrary featured-B-rep tetrahedral meshing/solver support is not invented where unsupported;
+- optional external solver presence is not equivalent to a validated adapter for every case;
+- Cantera does not imply multidimensional reacting-flow CFD;
+- a fabrication archive hash proves archive byte identity, not that a physical specimen was manufactured from it;
+- passing a scoped physical retest verifies only the requirement/evidence scope actually tested.
+
+These are product guarantees, not missing marketing claims.
