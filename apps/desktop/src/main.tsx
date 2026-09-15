@@ -8,6 +8,7 @@ import './styles/copilot-ux.css';
 import './styles/keyboard-shortcuts.css';
 import './styles/interaction.css';
 import './styles/design-lineage.css';
+import './styles/simulation-workspace.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {
