@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Response
 
 from ..v200.physical_evidence import Measurement
+from ..v310.fabrication_archive import MIME_TYPE as FABRICATION_MIME_TYPE
 from .physical_artifacts import (
     PhysicalArtifactContractRequest,
     PhysicalArtifactSubmissionRequest,
@@ -25,6 +26,21 @@ from .physical_metrology import (
     physical_metrology,
     set_metrology_contract,
     submit_metrology,
+)
+from .physical_specimen_contract import (
+    PhysicalSpecimenContractRequest,
+    attach_specimen_lineage_to_runs,
+    refresh_specimen_linked_run_evidence,
+    set_specimen_contract,
+    validate_run_specimens,
+)
+from .physical_specimens import (
+    PhysicalFabricationPackageRequest,
+    PhysicalSpecimenRegistrationRequest,
+    generate_fabrication_package,
+    physical_fabrication_packages,
+    physical_specimens,
+    register_specimen,
 )
 from .physical_test_execution import (
     PhysicalTestExecutionContractRequest,
@@ -122,6 +138,70 @@ def install(
     async def list_retest_metrology(cycle_id: str) -> dict[str, Any]:
         return physical_metrology(cycle_id)
 
+    @app.post("/v6/physical/retest-cycles/{cycle_id}/fabrication-package", dependencies=[Depends(require_session)])
+    async def create_retest_fabrication_package(cycle_id: str, request: PhysicalFabricationPackageRequest) -> Response:
+        try:
+            if graph is None:
+                raise ValueError("Engineering graph is required for physical fabrication package lineage")
+            if sync_graph is not None:
+                sync_graph(reason="v600_physical_package_pregenerate")
+            data, result = generate_fabrication_package(cycle_id, request, graph)
+            record = result["record"]
+            if sync_graph is not None:
+                sync_graph(reason="v600_physical_package_generated")
+            filename = str(record.get("filename") or "physical-test.forgefab.zip").replace('"', "")
+            return Response(
+                data,
+                media_type=FABRICATION_MIME_TYPE,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                    "X-ForgeCAD-Physical-Package-ID": str(record["id"]),
+                    "X-ForgeCAD-Fabrication-SHA256": str(record["archive_sha256"]),
+                    "X-ForgeCAD-Graph-Revision": str(record.get("engineering_graph_revision") or ""),
+                    "X-ForgeCAD-Design-Fingerprint": str(record["design_fingerprint"]),
+                },
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown retest/engineering identity: {exc.args[0]}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/v6/physical/retest-cycles/{cycle_id}/fabrication-packages", dependencies=[Depends(require_session)])
+    async def list_retest_fabrication_packages(cycle_id: str) -> dict[str, Any]:
+        try:
+            return physical_fabrication_packages(cycle_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown retest identity: {exc.args[0]}") from exc
+
+    @app.post("/v6/physical/retest-cycles/{cycle_id}/specimens", dependencies=[Depends(require_session)])
+    async def register_retest_specimen(cycle_id: str, request: PhysicalSpecimenRegistrationRequest) -> dict[str, Any]:
+        try:
+            if graph is None:
+                raise ValueError("Engineering graph is required for physical specimen lineage")
+            if sync_graph is not None:
+                sync_graph(reason="v600_physical_specimen_preregister")
+            return register_specimen(cycle_id, request, graph)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown retest/engineering identity: {exc.args[0]}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/v6/physical/retest-cycles/{cycle_id}/specimens", dependencies=[Depends(require_session)])
+    async def list_retest_specimens(cycle_id: str) -> dict[str, Any]:
+        try:
+            return physical_specimens(cycle_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown retest identity: {exc.args[0]}") from exc
+
+    @app.post("/v6/physical/retest-cycles/{cycle_id}/specimen-contract", dependencies=[Depends(require_session)])
+    async def lock_specimen_contract(cycle_id: str, request: PhysicalSpecimenContractRequest) -> dict[str, Any]:
+        try:
+            return set_specimen_contract(cycle_id, request)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown retest identity: {exc.args[0]}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.post("/v6/physical/retest-cycles/{cycle_id}/execution-contract", dependencies=[Depends(require_session)])
     async def lock_execution_contract(cycle_id: str, request: PhysicalTestExecutionContractRequest) -> dict[str, Any]:
         try:
@@ -138,7 +218,21 @@ def install(
                 raise ValueError("Engineering graph is required for physical test-run evidence")
             if sync_graph is not None:
                 sync_graph(reason="v600_physical_test_run_presubmit")
-            return submit_test_runs(cycle_id, request, graph)
+            specimen_lineage = validate_run_specimens(cycle_id, [row.specimen_id for row in request.runs])
+            result = submit_test_runs(cycle_id, request, graph)
+            if specimen_lineage:
+                enriched = attach_specimen_lineage_to_runs(cycle_id, result.get("items") or [], specimen_lineage, graph)
+                result["items"] = enriched
+                evidence_ids = {f"physical-test-run:{row['id']}" for row in enriched}
+                result["graph_evidence"] = [
+                    row.model_dump(mode="json")
+                    for row in graph.evidence()
+                    if row.id in evidence_ids
+                ]
+                result["specimen_lineage_applied"] = True
+            else:
+                result["specimen_lineage_applied"] = False
+            return result
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Unknown retest/engineering identity: {exc.args[0]}") from exc
         except ValueError as exc:
@@ -219,6 +313,9 @@ def install(
                 result["artifacts"] = artifacts
             if execution.get("required") and graph is not None:
                 result["test_runs"] = link_test_runs_to_inspections(cycle_id, inspection_ids, graph)
+                enriched_runs = refresh_specimen_linked_run_evidence(cycle_id, graph)
+                if enriched_runs:
+                    result["test_runs"] = enriched_runs
             else:
                 result["test_runs"] = physical_test_execution(cycle_id)["items"]
             if metrology.get("required") and graph is not None:
@@ -227,6 +324,8 @@ def install(
                 result["metrology_records"] = physical_metrology(cycle_id)["items"]
             result["test_execution_evaluation"] = execution
             result["metrology_evaluation"] = metrology
+            result["specimen_lineage"] = physical_specimens(cycle_id)
+            result["fabrication_packages"] = physical_fabrication_packages(cycle_id)
             if sync_graph is not None:
                 result["graph_sync"] = sync_graph(reason="v600_physical_retest_complete")
             return result
