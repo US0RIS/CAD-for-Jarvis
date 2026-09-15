@@ -64,7 +64,7 @@ function jointFields(edge: SimulationJointEdge, values: NumericMap, setValue: (k
         type="number"
         step="any"
         value={values[`${prefix}:${key}`] ?? 0}
-        onChange={(event) => setValue(`${prefix}:${key}`, Number(event.currentTarget.value))}
+        onChange={(event) => setValue(`${prefix}:${key}`, Number(event.target.value))}
         style={FIELD_STYLE}
       />
       <small>{unit}</small>
@@ -197,8 +197,8 @@ export function SimulationWorkspace({ project }: { project: ProjectPayload | nul
     <div className="simulation-section" data-testid="simulation-joints">
       <div className="simulation-section-heading"><Orbit size={15}/><div><strong>Joint continuity & motion</strong><span>Drive one pose or simulate a time sweep. Every downstream body follows its supporting joint chain.</span></div></div>
       <div className="simulation-input-grid">
-        <label className="field"><span>Sweep duration (s)</span><input aria-label="Sweep duration" type="number" min="0.001" step="any" value={motion.duration} onChange={(event) => setMotion((row) => ({ ...row, duration: event.currentTarget.value }))}/></label>
-        <label className="field"><span>Sweep samples</span><input aria-label="Sweep samples" type="number" min="3" max="121" step="1" value={motion.samples} onChange={(event) => setMotion((row) => ({ ...row, samples: event.currentTarget.value }))}/></label>
+        <label className="field"><span>Sweep duration (s)</span><input aria-label="Sweep duration" type="number" min="0.001" step="any" value={motion.duration} onChange={(event) => setMotion((row) => ({ ...row, duration: event.target.value }))}/></label>
+        <label className="field"><span>Sweep samples</span><input aria-label="Sweep samples" type="number" min="3" max="121" step="1" value={motion.samples} onChange={(event) => setMotion((row) => ({ ...row, samples: event.target.value }))}/></label>
       </div>
       {!health?.assembly.edges.length && <small>No canonical rigid joints are modeled in this branch.</small>}
       <div className="simulation-joint-list">
@@ -219,9 +219,9 @@ export function SimulationWorkspace({ project }: { project: ProjectPayload | nul
       <section className="simulation-section" data-testid="simulation-thermal">
         <div className="simulation-section-heading"><Flame size={15}/><div><strong>Transient thermal</strong><span>Thermal mass + conduction + convection + fixed sinks + modeled radiation.</span></div></div>
         <div className="simulation-input-grid">
-          <label className="field"><span>Duration (s)</span><input type="number" min="0.001" step="any" value={thermal.duration} onChange={(event) => setThermal((row) => ({ ...row, duration: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Step (s)</span><input type="number" min="0.0001" step="any" value={thermal.timestep} onChange={(event) => setThermal((row) => ({ ...row, timestep: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Initial °C</span><input type="number" step="any" value={thermal.initial} onChange={(event) => setThermal((row) => ({ ...row, initial: event.currentTarget.value }))}/></label>
+          <label className="field"><span>Duration (s)</span><input type="number" min="0.001" step="any" value={thermal.duration} onChange={(event) => setThermal((row) => ({ ...row, duration: event.target.value }))}/></label>
+          <label className="field"><span>Step (s)</span><input type="number" min="0.0001" step="any" value={thermal.timestep} onChange={(event) => setThermal((row) => ({ ...row, timestep: event.target.value }))}/></label>
+          <label className="field"><span>Initial °C</span><input type="number" step="any" value={thermal.initial} onChange={(event) => setThermal((row) => ({ ...row, initial: event.target.value }))}/></label>
         </div>
         <button type="button" disabled={busy} onClick={() => void runAction('Transient thermal', () => runTransientThermal({ duration_s: parseNumber(thermal.duration, 'Duration'), timestep_s: parseNumber(thermal.timestep, 'Timestep'), initial_temperature_c: parseNumber(thermal.initial, 'Initial temperature') }))}><Play size={13}/>Run transient thermal</button>
         <small>Requires canonical heat loads and explicit thermal boundaries. Missing physics is reported, not guessed.</small>
@@ -230,12 +230,12 @@ export function SimulationWorkspace({ project }: { project: ProjectPayload | nul
       <section className="simulation-section" data-testid="simulation-aerodynamics">
         <div className="simulation-section-heading"><Wind size={15}/><div><strong>Aerodynamic loads</strong><span>Geometry-aware coefficient model for integrated loads; explicitly not CFD.</span></div></div>
         <div className="simulation-input-grid">
-          <label className="field"><span>Air Vx (m/s)</span><input type="number" step="any" value={aero.vx} onChange={(event) => setAero((row) => ({ ...row, vx: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Vy</span><input type="number" step="any" value={aero.vy} onChange={(event) => setAero((row) => ({ ...row, vy: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Vz</span><input type="number" step="any" value={aero.vz} onChange={(event) => setAero((row) => ({ ...row, vz: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Density kg/m³</span><input type="number" min="0.001" step="any" value={aero.density} onChange={(event) => setAero((row) => ({ ...row, density: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Cd</span><input type="number" min="0" step="any" value={aero.cd} onChange={(event) => setAero((row) => ({ ...row, cd: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Reference area m²</span><input type="number" min="0" step="any" placeholder="geometry envelope" value={aero.area} onChange={(event) => setAero((row) => ({ ...row, area: event.currentTarget.value }))}/></label>
+          <label className="field"><span>Air Vx (m/s)</span><input type="number" step="any" value={aero.vx} onChange={(event) => setAero((row) => ({ ...row, vx: event.target.value }))}/></label>
+          <label className="field"><span>Vy</span><input type="number" step="any" value={aero.vy} onChange={(event) => setAero((row) => ({ ...row, vy: event.target.value }))}/></label>
+          <label className="field"><span>Vz</span><input type="number" step="any" value={aero.vz} onChange={(event) => setAero((row) => ({ ...row, vz: event.target.value }))}/></label>
+          <label className="field"><span>Density kg/m³</span><input type="number" min="0.001" step="any" value={aero.density} onChange={(event) => setAero((row) => ({ ...row, density: event.target.value }))}/></label>
+          <label className="field"><span>Cd</span><input type="number" min="0" step="any" value={aero.cd} onChange={(event) => setAero((row) => ({ ...row, cd: event.target.value }))}/></label>
+          <label className="field"><span>Reference area m²</span><input type="number" min="0" step="any" placeholder="geometry envelope" value={aero.area} onChange={(event) => setAero((row) => ({ ...row, area: event.target.value }))}/></label>
         </div>
         <button type="button" disabled={busy} onClick={() => void runAction('Aerodynamic loads', () => {
           const input = {
@@ -251,11 +251,11 @@ export function SimulationWorkspace({ project }: { project: ProjectPayload | nul
       <section className="simulation-section" data-testid="simulation-structural">
         <div className="simulation-section-heading"><Gauge size={15}/><div><strong>Structural FEA</strong><span>Use canonical loads/supports when modeled; screening mode is explicit and separately labeled.</span></div></div>
         <div className="simulation-input-grid">
-          <label className="field"><span>Part</span><select value={structural.objectId} onChange={(event) => setStructural((row) => ({ ...row, objectId: event.currentTarget.value }))}>{project?.parts.map((part) => <option value={part.id} key={part.id}>{part.name}</option>)}</select></label>
-          <label className="field"><span>Mode</span><select value={structural.mode} onChange={(event) => setStructural((row) => ({ ...row, mode: event.currentTarget.value as 'canonical' | 'screening' }))}><option value="canonical">Canonical BCs</option><option value="screening">Screening load</option></select></label>
+          <label className="field"><span>Part</span><select value={structural.objectId} onChange={(event) => setStructural((row) => ({ ...row, objectId: event.target.value }))}>{project?.parts.map((part) => <option value={part.id} key={part.id}>{part.name}</option>)}</select></label>
+          <label className="field"><span>Mode</span><select value={structural.mode} onChange={(event) => setStructural((row) => ({ ...row, mode: event.target.value as 'canonical' | 'screening' }))}><option value="canonical">Canonical BCs</option><option value="screening">Screening load</option></select></label>
           {structural.mode === 'screening' && <>
-            <label className="field"><span>Force (N)</span><input type="number" step="any" value={structural.force} onChange={(event) => setStructural((row) => ({ ...row, force: event.currentTarget.value }))}/></label>
-            <label className="field"><span>Direction</span><select value={structural.direction} onChange={(event) => setStructural((row) => ({ ...row, direction: event.currentTarget.value as 'x' | 'y' | 'z' }))}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
+            <label className="field"><span>Force (N)</span><input type="number" step="any" value={structural.force} onChange={(event) => setStructural((row) => ({ ...row, force: event.target.value }))}/></label>
+            <label className="field"><span>Direction</span><select value={structural.direction} onChange={(event) => setStructural((row) => ({ ...row, direction: event.target.value as 'x' | 'y' | 'z' }))}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
           </>}
         </div>
         <button type="button" disabled={busy || !structural.objectId} onClick={() => void runAction('Structural FEA', () => runStructural({ object_id: structural.objectId, mode: structural.mode, force_n: parseNumber(structural.force, 'Structural force'), load_direction: structural.direction, convergence: true }))}><Play size={13}/>Run structural FEA</button>
@@ -271,13 +271,13 @@ export function SimulationWorkspace({ project }: { project: ProjectPayload | nul
       <section className="simulation-section" data-testid="simulation-rigid-body">
         <div className="simulation-section-heading"><Orbit size={15}/><div><strong>Rigid-body response</strong><span>Assembly mass/inertia plus constant force, torque and gravity over an explicit duration.</span></div></div>
         <div className="simulation-input-grid">
-          <label className="field"><span>Duration (s)</span><input type="number" min="0" step="any" value={rigid.duration} onChange={(event) => setRigid((row) => ({ ...row, duration: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Fx (N)</span><input type="number" step="any" value={rigid.fx} onChange={(event) => setRigid((row) => ({ ...row, fx: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Fy (N)</span><input type="number" step="any" value={rigid.fy} onChange={(event) => setRigid((row) => ({ ...row, fy: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Fz (N)</span><input type="number" step="any" value={rigid.fz} onChange={(event) => setRigid((row) => ({ ...row, fz: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Tx (N·m)</span><input type="number" step="any" value={rigid.tx} onChange={(event) => setRigid((row) => ({ ...row, tx: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Ty (N·m)</span><input type="number" step="any" value={rigid.ty} onChange={(event) => setRigid((row) => ({ ...row, ty: event.currentTarget.value }))}/></label>
-          <label className="field"><span>Tz (N·m)</span><input type="number" step="any" value={rigid.tz} onChange={(event) => setRigid((row) => ({ ...row, tz: event.currentTarget.value }))}/></label>
+          <label className="field"><span>Duration (s)</span><input type="number" min="0" step="any" value={rigid.duration} onChange={(event) => setRigid((row) => ({ ...row, duration: event.target.value }))}/></label>
+          <label className="field"><span>Fx (N)</span><input type="number" step="any" value={rigid.fx} onChange={(event) => setRigid((row) => ({ ...row, fx: event.target.value }))}/></label>
+          <label className="field"><span>Fy (N)</span><input type="number" step="any" value={rigid.fy} onChange={(event) => setRigid((row) => ({ ...row, fy: event.target.value }))}/></label>
+          <label className="field"><span>Fz (N)</span><input type="number" step="any" value={rigid.fz} onChange={(event) => setRigid((row) => ({ ...row, fz: event.target.value }))}/></label>
+          <label className="field"><span>Tx (N·m)</span><input type="number" step="any" value={rigid.tx} onChange={(event) => setRigid((row) => ({ ...row, tx: event.target.value }))}/></label>
+          <label className="field"><span>Ty (N·m)</span><input type="number" step="any" value={rigid.ty} onChange={(event) => setRigid((row) => ({ ...row, ty: event.target.value }))}/></label>
+          <label className="field"><span>Tz (N·m)</span><input type="number" step="any" value={rigid.tz} onChange={(event) => setRigid((row) => ({ ...row, tz: event.target.value }))}/></label>
         </div>
         <button type="button" disabled={busy} onClick={() => void runAction('Rigid-body response', () => runRigidBody({ duration_s: parseNumber(rigid.duration, 'Rigid-body duration'), force_n: [parseNumber(rigid.fx, 'Fx'), parseNumber(rigid.fy, 'Fy'), parseNumber(rigid.fz, 'Fz')], torque_nm: [parseNumber(rigid.tx, 'Tx'), parseNumber(rigid.ty, 'Ty'), parseNumber(rigid.tz, 'Tz')] }))}><Play size={13}/>Run rigid-body response</button>
         <small>Selected bodies are treated as one rigid assembly in this solver; use joint sweep for constrained articulation.</small>
