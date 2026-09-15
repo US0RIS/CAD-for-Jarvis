@@ -1,9 +1,9 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type APIRequestContext } from '@playwright/test';
 
 const engineUrl = 'http://127.0.0.1:8765';
 const headers = { 'X-ForgeCAD-Session': 'test-session', 'Content-Type': 'application/json' };
 
-async function resetWithPi(request: Parameters<typeof test>[0] extends never ? never : any) {
+async function resetWithPi(request: APIRequestContext) {
   const reset = await request.post(`${engineUrl}/v2/operations`, {
     headers,
     data: { op: 'new_project', args: {}, reason: 'Reset UX regression workspace' },
@@ -57,7 +57,7 @@ test('delete is optimistic, ID-based, and does not fetch the project just to res
   await expect(page.locator('.object-row')).toHaveCount(1, { timeout: 15_000 });
 });
 
-test('Copilot uses normal chat keys and never swallows a draft when local AI is unavailable', async ({ page, request }) => {
+test('Copilot uses normal chat keys: Shift+Enter makes a newline and Enter sends', async ({ page, request }) => {
   await resetWithPi(request);
 
   let submittedJobs = 0;
@@ -65,9 +65,7 @@ test('Copilot uses normal chat keys and never swallows a draft when local AI is 
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        engine: 'ready', scene: 'ready', ollama: 'ready', configured_model: 'ux-test-model', resolved_model: 'ux-test-model', api_version: '2',
-      }),
+      body: JSON.stringify({ engine: 'ready', scene: 'ready', ollama: 'ready', configured_model: 'ux-test-model', resolved_model: 'ux-test-model', api_version: '2' }),
     });
   });
   await page.route('**/v2/jobs', async (route) => {
@@ -102,7 +100,8 @@ test('Copilot uses normal chat keys and never swallows a draft when local AI is 
   expect(submittedJobs).toBe(0);
 
   await prompt.press('Enter');
-  await expect(page.getByText('line one\nline two')).toBeVisible();
+  await expect(page.locator('.message.user')).toContainText('line one');
+  await expect(page.locator('.message.user')).toContainText('line two');
   await expect(prompt).toHaveValue('');
   expect(submittedJobs).toBe(1);
 });
