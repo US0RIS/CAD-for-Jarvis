@@ -12,6 +12,7 @@ import {
   type ComponentPayload, type JobPayload, type ProjectPayload, type RegistryStatsPayload, type RuntimePayload,
 } from './api/engine';
 import { CodeWorkspace } from './components/CodeWorkspace';
+import { DesignLineagePanel } from './components/DesignLineagePanel';
 import { EngineeringWorkbench } from './components/EngineeringWorkbench';
 import { ManufacturePanel } from './components/ManufacturePanel';
 import { Viewport } from './components/Viewport';
@@ -58,7 +59,7 @@ function MarkdownMessage({ text }: { text: string }) {
 }
 function BranchRow({ branch, onActivate }: { branch: ProjectPayload['branches'][number]; onActivate: (name: string) => void }) {
   return <button className={`browser-row branch-card ${branch.active ? 'selected' : ''}`} aria-pressed={branch.active} title={branch.active ? 'Active design branch' : `Switch to ${branch.name}`} onClick={() => onActivate(branch.name)}>
-    <GitBranch size={13}/><span className="browser-row-main"><strong>{branch.name}</strong><small>{branch.status.replace('_', ' ')}</small></span>{branch.active ? <Check size={13}/> : <ChevronRight size={13}/>} 
+    <GitBranch size={13}/><span className="browser-row-main"><strong>{branch.name}</strong><small>{branch.status.replace('_', ' ')}{branch.physical_verified ? ' · physical evidence' : ''}</small></span>{branch.active ? <Check size={13}/> : <ChevronRight size={13}/>} 
   </button>;
 }
 
@@ -117,7 +118,7 @@ function ComponentRow({ item, inserting, onInsert }: { item: ComponentPayload; i
   </div>;
 }
 
-function PropertiesPanel({ project, selectedPart, onOpenCode, onDelete }: { project: ProjectPayload | null; selectedPart: ProjectPayload['parts'][number] | null; onOpenCode: () => void; onDelete: () => void }) {
+function PropertiesPanel({ project, selectedPart, onProject, onOpenCode, onDelete }: { project: ProjectPayload | null; selectedPart: ProjectPayload['parts'][number] | null; onProject: (project: ProjectPayload) => void; onOpenCode: () => void; onDelete: () => void }) {
   const active = project?.branches.find((branch) => branch.active) ?? null;
   return <div className="properties-panel">
     <div className="panel-title"><div><strong>{selectedPart ? 'Object properties' : 'Design properties'}</strong><small>{selectedPart ? selectedPart.role : project?.active_branch ?? 'main'}</small></div></div>
@@ -128,6 +129,7 @@ function PropertiesPanel({ project, selectedPart, onOpenCode, onDelete }: { proj
       <div className="property-section"><button className="wide-action danger-action" data-testid="delete-selected" onClick={onDelete}><Trash2 size={13}/>Delete object</button></div>
     </> : <div className="property-section"><div className="property-section-title">DOCUMENT</div><dl className="property-grid"><dt>Name</dt><dd>{project?.name ?? 'Untitled Design'}</dd><dt>Branch</dt><dd>{project?.active_branch ?? 'main'}</dd><dt>Objects</dt><dd>{project?.parts.length ?? 0}</dd><dt>BOM lines</dt><dd>{project?.bom?.length ?? 0}</dd><dt>Connections</dt><dd>{project?.connections?.length ?? 0}</dd></dl></div>}
     <div className="property-section"><div className="property-section-title">DESIGN STATE</div><dl className="property-grid"><dt>Status</dt><dd>{active?.status.replace('_', ' ') ?? 'unverified'}</dd><dt>Physical</dt><dd>{active?.physical_verified ? 'Verified by evidence' : 'Not verified'}</dd><dt>History</dt><dd>{project?.history.length ?? 0} operations</dd></dl></div>
+    <DesignLineagePanel project={project} onProject={onProject}/>
   </div>;
 }
 
@@ -488,7 +490,7 @@ export default function App() {
           <section className="browser-section grow"><div className="section-heading"><span>OBJECTS</span><span>{project?.parts.length ?? 0}</span></div><div className="browser-list">
             {project?.parts.length ? project.parts.map((part) => <button key={part.id} data-object-id={part.id} className={`browser-row object-row ${selectedId === part.id ? 'selected' : ''}`} onClick={() => setSelectedId(part.id)}><Box size={13}/><span className="browser-row-main"><strong>{part.name}</strong><small>{part.role}</small></span>{part.programmable_workspace_id && <Code2 size={12}/>}<ChevronRight size={12}/></button>) : <div className="browser-empty">No geometry</div>}
           </div></section>
-          <section className="browser-section branches-section"><div className="section-heading"><span>DESIGNS</span><span>{project?.branches.length ?? 0}</span></div><div className="browser-list">{project?.branches.map((branch) => <BranchRow key={branch.name} branch={branch} onActivate={(name) => void switchBranch(name)}/>)}</div></section>
+          <section className="browser-section branches-section"><div className="section-heading"><span>BRANCHES</span><button className="section-link" data-testid="manage-design-lineage" onClick={() => setRightTab('properties')}>Manage</button></div><div className="browser-list">{project?.branches.map((branch) => <BranchRow key={branch.name} branch={branch} onActivate={(name) => void switchBranch(name)}/>)}</div></section>
         </div> : <div className="copilot-pane">
           <div className="copilot-header"><Bot size={16}/><div className="copilot-header-main"><strong>Engineering Copilot</strong><small>{runtime?.configured_model ?? 'local model'} · runs locally through Forge Engine</small></div><div className={`copilot-health ${runtime?.ollama ?? 'checking'}`} title={`Ollama: ${runtime?.ollama ?? 'checking'}`}><span className="copilot-health-dot"/>{modelHealthLabel}</div></div>
           <div className={`agent-status-card ${agentTone}`} data-testid="agent-status" aria-live="polite">
@@ -514,7 +516,7 @@ export default function App() {
       <section className={`center-column ${bottomTab ? 'dock-open' : ''}`}>
         <div className="document-toolbar">
           <div className="tool-group"><button className="icon-button" title="Undo" onClick={() => void undoDesign()}><Undo2 size={15}/></button><button className="icon-button" title="Redo" onClick={() => void redoDesign()}><Redo2 size={15}/></button></div><div className="tool-divider"/>
-          <label className="branch-picker"><GitBranch size={13}/><select value={project?.active_branch ?? ''} onChange={(event) => void switchBranch(event.target.value)}>{project?.branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}</option>)}</select><ChevronDown size={12}/></label><div className="tool-divider"/>
+          <label className="branch-picker"><GitBranch size={13}/><select aria-label="Active design branch" value={project?.active_branch ?? ''} onChange={(event) => void switchBranch(event.target.value)}>{project?.branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}</option>)}</select><ChevronDown size={12}/></label><div className="tool-divider"/>
           <button className="toolbar-button" onClick={() => setRightTab('components')}><Package size={14}/>Insert component</button><button className="toolbar-button" onClick={() => stepInput.current?.click()}><FolderOpen size={14}/>Import STEP</button><div className="document-toolbar-spacer"/>
           <button className="toolbar-button" disabled={!hasGeometry} onClick={() => setBottomTab(bottomTab === 'history' ? null : 'history')}><History size={14}/>History</button><button className="toolbar-button" data-testid="toolbar-manufacture" disabled={!hasGeometry} onClick={() => setRightTab('manufacture')}><Printer size={14}/>Manufacture</button><button className="primary-action" disabled={!hasGeometry} onClick={() => void startSimulation()}><Play size={14}/>Dynamics</button>
         </div>
@@ -538,10 +540,10 @@ export default function App() {
         <div className="panel-tabs right-tabs"><button className={rightTab === 'properties' ? 'active' : ''} onClick={() => setRightTab('properties')}>Properties</button><button className={rightTab === 'components' ? 'active' : ''} onClick={() => setRightTab('components')}>Components</button><button className={rightTab === 'analysis' ? 'active' : ''} onClick={() => setRightTab('analysis')}>Analyze</button><button data-testid="tab-manufacture" className={rightTab === 'manufacture' ? 'active' : ''} onClick={() => setRightTab('manufacture')}>Manufacture</button></div>
         {rightTab === 'components' ? <div className="component-panel">
           <div className="panel-title"><div><strong>Component library</strong><small>{registryStats?.total ?? '…'} catalog parts</small></div></div>
-          <div className="search-control"><Search size={14}/><input value={componentQuery} onChange={(event) => setComponentQuery(event.target.value)} placeholder="Search manufacturer, model, category…"/></div>
-          <div className="component-filters"><select value={componentCategory} onChange={(event) => setComponentCategory(event.target.value)}><option value="">All categories</option>{registryStats?.categories.map((category) => <option value={category} key={category}>{category}</option>)}</select><input value={componentVoltage} onChange={(event) => setComponentVoltage(event.target.value)} placeholder="Voltage" inputMode="decimal"/></div>
+          <div className="search-control"><Search size={14}/><input aria-label="Search component library" value={componentQuery} onChange={(event) => setComponentQuery(event.target.value)} placeholder="Search manufacturer, model, category…"/></div>
+          <div className="component-filters"><select aria-label="Component category" value={componentCategory} onChange={(event) => setComponentCategory(event.target.value)}><option value="">All categories</option>{registryStats?.categories.map((category) => <option value={category} key={category}>{category}</option>)}</select><input aria-label="Component voltage" value={componentVoltage} onChange={(event) => setComponentVoltage(event.target.value)} placeholder="Voltage" inputMode="decimal"/></div>
           <div className="result-count">{components.length} results</div><div className="component-results">{visibleComponents.map((item) => <ComponentRow key={item.id} item={item} inserting={insertingComponentId === item.id} onInsert={(id) => void insertLibraryComponent(id)}/>)}{visibleComponents.length < components.length && <button className="wide-action" onClick={() => setVisibleComponentCount((count) => Math.min(components.length, count + 80))}>Load 80 more</button>}</div>
-        </div> : rightTab === 'properties' ? <PropertiesPanel project={project} selectedPart={selectedPart} onOpenCode={openCodeForSelected} onDelete={() => void deleteSelected()}/> : rightTab === 'manufacture' ? <ManufacturePanel project={project} selectedId={selectedId} onSelectPart={setSelectedId} onDraftRedesign={(part) => {
+        </div> : rightTab === 'properties' ? <PropertiesPanel project={project} selectedPart={selectedPart} onProject={setProject} onOpenCode={openCodeForSelected} onDelete={() => void deleteSelected()}/> : rightTab === 'manufacture' ? <ManufacturePanel project={project} selectedId={selectedId} onSelectPart={setSelectedId} onDraftRedesign={(part) => {
           setSelectedId(part.id); setBrowserTab('copilot'); const warningText = part.warnings.map((warning) => warning.message).join(' '); setMessage(`Redesign "${part.name}" so it can be manufactured reliably on my Bambu Lab P2S. Preserve its functional role and interfaces. ${warningText} If the part is too large, split it into printable bodies with alignment features and a mechanically sound joining strategy, then re-check the design against the P2S manufacturing constraints.`);
         }}/> : <EngineeringWorkbench mode="analysis" project={project} selectedId={selectedId} activeJob={latestCampaignJob} onProject={setProject} onStartSimulation={() => void startSimulation()} onStartCampaign={() => void startCampaign()} onJobStarted={acceptJobSnapshot}/>} 
       </aside>
