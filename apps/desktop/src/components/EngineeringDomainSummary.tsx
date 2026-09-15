@@ -2,6 +2,7 @@ import { Activity, Cable, Droplets, Flame, Orbit, ShieldAlert, Zap } from 'lucid
 import type { ProjectPayload, ValidationPayload } from '../api/engine';
 import { AdvancedEngineeringStatus } from './AdvancedEngineeringStatus';
 import { SimulationWorkspace } from './SimulationWorkspace';
+import { ThermalFieldPanel } from './ThermalFieldPanel';
 
 type DomainKey = 'electrical' | 'thermal' | 'fluid' | 'routing' | 'safety' | 'kinematics';
 type LooseRecord = Record<string, unknown>;
@@ -107,6 +108,7 @@ export function EngineeringDomainSummary({ validation, project, mode = 'analysis
 
     {mode === 'analysis' && <>
       <SimulationWorkspace project={project}/>
+      <ThermalFieldPanel project={project}/>
       <div className="campaign-card" data-testid="analysis-domains">
         <div className="campaign-title"><Activity size={18}/><div><strong>System analyses</strong><span>Deterministic domain evidence from the same canonical project state. Unknown inputs remain unknown.</span></div></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
