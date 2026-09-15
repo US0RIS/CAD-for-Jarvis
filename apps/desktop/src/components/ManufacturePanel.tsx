@@ -125,6 +125,13 @@ type PreparedPackage = {
   stage: 'geometry-exchange' | 'bambu-studio-sliced';
   filename: string;
   branch: string;
+  objectIds: string[];
+  resourceId: string;
+  material: string | null;
+  machineProfile: string | null;
+  processProfile: string | null;
+  filamentProfiles: string[];
+  slicer: string;
 };
 
 function formatDimensions(bounds: number[] | null | undefined) {
@@ -177,8 +184,13 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
       const next = await engineFetch<P2SStatus>('/v2/manufacturing/p2s');
       setStatus(next);
       const eligible = next.parts.filter((part) => part.eligible).map((part) => part.id);
-      const preferred = selectedId && eligible.includes(selectedId) ? [selectedId] : eligible;
-      setSelected(new Set(preferred));
+      const eligibleSet = new Set(eligible);
+      setSelected((current) => {
+        const retained = Array.from(current).filter((id) => eligibleSet.has(id));
+        if (retained.length) return new Set(retained);
+        if (selectedId && eligibleSet.has(selectedId)) return new Set([selectedId]);
+        return new Set(eligible);
+      });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -189,6 +201,13 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
   useEffect(() => {
     void refresh();
   }, [project?.revision, refresh]);
+
+  useEffect(() => {
+    if (!preparedPackage || !project?.active_branch || preparedPackage.branch === project.active_branch) return;
+    setPreparedPackage(null);
+    setPrototypeNote('');
+    setLastAction('Prepared-package evidence target cleared because the active design branch changed.');
+  }, [preparedPackage, project?.active_branch]);
 
   const selectedParts = useMemo(
     () => status?.parts.filter((part) => selected.has(part.id)) ?? [],
@@ -209,16 +228,20 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
   }
 
   async function export3mf(slice: boolean) {
-    if (!selected.size || busy) return;
+    if (!selected.size || busy || !status) return;
     setBusy(slice ? 'slice' : 'export');
     setError(null);
     setLastAction(null);
+    setPreparedPackage(null);
     try {
+      const exportedObjectIds = Array.from(selected);
+      const packageParts = status.parts.filter((part) => selected.has(part.id));
+      const materialNames = Array.from(new Set(packageParts.map((part) => part.material?.requested_filament || part.material?.design_material).filter((value): value is string => Boolean(value))));
       const response = await engineRawFetch(
         slice ? '/v2/manufacturing/p2s/slice' : '/v2/manufacturing/p2s/export',
         {
           method: 'POST',
-          body: JSON.stringify({ object_ids: Array.from(selected), tolerance_mm: 0.15 }),
+          body: JSON.stringify({ object_ids: exportedObjectIds, tolerance_mm: 0.15 }),
         },
       );
       const blob = await response.blob();
@@ -228,7 +251,21 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
       const branch = response.headers.get('X-ForgeCAD-Branch') ?? project?.active_branch ?? 'main';
       const stage = (response.headers.get('X-ForgeCAD-3MF-Stage') === 'bambu-studio-sliced' ? 'bambu-studio-sliced' : 'geometry-exchange') as PreparedPackage['stage'];
       downloadBlob(blob, filename);
-      if (/^[0-9a-f]{64}$/i.test(sha256)) setPreparedPackage({ sha256, stage, filename, branch });
+      if (/^[0-9a-f]{64}$/i.test(sha256)) {
+        setPreparedPackage({
+          sha256,
+          stage,
+          filename,
+          branch,
+          objectIds: exportedObjectIds,
+          resourceId: status.resource.id,
+          material: materialNames.join(', ') || null,
+          machineProfile: status.slicer.profiles.machine.path,
+          processProfile: status.slicer.profiles.process.path,
+          filamentProfiles: status.slicer.profiles.filaments.map((profile) => profile.path).filter((path): path is string => Boolean(path)),
+          slicer: status.slicer.name,
+        });
+      }
       setLastAction(slice ? 'Sliced P2S 3MF prepared by Bambu Studio.' : 'Geometry 3MF exported for Bambu Studio.');
       await refresh();
     } catch (reason) {
@@ -243,23 +280,22 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
     setBusy('evidence');
     setError(null);
     try {
-      const materialNames = Array.from(new Set(selectedParts.map((part) => part.material?.requested_filament || part.material?.design_material).filter(Boolean)));
       await engineFetch('/v2/evidence/manufacturing', {
         method: 'POST',
         body: JSON.stringify({
           package_sha256: preparedPackage.sha256,
-          resource_id: status?.resource.id ?? 'bambu-lab-p2s',
+          resource_id: preparedPackage.resourceId,
           outcome,
-          material: materialNames.join(', ') || null,
-          machine_profile: status?.slicer.profiles.machine.path ?? null,
-          process_profile: status?.slicer.profiles.process.path ?? null,
-          filament_profiles: status?.slicer.profiles.filaments.map((profile) => profile.path).filter(Boolean) ?? [],
-          slicer: status?.slicer.name ?? 'Bambu Studio',
+          material: preparedPackage.material,
+          machine_profile: preparedPackage.machineProfile,
+          process_profile: preparedPackage.processProfile,
+          filament_profiles: preparedPackage.filamentProfiles,
+          slicer: preparedPackage.slicer,
           observations: prototypeNote.trim() ? [prototypeNote.trim()] : [],
           note: prototypeNote.trim(),
         }),
       });
-      setLastAction(`Physical prototype ${outcome} recorded on ${preparedPackage.branch}.`);
+      setLastAction(`Physical prototype ${outcome} recorded for the exported package on ${preparedPackage.branch}.`);
       setPrototypeNote('');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -278,7 +314,7 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
   return <div className="manufacture-panel" data-testid="manufacture-panel">
     <div className="panel-title manufacture-title">
       <div><strong>Manufacture</strong><small>{status ? `${status.resource.manufacturer} ${status.resource.model} · ${status.resource.process.toUpperCase()}` : 'Bambu Lab P2S'}</small></div>
-      <button className="icon-button" title="Refresh manufacturing status" onClick={() => void refresh()} disabled={loading || Boolean(busy)}><RefreshCw size={13} className={loading ? 'agent-spin' : ''}/></button>
+      <button className="icon-button" title="Refresh manufacturing status" aria-label="Refresh manufacturing status" onClick={() => void refresh()} disabled={loading || Boolean(busy)}><RefreshCw size={13} className={loading ? 'agent-spin' : ''}/></button>
     </div>
 
     {error && <div className="runtime-banner error manufacture-error"><AlertTriangle size={14}/><div><strong>Manufacturing check failed</strong><span>{error}</span></div></div>}
@@ -290,7 +326,7 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
         <div className="manufacture-resource-row">
           <span className="manufacture-resource-icon"><Printer size={17}/></span>
           <div><strong>{status.resource.manufacturer} {status.resource.model}</strong><small>{status.resource.build_volume_mm.join(' × ')} mm build volume</small></div>
-          <span className="manufacture-state good">AVAILABLE</span>
+          <span className="manufacture-state good">PROFILED</span>
         </div>
         <dl className="property-grid manufacture-grid">
           <dt>Nozzle</dt><dd>{status.resource.default_nozzle_mm.toFixed(1)} mm default</dd>
@@ -345,6 +381,7 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
                 onApplied={(response) => {
                   setLastAction(`Created ${response.split.piece_ids.length} printable bodies on branch ${response.split.split_branch}. Joint strength remains unverified.`);
                   setSelected(new Set(response.split.piece_ids));
+                  setPreparedPackage(null);
                   if (response.split.piece_ids[0]) onSelectPart(response.split.piece_ids[0]);
                   void refresh();
                 }}
@@ -381,14 +418,14 @@ export function ManufacturePanel({ project, selectedId, onSelectPart, onDraftRed
 
       {preparedPackage && <section className="property-section manufacture-evidence-section" data-testid="manufacture-evidence">
         <div className="property-section-title">PROTOTYPE EVIDENCE</div>
-        <div className="manufacture-package-row"><div><strong>{preparedPackage.filename}</strong><span>{preparedPackage.stage.replaceAll('-', ' ')} · branch {preparedPackage.branch}</span></div><button className="icon-button" title="Clear prepared-package evidence target" onClick={() => setPreparedPackage(null)}><X size={11}/></button></div>
+        <div className="manufacture-package-row"><div><strong>{preparedPackage.filename}</strong><span>{preparedPackage.stage.replaceAll('-', ' ')} · branch {preparedPackage.branch} · {preparedPackage.objectIds.length} body{preparedPackage.objectIds.length === 1 ? '' : 'ies'}</span></div><button className="icon-button" title="Clear prepared-package evidence target" aria-label="Clear prepared-package evidence target" onClick={() => setPreparedPackage(null)}><X size={11}/></button></div>
         <div className="manufacture-hash" title={preparedPackage.sha256}>SHA-256 {preparedPackage.sha256.slice(0, 12)}…{preparedPackage.sha256.slice(-8)}</div>
         <textarea className="manufacture-evidence-note" value={prototypeNote} onChange={(event) => setPrototypeNote(event.target.value)} placeholder="Prototype observations, fit issues, print failure, measurements…"/>
         <div className="manufacture-evidence-actions">
           <button disabled={Boolean(busy)} onClick={() => void recordPrototype('failure')}><AlertTriangle size={11}/>{busy === 'evidence' ? 'Recording…' : 'Record failed print'}</button>
           <button className="primary-action" disabled={Boolean(busy)} onClick={() => void recordPrototype('success')}><Check size={11}/>{busy === 'evidence' ? 'Recording…' : 'Record successful print'}</button>
         </div>
-        <div className="manufacture-hint"><Activity size={10}/>Evidence is attached to this design branch and exact package hash. Recording a successful print does not silently mark the engineering design as physically verified.</div>
+        <div className="manufacture-hint"><Activity size={10}/>Evidence is attached to this exact package hash and its source branch. Recording a successful print does not silently mark the engineering design as physically verified.</div>
       </section>}
 
       <section className="property-section">
