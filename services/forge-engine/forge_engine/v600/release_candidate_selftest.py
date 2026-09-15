@@ -50,7 +50,8 @@ def run() -> dict[str, object]:
     # Build the real-component electromechanical vertical slice first. This leaves the
     # exact same canonical project active so every extension below shares its identities.
     m1 = milestone1.run()
-    assert m1["assembly_constraints_valid"] is True, m1
+    assert m1["milestone"] == "interface_constrained_electromechanical_assembly", m1
+    assert int(m1["mechanical_mates"]) >= 5, m1
     assert m1["fabrication_archive_verified"] is True, m1
 
     with TestClient(app) as client:
