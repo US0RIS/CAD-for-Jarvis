@@ -10,23 +10,50 @@ The product objective is not “a chatbot attached to CAD.” It is an environme
 
 ## Status
 
-**Current release:** ForgeCAD **6.0.1**  
-**Release branch:** `forgecad/6.0.1`  
-**Desktop package version:** `6.0.1`
+**Current release:** ForgeCAD **6.1.0**  
+**Release branch:** `forgecad/6.1.0`  
+**Desktop package version:** `6.1.0`
 
-ForgeCAD 6.0.1 is the UX, interaction-correctness, and runtime-hardening release for the complete 6.0 engineering environment. It preserves the validated 6.0 capability substrate while making previously hidden or ambiguous workflows first-class desktop interactions.
+ForgeCAD 6.1.0 is the simulation release for the complete 6.x engineering environment. It preserves the validated 6.0/6.0.1 product substrate and makes constrained multibody motion, simulation provenance, viewport playback, and built-in multiphysics analysis first-class parts of the same canonical engineering model.
 
 Release documentation:
 
-- [`docs/RELEASE_6_0_1.md`](docs/RELEASE_6_0_1.md) — release scope, truth boundaries, native artifacts, and acceptance gates;
-- [`docs/UX_AUDIT_6_0_1.md`](docs/UX_AUDIT_6_0_1.md) — full desktop UX audit and information-architecture decisions;
+- [`docs/RELEASE_6_1_0.md`](docs/RELEASE_6_1_0.md) — 6.1 simulation scope, fidelity/truth boundaries, native artifacts, and acceptance gates;
+- [`docs/RELEASE_6_0_1.md`](docs/RELEASE_6_0_1.md) — preserved 6.0.1 UX/runtime substrate;
+- [`docs/UX_AUDIT_6_0_1.md`](docs/UX_AUDIT_6_0_1.md) — desktop UX audit and information-architecture decisions;
 - historical release documents under [`docs/`](docs/) remain the record for earlier milestones.
 
-ForgeCAD 6.0.1 remains a **software engineering release**, not a claim that a particular physical device has been built, tested, certified, or made safe merely because the software passes its release gates.
+ForgeCAD 6.1.0 remains a **software engineering release**, not a claim that a particular physical device has been built, tested, certified, or made safe merely because the software passes its release gates.
 
 ---
 
-# What ForgeCAD 6.0.1 is
+# What ForgeCAD 6.1.0 adds
+
+## Executable assembly motion
+
+Canonical joints now drive complete rigid subtrees rather than isolated meshes. Supporting-body transforms and explicit joint actuation preserve downstream continuity, while unsupported topology fails closed. Time-domain sweeps produce sampled assembly poses, body kinematics, swept bounds, load-path evidence, and sampled exact-B-rep penetration checks.
+
+The 3D viewport can play calculated sweep frames without mutating the canonical design. After playback, ForgeCAD restores the exact design pose. Interactive transforms of supporting bodies use the same continuity model.
+
+## One simulation provenance model
+
+Analyze exposes motion, gravity/load paths, structural FEA, rigid-body response, steady hydraulic networks, thermal analysis, and aerodynamic screening through the 6.1 simulation layer. Results are recorded against the exact design fingerprint and become stale when relevant canonical state changes.
+
+Solver identity, version, grade, assumptions, limitations, and prediction-vs-observation boundaries remain explicit. Missing physics is not silently replaced with a plausible-looking answer.
+
+## Thermal simulation at two scales
+
+ForgeCAD 6.1.0 preserves the assembly transient thermal network for inter-part heat flow and adds a separate 3D transient thermal-field solver for supported unfeatured rectangular box solids. The field solver resolves internal conduction gradients with volumetric heat generation, convection, radiation, explicit numerical-stability control, field output, and energy-balance evidence. Unsupported geometry fails closed.
+
+## Aerodynamic truth boundary
+
+The built-in aerodynamic solver is an integrated coefficient-based engineering screening model. It is explicitly **not CFD**. Optional OpenFOAM availability remains separately reported and does not imply a validated automatic CAD-to-CFD case adapter.
+
+For exact release scope and installer names, see [`docs/RELEASE_6_1_0.md`](docs/RELEASE_6_1_0.md).
+
+---
+
+# Preserved ForgeCAD 6.0.1 substrate
 
 ## 1. Natural-language engineering over canonical state
 
@@ -48,45 +75,19 @@ Fabricated and imported custom parts expose **Parametric CAD** in Object Propert
 
 ForgeCAD models explicit mechanical interfaces, full interface-frame mates, joints, mobility, redundant constraints, mounting geometry, mounting hardware, access envelopes, and collision/interference evidence.
 
-The 6.0 assembly substrate includes:
-
-- fixed and prismatic interface-frame constraints;
-- constraint-rank and mobility analysis;
-- geometry-backed mounting patterns;
-- manufacturer mounting datums and registration;
-- mount hardware realization;
-- driver/access-envelope checks;
-- kinematic sweeps and collision screening.
+The 6.0 assembly substrate includes fixed and prismatic interface-frame constraints, constraint-rank and mobility analysis, geometry-backed mounting patterns, manufacturer mounting datums and registration, mount hardware realization, driver/access-envelope checks, and kinematic/collision screening.
 
 When topology or mounting truth is ambiguous, the system fails closed rather than inventing a plausible physical relationship.
 
 ## 4. Electrical, thermal, fluid, routing, safety, and kinematics share one model
 
-The Analyze workspace exposes deterministic domain evidence from the active canonical branch:
-
-- electrical nets, rail/current/logic compatibility and interface coverage;
-- thermal nodes, heat/conductance networks, and temperature limits;
-- fluid/hydraulic nodes, links, flow and routed-tube resistance;
-- cable and tube routing, lengths, bend feasibility and clearance proxies;
-- safety/failure modes, controls and current-design verification state;
-- kinematics, joint limits, mechanism sweeps, and B-rep interference checks;
-- structural, modal, tolerance, manufacturing, and requirement-gate validation.
+The Analyze workspace exposes deterministic domain evidence from the active canonical branch: electrical nets and compatibility; thermal networks; hydraulic pressure/flow networks; cable/tube routing; safety/failure modes; kinematics and interference; and structural, tolerance, manufacturing, and requirement-gate evidence.
 
 A domain is shown as PASS only when the underlying analysis explicitly asserts a pass. Modeled-but-unasserted evidence remains modeled, and missing inputs remain missing.
 
 ## 5. Release-level assembly, solver, and evidence state is visible
 
-ForgeCAD 6.0.1 adds an Analyze-side **Assembly, evidence & solver state** inspector so release-critical v6 capability is not buried behind APIs.
-
-It exposes confirmed state for:
-
-- assembly constraints, mates, geometry-backed mounts, and mount hardware;
-- engineering repair trials;
-- physical retest cycles and lineage;
-- recorded test runs, specimens, metrology, and prediction residuals;
-- external solver inventory and availability;
-- chemistry studies/runs;
-- release-stage and validation-truth boundaries.
+The Analyze-side **Assembly, evidence & solver state** inspector exposes confirmed state for assembly constraints and mounts, engineering repair trials, physical retest lineage, test runs and metrology, external solver inventory, chemistry studies/runs, and release-stage truth boundaries.
 
 The panel is deliberately an evidence inspector. It never converts a branch label, solver result, CI fixture, fabrication archive, or package hash into physical verification.
 
@@ -94,23 +95,11 @@ The panel is deliberately an evidence inspector. It never converts a branch labe
 
 ForgeCAD branches are not merely CAD geometry variants. A branch snapshots the canonical engineering state, including embedded code and the engineering identities needed by downstream analysis and evidence.
 
-The 6.0.1 Design Lineage surface supports:
-
-- creating an experimental branch from the active design;
-- switching branches;
-- marking a design **working**, **not working**, or **unverified**;
-- comparing canonical differences against another branch;
-- preserving independent physical-evidence state.
-
-A “working” label is a design-management label only. It is not physical verification.
+Design Lineage supports creating experimental branches, switching branches, marking a design working/not working/unverified, comparing canonical differences, and preserving independent physical-evidence state. A “working” label is a design-management label only. It is not physical verification.
 
 ## 7. Embedded software belongs to the physical product
 
-Programmable components expose their embedded code directly inside ForgeCAD. The Code workspace is a real editor surface rather than an external-file shortcut.
-
-Code saves are serialized, and branch/project mutations wait for pending editor writes before canonical state changes. This prevents a fast branch switch from silently placing code on the wrong design revision.
-
-The 6.0.1 desktop expands Code at normal and minimum supported window sizes so it functions as a usable IDE workspace rather than a shallow tray.
+Programmable components expose their embedded code directly inside ForgeCAD. Code saves are serialized, and branch/project mutations wait for pending editor writes before canonical state changes, preventing a fast branch switch from silently placing code on the wrong design revision.
 
 ## 8. Manufacturing remains connected to design intent
 
@@ -132,7 +121,7 @@ A passing retest verifies only its scoped requirement. It does not silently mark
 
 ## 10. External solvers fail closed
 
-ForgeCAD can integrate controlled external engineering solvers. The 6.0 release substrate includes a validated Cantera chemistry path plus capability reporting for optional tools such as CalculiX, OpenFOAM, and Gmsh.
+ForgeCAD can integrate controlled external engineering solvers. The 6.0 substrate includes a validated Cantera chemistry path plus capability reporting for optional tools such as CalculiX, OpenFOAM, and Gmsh.
 
 Solver availability is reported truthfully. Missing solvers do not trigger invented physics or an unannounced lower-fidelity substitute, and the presence of an executable does not by itself mean ForgeCAD has a validated model-to-case adapter for every problem.
 
@@ -148,29 +137,27 @@ designed truth != observed state != inference
 
 Live observations update observed state. They do not rewrite supplier specifications or canonical CAD. Jarvis identity resolution fails closed when the physical entity or CAD source link is ambiguous.
 
-The System workspace surfaces physical-world entities, relations, provenance, observation age, engineering-graph health, selected-object context, and workspace profile without becoming a second hidden CAD editor.
-
 ---
 
 # Desktop information architecture
 
-ForgeCAD 6.0.1 intentionally separates responsibilities:
+ForgeCAD separates responsibilities:
 
 - **Model / Copilot (left):** object tree, branch navigation, and natural-language engineering interaction.
-- **3D canvas (center):** authoritative physical artifact view and object selection.
-- **History / Code / Simulation / System (bottom):** contextual workspaces for chronology, programmable hardware, long-running engineering jobs, and deployed/physical state.
-- **Properties (right):** selected-object identity, fabricated-part parametric CAD, design truth, and branch lineage.
+- **3D canvas (center):** authoritative physical artifact view, selection, constrained editing, and simulation playback.
+- **History / Code / Simulation / System (bottom):** chronology, programmable hardware, long-running engineering jobs, and deployed/physical state.
+- **Properties (right):** object identity, fabricated-part parametric CAD, design truth, and branch lineage.
 - **Components (right):** real-world component sourcing and insertion.
-- **Analyze (right):** deterministic validation, cross-domain evidence, autonomous variant campaigns, assembly/evidence/solver state.
-- **Manufacture (right):** manufacturing-resource checks, print/build preparation, splitting, and redesign handoff.
+- **Analyze (right):** simulation, deterministic validation, cross-domain evidence, variant campaigns, and solver state.
+- **Manufacture (right):** manufacturing-resource checks, build preparation, splitting, and redesign handoff.
 
-At the packaged minimum desktop size of **1280×760**, core application chrome and the primary Code/System workspaces are explicitly covered by browser acceptance.
+At the packaged minimum desktop size of **1280×760**, core application chrome and the primary Code/System workspaces are covered by browser acceptance.
 
 ---
 
 # Truth and safety boundaries
 
-ForgeCAD 6.0.1 keeps these invariants non-negotiable:
+ForgeCAD 6.1.0 keeps these invariants non-negotiable:
 
 1. Purchased component engineering data remains immutable inside a design revision.
 2. Unknown engineering input remains unknown.
@@ -185,26 +172,23 @@ ForgeCAD 6.0.1 keeps these invariants non-negotiable:
 
 ---
 
-# 6.0.1 release gates
+# 6.1.0 release gates
 
-The release branch is intended to publish only after all current-head gates succeed:
+The release branch publishes only after all current-head gates succeed:
 
-- Forge Engine 6.0.1 canonical-state selftest;
-- full preserved 6.0 cross-domain release-candidate selftest;
-- validated external chemistry gate;
+- ForgeCAD 6.1 multibody/multiphysics source acceptance;
+- deterministic 3D thermal-field acceptance;
+- preserved v2 physics and 6.0.1 runtime-hardening regressions;
+- HTTP-level execution of 6.1 simulation endpoints;
 - desktop TypeScript typecheck, unit tests, and production build;
-- focused 6.0.1 browser UX regression;
-- design-lineage acceptance;
-- fabricated feature-history mutation acceptance, including renderer→engine `PATCH`;
-- advanced assembly/evidence/solver inspector acceptance;
-- 1280×760 packaged-minimum layout acceptance;
-- keyboard and interaction safety acceptance;
-- preserved 3.1 browser integration;
+- Chromium acceptance for joint controls, viewport playback, canonical-pose preservation, and 3D thermal-field UI;
+- preserved 6.0 cross-domain and external chemistry gates in native release validation;
 - native Windows x64 installed-copy/launch validation;
 - native macOS arm64 and x64 installed-copy/launch validation;
-- packaged Forge Engine runtime identity, Cantera data, chemistry smoke test, and desktop bundled-engine startup validation.
+- packaged Forge Engine 6.1 simulation identity, Cantera availability, and 3D thermal-field runtime validation;
+- SHA-256 manifest and exact release-tag/source binding.
 
-See [`docs/RELEASE_6_0_1.md`](docs/RELEASE_6_0_1.md) for the release record and artifact names.
+See [`docs/RELEASE_6_1_0.md`](docs/RELEASE_6_1_0.md) for the release record and artifact names.
 
 ---
 
@@ -219,13 +203,13 @@ docs/                                 Release, engineering, and validation recor
 .github/workflows/                    Browser, regression, and native release gates
 ```
 
-The 6.0 architecture deliberately builds on the validated 3.1 substrate rather than rewriting previously proven behavior without equivalent or stronger acceptance coverage.
+The 6.x architecture deliberately builds on the validated 3.1 substrate rather than rewriting previously proven behavior without equivalent or stronger acceptance coverage.
 
 ---
 
 # Development
 
-From the repository root, the desktop package supports the normal workspace commands:
+From the repository root:
 
 ```bash
 pnpm install
@@ -234,6 +218,6 @@ pnpm --filter @forgecad/desktop test
 pnpm --filter @forgecad/desktop build
 ```
 
-Forge Engine is developed from `services/forge-engine`. Release and acceptance workflows define the exact runtime environment used for 6.0.1 validation.
+Forge Engine is developed from `services/forge-engine`. Release and acceptance workflows define the exact runtime environment used for 6.1.0 validation.
 
 For the complete release-specific truth contract, do not infer from a successful local UI launch alone; use the release selftests and GitHub Actions gates recorded for the release branch.
