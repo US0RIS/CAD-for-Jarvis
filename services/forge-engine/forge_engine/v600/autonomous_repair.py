@@ -16,8 +16,9 @@ from pydantic import BaseModel, Field
 
 from ..v110 import core
 from ..v310.engineering_graph import EngineeringGraphStore
-from ..v310.integration_services import apply_substitution, semantic_branch_diff, synchronize_graph, verify_requirements
+from ..v310.integration_services import semantic_branch_diff, synchronize_graph, verify_requirements
 from .analysis_refresh_repair import AnalysisRefreshingRepairRequest, run_analysis_refreshing_repair
+from .substitution_semantics import apply_equivalent_substitution
 
 
 class ParametricStrategy(BaseModel):
@@ -118,7 +119,7 @@ def _evaluate_substitution(
         )
         branch = core.ACTIVE_DESIGN
         try:
-            change = apply_substitution(strategy.object_id, component_id, graph, actor=strategy.actor, reason=f"milestone 4 strategy {strategy.id}")
+            change = apply_equivalent_substitution(strategy.object_id, component_id, graph, actor=strategy.actor, reason=f"milestone 4 strategy {strategy.id}")
             stale_count = int(core.mark_simulations_stale(strategy.object_id))
             core.persist()
             _sync(graph, world)
