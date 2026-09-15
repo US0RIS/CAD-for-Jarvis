@@ -20,7 +20,7 @@ jobs:
   simulation:
     name: Multibody and multiphysics acceptance
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -151,3 +151,46 @@ jobs:
           pnpm --filter @forgecad/desktop typecheck
           pnpm --filter @forgecad/desktop test
           pnpm --filter @forgecad/desktop build
+
+      - name: Install Chromium acceptance runtime
+        run: pnpm --filter @forgecad/desktop exec playwright install --with-deps chromium
+
+      - name: Start ForgeCAD simulation engine
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_SESSION_TOKEN: test-session
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v610-browser-state
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python -m uvicorn forge_engine.desktop_entry:app --host 127.0.0.1 --port 8765 --log-level warning > "${RUNNER_TEMP}/forgecad-v610-engine.log" 2>&1 &
+          echo $! > "${RUNNER_TEMP}/forgecad-v610-engine.pid"
+          python - <<'PY'
+          import json, time, urllib.request
+          deadline = time.time() + 60
+          while time.time() < deadline:
+              try:
+                  request = urllib.request.Request('http://127.0.0.1:8765/v2/health')
+                  with urllib.request.urlopen(request, timeout=2) as response:
+                      body = json.load(response)
+                  if body.get('ok') and body.get('api_version') == '2':
+                      break
+              except Exception:
+                  time.sleep(.25)
+          else:
+              raise SystemExit('ForgeCAD engine did not become healthy')
+          PY
+
+      - name: Run 6.1 browser simulation acceptance
+        run: pnpm --filter @forgecad/desktop exec playwright test e2e/simulation-6.1.spec.ts --workers=1
+
+      - name: Upload simulation diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forgecad-v610-simulation-diagnostics
+          path: |
+            apps/desktop/test-results/**
+            apps/desktop/playwright-report/**
+            ${{ runner.temp }}/forgecad-v610-engine.log
+          if-no-files-found: ignore
