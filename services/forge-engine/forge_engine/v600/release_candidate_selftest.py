@@ -229,7 +229,7 @@ def run() -> dict[str, object]:
         safety_final = analyze_safety(core.PROJECT)
         assert thermal_final["ok"] is True, thermal_final
         assert fluid_final["ok"] is True, fluid_final
-        stack = next(row for row in tolerance_final["items"] if row["stack"] == "rail_clearance_stack")
+        stack = next(row for row in tolerance_final["items"] if row["id"] == "rail_clearance_stack")
         assert stack["worst_case"]["passes_spec"] is True, stack
         assert stack["statistical"]["available"] is True, stack
         assert safety_final["ok"] is True, safety_final
