@@ -7,6 +7,13 @@ neighboring object occupies the standoff envelope or blocks driver access. This
 module constructs explicit world-space clearance volumes from the same canonical
 mount geometry/hardware plan and intersects them with actual ForgeCAD B-reps.
 
+A critical evidence boundary is enforced here: neighboring project objects are
+hard collision evidence because their canonical B-reps are the design truth. A
+purchased component's *own* tool-access obstruction is only a hard result when
+its resolved geometry is externally authoritative (official/verified CAD). A
+ForgeCAD-derived fallback is useful for visualization and many deterministic
+checks, but it cannot silently become manufacturer truth for package clearance.
+
 The controlled capability is deliberately geometric only. It does not claim
 ergonomic reachability, flexible-tool access, preload/torque adequacy or strength.
 """
@@ -17,8 +24,11 @@ import cadquery as cq
 import numpy as np
 from pydantic import BaseModel, Field
 
-from ..v110 import core
+from ..v110 import core, physical_components
 from .mount_hardware import MountHardwareRequest, audit_mount_hardware
+
+
+_AUTHORITATIVE_SELF_ACCESS_FIDELITIES = {"official_step", "official_cad", "verified_step"}
 
 
 class MountAccessRequest(MountHardwareRequest):
@@ -81,6 +91,25 @@ def _intersection_volume(shape, envelope) -> float:
         return float("inf")
 
 
+def _component_self_access_status(component: dict[str, Any]) -> dict[str, Any]:
+    status = physical_components.component_geometry_status(component)
+    fidelity = str(status.get("geometry_fidelity") or "")
+    checked = (
+        bool(status.get("resolved"))
+        and not bool(status.get("fallback"))
+        and fidelity in _AUTHORITATIVE_SELF_ACCESS_FIDELITIES
+    )
+    return {
+        "checked": checked,
+        "geometry_status": status,
+        "reason": (
+            "component self-access checked against externally authoritative CAD"
+            if checked
+            else "component self-access remains unverified because current component geometry is a non-authoritative fallback/proxy"
+        ),
+    }
+
+
 def _envelope_descriptor(
     *,
     kind: str,
@@ -120,6 +149,8 @@ def plan_mount_access(project: dict[str, Any], request: MountAccessRequest) -> d
     x_axis = _unit(host_frame["world_x_axis"])
     host_id = str(request.host_id)
     component_id = str(request.component_id)
+    component = _object(project, component_id)
+    component_self_access = _component_self_access_status(component)
     host_thickness = float(hardware_plan["host_thickness_mm"])
     component_thickness = float(hardware_plan["component_mount_thickness_mm"])
     standoff_height = float(hardware_plan["standoff_height_mm"])
@@ -153,8 +184,12 @@ def plan_mount_access(project: dict[str, Any], request: MountAccessRequest) -> d
         # Source mount interface is the lower component mounting surface in this
         # validated standoff strategy. Driver access begins just above the
         # declared component mounting thickness so the PCB itself is not counted
-        # as an obstruction, while packages/neighboring objects above it are.
+        # as an obstruction. The mounted component is included as a possible
+        # self-obstruction only when its CAD is externally authoritative.
         top_start = host_plane + normal * (standoff_height + component_thickness + eps)
+        top_exclusions = {host_id}
+        if not component_self_access["checked"]:
+            top_exclusions.add(component_id)
         envelopes.append(
             _envelope_descriptor(
                 kind="top_driver_access",
@@ -164,11 +199,12 @@ def plan_mount_access(project: dict[str, Any], request: MountAccessRequest) -> d
                 length_mm=float(request.top_tool_clearance_height_mm),
                 diameter_mm=float(request.top_tool_clearance_diameter_mm),
                 x_axis=x_axis,
-                exclusions={host_id},
+                exclusions=top_exclusions,
             )
         )
 
-        # Bottom access begins outside the underside of the fabricated host.
+        # Bottom access begins outside the underside of the fabricated host. The
+        # mounted component is on the opposite side of the host and is excluded.
         bottom_start = host_plane - normal * (host_thickness + eps)
         envelopes.append(
             _envelope_descriptor(
@@ -184,6 +220,15 @@ def plan_mount_access(project: dict[str, Any], request: MountAccessRequest) -> d
         )
 
     public_envelopes = [{key: value for key, value in row.items() if key != "_shape"} for row in envelopes]
+    limitations = [
+        "does not prove human ergonomic access or angled/flexible driver access",
+        "does not analyze fastener preload, torque, stripping, bearing stress or vibration retention",
+        "hardware supplier/manufacturer identity can remain unresolved independently of geometric access",
+    ]
+    if not component_self_access["checked"]:
+        limitations.append(
+            "mounted-component self-obstruction is unresolved until externally authoritative CAD is registered to the canonical component frame"
+        )
     return {
         "realization_id": hardware_plan["realization_id"],
         "binding_id": hardware_plan["binding_id"],
@@ -192,12 +237,9 @@ def plan_mount_access(project: dict[str, Any], request: MountAccessRequest) -> d
         "mount_positions": int(hardware_plan["quantity"]),
         "envelope_count": len(envelopes),
         "envelopes": public_envelopes,
+        "component_self_access": component_self_access,
         "scope": "rigid world-space standoff/body and straight-driver clearance only",
-        "limitations": [
-            "does not prove human ergonomic access or angled/flexible driver access",
-            "does not analyze fastener preload, torque, stripping, bearing stress or vibration retention",
-            "hardware supplier/manufacturer identity can remain unresolved independently of geometric access",
-        ],
+        "limitations": limitations,
         "_runtime_envelopes": envelopes,
     }
 
@@ -215,6 +257,17 @@ def audit_mount_access(project: dict[str, Any], request: MountAccessRequest) -> 
     findings: list[dict[str, Any]] = []
     objects = _candidate_objects(project)
     shape_cache: dict[str, Any] = {}
+
+    if not plan["component_self_access"]["checked"]:
+        findings.append(
+            {
+                "severity": "warning",
+                "code": "component_self_access_unverified",
+                "object_id": plan["component_id"],
+                "message": plan["component_self_access"]["reason"],
+                "geometry_status": plan["component_self_access"]["geometry_status"],
+            }
+        )
 
     for envelope in plan["_runtime_envelopes"]:
         excluded = set(envelope["excluded_object_ids"])
@@ -264,7 +317,9 @@ def audit_mount_access(project: dict[str, Any], request: MountAccessRequest) -> 
         "plan": public_plan,
         "evidence": {
             "world_space_brep_intersection_checked": True,
+            "neighboring_object_access_checked": True,
             "straight_driver_access_checked": True,
             "standoff_body_envelope_checked": True,
+            "component_self_access_checked": bool(plan["component_self_access"]["checked"]),
         },
     }
