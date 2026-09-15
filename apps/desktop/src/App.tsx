@@ -14,6 +14,7 @@ import {
 import { CodeWorkspace } from './components/CodeWorkspace';
 import { DesignLineagePanel } from './components/DesignLineagePanel';
 import { EngineeringWorkbench } from './components/EngineeringWorkbench';
+import { FeatureHistoryPanel } from './components/FeatureHistoryPanel';
 import { ManufacturePanel } from './components/ManufacturePanel';
 import { Viewport } from './components/Viewport';
 import { WorldSystemPanel } from './components/WorldSystemPanel';
@@ -118,13 +119,14 @@ function ComponentRow({ item, inserting, onInsert }: { item: ComponentPayload; i
   </div>;
 }
 
-function PropertiesPanel({ project, selectedPart, onProject, onOpenCode, onDelete }: { project: ProjectPayload | null; selectedPart: ProjectPayload['parts'][number] | null; onProject: (project: ProjectPayload) => void; onOpenCode: () => void; onDelete: () => void }) {
+function PropertiesPanel({ project, selectedPart, onProject, onRefresh, onOpenCode, onDelete }: { project: ProjectPayload | null; selectedPart: ProjectPayload['parts'][number] | null; onProject: (project: ProjectPayload) => void; onRefresh: () => void; onOpenCode: () => void; onDelete: () => void }) {
   const active = project?.branches.find((branch) => branch.active) ?? null;
   return <div className="properties-panel">
     <div className="panel-title"><div><strong>{selectedPart ? 'Object properties' : 'Design properties'}</strong><small>{selectedPart ? selectedPart.role : project?.active_branch ?? 'main'}</small></div></div>
     {selectedPart ? <>
       <div className="property-section"><div className="property-section-title">IDENTITY</div><dl className="property-grid"><dt>Name</dt><dd>{selectedPart.name}</dd><dt>Role</dt><dd>{selectedPart.role}</dd><dt>Source</dt><dd>{selectedPart.component_ref ?? 'Fabricated / imported'}</dd></dl></div>
       <div className="property-section"><div className="property-section-title">PHYSICAL</div><dl className="property-grid"><dt>Mass</dt><dd>{selectedPart.mass_g} g</dd><dt>Material</dt><dd>{selectedPart.material}</dd><dt>Geometry</dt><dd>{selectedPart.geometry_fidelity?.replaceAll('_', ' ') ?? 'CAD geometry'}</dd></dl></div>
+      {!selectedPart.component_ref && <div className="property-section property-feature-history"><div className="property-section-title">PARAMETRIC CAD</div><FeatureHistoryPanel objectId={selectedPart.id} onChanged={onRefresh}/></div>}
       {selectedPart.programmable_workspace_id && <div className="property-section"><button className="wide-action" onClick={onOpenCode}><Code2 size={13}/>Open embedded code</button></div>}
       <div className="property-section"><button className="wide-action danger-action" data-testid="delete-selected" onClick={onDelete}><Trash2 size={13}/>Delete object</button></div>
     </> : <div className="property-section"><div className="property-section-title">DOCUMENT</div><dl className="property-grid"><dt>Name</dt><dd>{project?.name ?? 'Untitled Design'}</dd><dt>Branch</dt><dd>{project?.active_branch ?? 'main'}</dd><dt>Objects</dt><dd>{project?.parts.length ?? 0}</dd><dt>BOM lines</dt><dd>{project?.bom?.length ?? 0}</dd><dt>Connections</dt><dd>{project?.connections?.length ?? 0}</dd></dl></div>}
@@ -543,7 +545,7 @@ export default function App() {
           <div className="search-control"><Search size={14}/><input aria-label="Search component library" value={componentQuery} onChange={(event) => setComponentQuery(event.target.value)} placeholder="Search manufacturer, model, category…"/></div>
           <div className="component-filters"><select aria-label="Component category" value={componentCategory} onChange={(event) => setComponentCategory(event.target.value)}><option value="">All categories</option>{registryStats?.categories.map((category) => <option value={category} key={category}>{category}</option>)}</select><input aria-label="Component voltage" value={componentVoltage} onChange={(event) => setComponentVoltage(event.target.value)} placeholder="Voltage" inputMode="decimal"/></div>
           <div className="result-count">{components.length} results</div><div className="component-results">{visibleComponents.map((item) => <ComponentRow key={item.id} item={item} inserting={insertingComponentId === item.id} onInsert={(id) => void insertLibraryComponent(id)}/>)}{visibleComponents.length < components.length && <button className="wide-action" onClick={() => setVisibleComponentCount((count) => Math.min(components.length, count + 80))}>Load 80 more</button>}</div>
-        </div> : rightTab === 'properties' ? <PropertiesPanel project={project} selectedPart={selectedPart} onProject={setProject} onOpenCode={openCodeForSelected} onDelete={() => void deleteSelected()}/> : rightTab === 'manufacture' ? <ManufacturePanel project={project} selectedId={selectedId} onSelectPart={setSelectedId} onDraftRedesign={(part) => {
+        </div> : rightTab === 'properties' ? <PropertiesPanel project={project} selectedPart={selectedPart} onProject={setProject} onRefresh={() => void refreshProject()} onOpenCode={openCodeForSelected} onDelete={() => void deleteSelected()}/> : rightTab === 'manufacture' ? <ManufacturePanel project={project} selectedId={selectedId} onSelectPart={setSelectedId} onDraftRedesign={(part) => {
           setSelectedId(part.id); setBrowserTab('copilot'); const warningText = part.warnings.map((warning) => warning.message).join(' '); setMessage(`Redesign "${part.name}" so it can be manufactured reliably on my Bambu Lab P2S. Preserve its functional role and interfaces. ${warningText} If the part is too large, split it into printable bodies with alignment features and a mechanically sound joining strategy, then re-check the design against the P2S manufacturing constraints.`);
         }}/> : <EngineeringWorkbench mode="analysis" project={project} selectedId={selectedId} activeJob={latestCampaignJob} onProject={setProject} onStartSimulation={() => void startSimulation()} onStartCampaign={() => void startCampaign()} onJobStarted={acceptJobSnapshot}/>} 
       </aside>
