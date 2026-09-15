@@ -21,6 +21,7 @@ from ..desktop_entry import app
 from ..engineering_state import PROJECT
 from ..v110 import core
 from ..v200 import structural_fea
+from . import MILESTONE_VERSION
 
 
 def _ok(response, label: str):
@@ -265,7 +266,7 @@ def run() -> dict[str, object]:
 
         v6 = _ok(client.get("/v6/health"), "v6 milestone health").json()
         assert v6["api_version"] == "6.0", v6
-        assert v6["engine_version"] == "6.0.0", v6
+        assert v6["engine_version"] == MILESTONE_VERSION, v6
         assert isinstance(v6["release_complete"], bool), v6
         assert v6["validation_truth"]["real_hardware_validation_complete"] is False, v6
         assert v6["assembly_constraints"]["ok"] is True, v6
