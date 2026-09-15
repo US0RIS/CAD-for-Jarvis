@@ -91,6 +91,7 @@ def run() -> dict[str, object]:
             "diagnosis": "Bench interference is consistent with excessive coupon thickness; reducing the authorized thickness is a hypothesis to test, not a proven cause.",
         }), "begin milestone 5 physical redesign cycle").json()
         assert begun["ok"] is True, begun
+        assert begun["graph_sync"]["ok"] is True, begun
         cycle = begun["cycle"]
         cycle_id = str(cycle["id"])
         redesign_branch = str(cycle["redesign_branch"])
@@ -107,6 +108,7 @@ def run() -> dict[str, object]:
         assert cycle["failure_assessment"]["causality_status"] == "unproven_hypothesis", cycle
         assert cycle["failure_assessment"]["observation_evidence_id"] == failed_id, cycle
         assert cycle["test_criteria"][0]["measurement"] == "clearance", cycle
+        assert cycle["test_criteria"][0]["object_id"] == object_id, cycle
         assert core.DESIGNS[redesign_branch]["physical_verified"] is False
         assert core.DESIGNS[redesign_branch]["physical_status"] == "pending_retest"
 
@@ -137,6 +139,8 @@ def run() -> dict[str, object]:
             "method": "bench caliper + fixture inspection",
             "note": "This result must be rejected because CAD changed after the retest plan was bound.",
             "measurements": [{"name": "clearance", "value": 0.5, "unit": "mm", "tolerance": 0.2}],
+            "instrument": "Mitutoyo 500-196-30",
+            "confidence": 0.98,
         })
         assert wrong_revision.status_code == 409, wrong_revision.text
         assert "changed after the retest cycle began" in wrong_revision.text, wrong_revision.text
@@ -178,14 +182,18 @@ def run() -> dict[str, object]:
         assert "contradicts criterion-derived status 'failed'" in contradictory_pass.text, contradictory_pass.text
         after_rejections = _ok(client.get("/v2/evidence"), "verify rejected results wrote no evidence").json()
         assert after_rejections["count"] == evidence_count_before_rejected_results, after_rejections
+        assert len(core.PROJECT.get("inspections") or []) == 0, core.PROJECT.get("inspections")
 
         completed = _ok(client.post(f"/v6/physical/retest-cycles/{cycle_id}/complete", json={
             "status": "passed",
             "method": "bench caliper + fixture inspection",
             "note": "Redesigned prototype clears the mating fixture.",
             "measurements": [{"name": "clearance", "value": 0.5, "unit": "mm", "tolerance": 0.2}],
+            "instrument": "Mitutoyo 500-196-30",
+            "confidence": 0.98,
         }), "complete milestone 5 retest").json()
         assert completed["ok"] is True, completed
+        assert completed["graph_sync"]["ok"] is True, completed
         assert completed["cycle"]["status"] == "retest_passed", completed
         assert completed["cycle"]["derived_retest_status"] == "passed", completed
         assert completed["derived_retest_status"] == "passed", completed
@@ -195,26 +203,56 @@ def run() -> dict[str, object]:
         assert completed["entire_design_physically_verified"] is False, completed
         assert core.DESIGNS[redesign_branch]["physical_verified"] is False
         assert requirement_id in core.DESIGNS[redesign_branch]["physically_verified_requirement_ids"]
+        assert len(completed["inspections"]) == 1, completed
+        inspection = completed["inspections"][0]
+        inspection_id = str(inspection["record"]["id"])
+        assert inspection_id in completed["cycle"]["inspection_ids"], completed
+        assert inspection["record"]["object_id"] == object_id, inspection
+        assert inspection["record"]["metric"] == "clearance", inspection
+        assert inspection["record"]["instrument"] == "Mitutoyo 500-196-30", inspection
+        assert abs(float(inspection["record"]["confidence"]) - 0.98) < 1e-12, inspection
+        assert inspection["record"]["metadata"]["design_fingerprint"] == redesign_fingerprint, inspection
+        assert inspection["record"]["metadata"]["cycle_id"] == cycle_id, inspection
+        assert design_fingerprint() == redesign_fingerprint
         passed_id = str(completed["evidence"]["id"])
+
+        # The accepted physical measurement is also a first-class graph observation
+        # of the exact CAD identity, not an M5-only notebook record.
+        graph = _ok(client.get("/v3.1/graph"), "read graph after physical retest").json()
+        inspection_node = next(
+            row for row in graph["nodes"]
+            if row["kind"] == "inspection" and str(row.get("source_id")) == inspection_id
+        )
+        assert inspection_node["properties"]["metric"] == "clearance", inspection_node
+        assert inspection_node["properties"]["metadata"]["cycle_id"] == cycle_id, inspection_node
+        assert inspection_node["properties"]["metadata"]["design_fingerprint"] == redesign_fingerprint, inspection_node
+        assert any(
+            edge["kind"] == "observes"
+            and edge["from_id"] == inspection_node["id"]
+            and edge["to_id"] == f"cad:{object_id}"
+            for edge in graph["edges"]
+        ), graph["edges"]
 
         current_evidence = _ok(client.get("/v2/evidence"), "read completed redesign evidence").json()
         old_row = next(row for row in current_evidence["items"] if row["id"] == failed_id)
         new_row = next(row for row in current_evidence["items"] if row["id"] == passed_id)
         assert old_row["applies_to_current_design"] is False, old_row
         assert new_row["applies_to_current_design"] is True, new_row
+        assert inspection["evidence"]["id"] in new_row["evidence_ids"], new_row
 
         completed_lineage = _ok(client.get("/v6/physical/retest-lineage"), "read completed lineage").json()
         assert next(row for row in completed_lineage["items"] if row["branch"] == source_branch)["cycle_status"][cycle_id] == "retest_passed"
         assert next(row for row in completed_lineage["items"] if row["branch"] == redesign_branch)["cycle_status"][cycle_id] == "retest_passed"
 
         # The source branch still retains the exact failed prototype evidence and
-        # does not inherit the redesign's passing retest.
+        # does not inherit the redesign's passing retest or inspection observation.
         core.switch_branch(source_branch)
         assert design_fingerprint() == source_fingerprint
         source_again = _ok(client.get("/v2/evidence"), "revisit failed source revision").json()
         failed_again = next(row for row in source_again["items"] if row["id"] == failed_id)
         assert failed_again["applies_to_current_design"] is True, failed_again
         assert all(row["id"] != passed_id for row in source_again["items"]), source_again
+        assert not any(str(row.get("id")) == inspection_id for row in core.PROJECT.get("inspections") or [])
         assert abs(float(core.object_by_id(object_id)["params"]["z"]) - 10.0) < 1e-12
         source_lineage_again = _ok(client.get("/v6/physical/retest-lineage"), "revisit source branch lineage").json()
         source_link = next(row for row in source_lineage_again["items"] if row["branch"] == source_branch)
@@ -226,11 +264,12 @@ def run() -> dict[str, object]:
         assert listed["count"] == 1, listed
         assert listed["items"][0]["status"] == "retest_passed", listed
         assert listed["design_fingerprint"] == redesign_fingerprint, listed
+        assert any(str(row.get("id")) == inspection_id for row in core.PROJECT.get("inspections") or [])
 
         return {
             "ok": True,
             "milestone": 5,
-            "slice": "revision_bound_physical_failure_redesign_objective_retest",
+            "slice": "revision_bound_physical_failure_redesign_objective_retest_graph_observation",
             "failed_evidence_bound_to_source_revision": True,
             "redesign_makes_source_failure_stale": True,
             "wrong_revision_retest_rejected": True,
@@ -239,6 +278,8 @@ def run() -> dict[str, object]:
             "contradictory_pass_rejected": True,
             "rejected_results_write_no_evidence": True,
             "criterion_derived_pass_bound_to_redesign_revision": True,
+            "accepted_measurement_projected_to_engineering_graph": True,
+            "inspection_instrument_and_confidence_preserved": True,
             "causal_hypothesis_not_overclaimed": True,
             "cross_branch_retest_lineage_preserved": True,
             "source_branch_failure_preserved": True,
