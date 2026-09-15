@@ -60,7 +60,7 @@ async function setupMechanism(request: APIRequestContext) {
   return { baseId, armId, payloadId };
 }
 
-test('6.1 Analyze simulates a joint sweep, propagates the payload, emits viewport playback, and leaves canonical pose unchanged', async ({ page, request }) => {
+test('6.1 Analyze executes joint playback and 3D thermal field evidence without mutating canonical pose', async ({ page, request }) => {
   const { armId, payloadId } = await setupMechanism(request);
 
   const graphResponse = await request.get(`${engineUrl}/v6/simulation/assembly/graph`, { headers });
@@ -117,8 +117,21 @@ test('6.1 Analyze simulates a joint sweep, propagates the payload, emits viewpor
   await expect(page.getByTestId('simulation-results')).toContainText('multibody_motion');
   await expect(page.getByTestId('simulation-results')).toContainText('CURRENT');
 
-  // A sweep is a simulation preview, not a design edit. The canonical scene remains
-  // at the original pose after playback finishes.
+  const thermal = page.getByTestId('thermal-field-workspace');
+  await expect(thermal).toBeVisible();
+  await page.getByLabel('Thermal field part').selectOption({ label: 'Simulation Base' });
+  await page.getByLabel('Thermal field heat').fill('5');
+  await page.getByLabel('Thermal field duration').fill('0.05');
+  await page.getByLabel('Thermal field timestep').fill('0.01');
+  await page.getByLabel('Thermal field grid x').fill('4');
+  await page.getByLabel('Thermal field grid y').fill('4');
+  await page.getByLabel('Thermal field grid z').fill('4');
+  await thermal.getByRole('button', { name: 'Run 3D thermal field' }).click();
+  const thermalResult = page.getByTestId('thermal-field-result');
+  await expect(thermalResult).toBeVisible({ timeout: 30_000 });
+  await expect(thermalResult).toContainText('4×4×4');
+
+  // Simulation previews and field solves are evidence only; neither is a design edit.
   const sceneAfterResponse = await request.get(`${engineUrl}/v2/scene`, { headers });
   expect(sceneAfterResponse.ok()).toBeTruthy();
   const sceneAfter = await sceneAfterResponse.json() as typeof sceneBefore;
