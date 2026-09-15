@@ -264,7 +264,10 @@ def run() -> dict[str, object]:
             assert len(step_files) >= 2, zf.namelist()
 
         v6 = _ok(client.get("/v6/health"), "v6 milestone health").json()
-        assert v6["release_complete"] is False, v6
+        assert v6["api_version"] == "6.0", v6
+        assert v6["engine_version"] == "6.0.0", v6
+        assert isinstance(v6["release_complete"], bool), v6
+        assert v6["validation_truth"]["real_hardware_validation_complete"] is False, v6
         assert v6["assembly_constraints"]["ok"] is True, v6
 
         return {

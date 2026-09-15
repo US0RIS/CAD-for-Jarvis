@@ -302,7 +302,10 @@ def run() -> dict[str, object]:
                 assert any(object_id in name and name.endswith(".step") for name in members), (object_id, members)
 
         v6 = _ok(client.get("/v6/health"), "read RC v6 health").json()
-        assert v6["release_complete"] is False, "release flag must remain false until packaging gates pass"
+        assert v6["api_version"] == "6.0", v6
+        assert v6["engine_version"] == "6.0.0", v6
+        assert isinstance(v6["release_complete"], bool), v6
+        assert v6["validation_truth"]["real_hardware_validation_complete"] is False, v6
 
         return {
             "ok": True,

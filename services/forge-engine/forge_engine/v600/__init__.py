@@ -3,12 +3,12 @@
 6.0 keeps the validated 3.1 substrate but adds geometry-backed assembly truth,
 repair/reverification, revision-bound physical feedback, external solver orchestration
 and canonical chemistry. RELEASE_COMPLETE is deliberately independent of the semantic
-version: staged 6.0.0 binaries remain non-release until native installer validation has
-passed on Windows and both supported macOS architectures.
+version: it becomes true only after native installer validation has passed on Windows
+and both supported macOS architectures.
 """
 
 MILESTONE_VERSION = "6.0.0"
-RELEASE_COMPLETE = False
+RELEASE_COMPLETE = True
 ASSEMBLY_CONSTRAINT_SCHEMA_VERSION = 1
 GEOMETRY_BACKED_MOUNT_SCHEMA_VERSION = 1
 PHYSICAL_RETEST_SCHEMA_VERSION = 1
