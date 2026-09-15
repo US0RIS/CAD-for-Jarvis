@@ -130,3 +130,57 @@ test('Copilot preserves the draft and explains the problem when the local model 
   await expect(page.getByText(/Local AI is unavailable/).first()).toBeVisible();
   expect(submittedJobs).toBe(0);
 });
+
+test('an engineering job cannot overwrite a running Copilot job in the UI', async ({ page, request }) => {
+  await resetWithPi(request);
+  let submittedJobs = 0;
+
+  await page.route('**/v2/runtime', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ engine: 'ready', scene: 'ready', ollama: 'ready', configured_model: 'ux-test-model', resolved_model: 'ux-test-model', api_version: '2' }),
+    });
+  });
+  await page.route('**/v2/jobs', async (route) => {
+    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    const input = route.request().postDataJSON() as { kind?: string };
+    submittedJobs += 1;
+    const kind = input.kind ?? 'simulation';
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: `ux-${kind}-${submittedJobs}`,
+        kind,
+        state: 'queued',
+        created_at: new Date(Date.now() + submittedJobs).toISOString(),
+        progress: 0,
+        message: `${kind} queued independently`,
+        branch: 'main',
+        selected_object_id: null,
+        assistant_text: '',
+        result: {},
+        error: null,
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.object-row')).toHaveCount(1, { timeout: 30_000 });
+  await page.getByRole('button', { name: 'Copilot', exact: true }).click();
+  const prompt = page.getByRole('textbox', { name: 'Copilot request' });
+  await prompt.fill('keep the agent busy');
+  await prompt.press('Enter');
+  await expect(page.getByTestId('agent-status')).toContainText('Request queued');
+  await expect(page.getByTestId('send-button')).toBeDisabled();
+
+  await page.getByRole('button', { name: 'Dynamics', exact: true }).click();
+  await expect(page.getByTestId('simulation-job-status')).toContainText('Dynamics simulation');
+  await expect(page.getByTestId('simulation-job-status')).toContainText('Queued');
+  expect(submittedJobs).toBe(2);
+
+  await page.getByRole('button', { name: 'Copilot', exact: true }).click();
+  await expect(page.getByTestId('agent-status')).toContainText('Request queued');
+  await expect(page.getByTestId('send-button')).toBeDisabled();
+});
