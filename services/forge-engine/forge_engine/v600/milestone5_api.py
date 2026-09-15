@@ -16,6 +16,15 @@ from .physical_artifacts import (
     set_artifact_contract,
     submit_artifacts,
 )
+from .physical_metrology import (
+    MetrologyContractRequest,
+    MetrologySubmissionRequest,
+    assert_metrology_contract_satisfied,
+    link_metrology_to_inspections,
+    physical_metrology,
+    set_metrology_contract,
+    submit_metrology,
+)
 from .physical_retest import (
     BeginPhysicalRetestCycleRequest,
     CompletePhysicalRetestRequest,
@@ -67,8 +76,7 @@ def install(
                 raise ValueError("Engineering graph is required for physical artifact evidence")
             if sync_graph is not None:
                 sync_graph(reason="v600_physical_artifact_presubmit")
-            result = submit_artifacts(cycle_id, request, graph)
-            return result
+            return submit_artifacts(cycle_id, request, graph)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Unknown retest/engineering identity: {exc.args[0]}") from exc
         except ValueError as exc:
@@ -78,6 +86,32 @@ def install(
     async def list_retest_artifacts(cycle_id: str) -> dict[str, Any]:
         return physical_test_artifacts(cycle_id)
 
+    @app.post("/v6/physical/retest-cycles/{cycle_id}/metrology-contract", dependencies=[Depends(require_session)])
+    async def lock_metrology_contract(cycle_id: str, request: MetrologyContractRequest) -> dict[str, Any]:
+        try:
+            return set_metrology_contract(cycle_id, request)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown retest identity: {exc.args[0]}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/v6/physical/retest-cycles/{cycle_id}/metrology", dependencies=[Depends(require_session)])
+    async def submit_retest_metrology(cycle_id: str, request: MetrologySubmissionRequest) -> dict[str, Any]:
+        try:
+            if graph is None:
+                raise ValueError("Engineering graph is required for physical metrology evidence")
+            if sync_graph is not None:
+                sync_graph(reason="v600_physical_metrology_presubmit")
+            return submit_metrology(cycle_id, request, graph)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown retest/engineering identity: {exc.args[0]}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/v6/physical/retest-cycles/{cycle_id}/metrology", dependencies=[Depends(require_session)])
+    async def list_retest_metrology(cycle_id: str) -> dict[str, Any]:
+        return physical_metrology(cycle_id)
+
     @app.post("/v6/physical/retest-cycles/{cycle_id}/complete", dependencies=[Depends(require_session)])
     async def complete_retest(cycle_id: str, request: CompletePhysicalRetestRequest) -> dict[str, Any]:
         try:
@@ -85,16 +119,19 @@ def install(
             cycle = next((row for row in cycle_rows if str(row.get("id")) == cycle_id), None)
             if cycle is None:
                 raise KeyError(cycle_id)
-            # Artifact contracts are additive. A cycle created before this feature,
-            # or a cycle that deliberately has no artifact contract, must preserve
-            # the original physical-retest fingerprint checks and error semantics.
+            # Artifact and metrology contracts are additive. Cycles without them
+            # preserve the previously validated exact-fingerprint completion path.
             if cycle.get("artifact_requirements"):
                 artifacts = assert_artifact_contract_satisfied(cycle_id)
             else:
                 artifacts = physical_test_artifacts(cycle_id)["items"]
-            artifact_evidence = artifact_evidence_ids(cycle_id)
+            metrology = assert_metrology_contract_satisfied(cycle_id, request.measurements)
+            extra_evidence = [
+                *artifact_evidence_ids(cycle_id),
+                *[str(row) for row in metrology.get("evidence_ids") or []],
+            ]
             effective_request = request.model_copy(
-                update={"evidence_ids": [*request.evidence_ids, *[row for row in artifact_evidence if row not in request.evidence_ids]]}
+                update={"evidence_ids": [*request.evidence_ids, *[row for row in extra_evidence if row not in request.evidence_ids]]}
             )
             if sync_graph is not None:
                 sync_graph(reason="v600_physical_retest_precomplete")
@@ -104,6 +141,11 @@ def install(
                 result["artifacts"] = link_cycle_artifacts_to_inspections(cycle_id, inspection_ids, graph)
             else:
                 result["artifacts"] = artifacts
+            if metrology.get("required") and graph is not None:
+                result["metrology_records"] = link_metrology_to_inspections(cycle_id, inspection_ids, graph)
+            else:
+                result["metrology_records"] = physical_metrology(cycle_id)["items"]
+            result["metrology_evaluation"] = metrology
             if sync_graph is not None:
                 result["graph_sync"] = sync_graph(reason="v600_physical_retest_complete")
             return result
