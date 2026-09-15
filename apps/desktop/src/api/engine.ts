@@ -172,15 +172,43 @@ export async function engineConnection(): Promise<ForgeEngineConnection> {
   return cachedConnection;
 }
 
+function detailMessage(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (Array.isArray(value)) {
+    const rows = value.map((row) => {
+      if (typeof row === 'string') return row;
+      if (row && typeof row === 'object' && 'msg' in row) return String((row as { msg?: unknown }).msg ?? '');
+      return '';
+    }).filter(Boolean);
+    return rows.length ? rows.join('; ') : null;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return detailMessage(record.detail) ?? detailMessage(record.message) ?? detailMessage(record.error);
+  }
+  return null;
+}
+
+async function responseError(response: Response): Promise<Error> {
+  const fallback = `Forge Engine request failed (HTTP ${response.status})`;
+  const text = await response.text();
+  if (!text.trim()) return new Error(fallback);
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const detail = detailMessage(parsed);
+    return new Error(detail ? `${detail} (HTTP ${response.status})` : fallback);
+  } catch {
+    const compact = text.replace(/\s+/g, ' ').trim();
+    return new Error(compact ? `${compact} (HTTP ${response.status})` : fallback);
+  }
+}
+
 async function rawFetchWithConnection(connection: ForgeEngineConnection, path: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('X-ForgeCAD-Session', connection.sessionToken);
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(`${connection.baseUrl}${path}`, { ...init, headers });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Forge Engine ${response.status}: ${detail}`);
-  }
+  if (!response.ok) throw await responseError(response);
   return response;
 }
 
@@ -256,7 +284,6 @@ export function fetchComponents(query = '', category?: string, voltage?: number)
   const serial = ++componentRequestSerial;
   const request = engineFetch<ComponentSearchResult>(`/v2/components?${params.toString()}`, { signal: AbortSignal.timeout(20_000) });
   latestComponentRequest = request;
-
   return request.then(async (result) => {
     if (serial === componentRequestSerial) return result;
     const latest = latestComponentRequest;
@@ -296,6 +323,9 @@ export async function executeOperation(op: string, args: Record<string, unknown>
   invalidateProjectRequests();
   publishLocalEngineEvent({ type: 'project.updated', project: result.project });
   return result;
+}
+export async function deleteObject(id: string, reason = 'Delete selected object') {
+  return executeOperation('delete', { id }, reason);
 }
 export async function newProject() {
   const result = await executeOperation('new_project', {}, 'Create blank design');
