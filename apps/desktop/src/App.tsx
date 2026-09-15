@@ -39,6 +39,13 @@ function formatElapsed(seconds: number) {
   return minutes ? `${minutes}:${String(remainder).padStart(2, '0')}` : `${remainder}s`;
 }
 function messageOf(error: unknown) { return error instanceof Error ? error.message : String(error); }
+function engineeringJobLabel(job: JobPayload) {
+  if (job.kind === 'campaign') return 'Variant campaign';
+  if (job.kind === 'simulation') return 'Dynamics simulation';
+  if (job.kind === 'deploy') return 'Deployment';
+  if (job.kind === 'component-search') return 'Component search';
+  return job.kind.replaceAll('-', ' ');
+}
 
 function RuntimeStatus({ runtime, error }: { runtime: RuntimePayload | null; error: string | null }) {
   const good = !error && runtime?.engine === 'ready';
@@ -124,13 +131,21 @@ function PropertiesPanel({ project, selectedPart, onOpenCode, onDelete }: { proj
   </div>;
 }
 
-function BottomContent({ tab, project, workspaceId, runtime, activeJob, selectedObjectId, onAskCopilot }: {
-  tab: BottomTab; project: ProjectPayload | null; workspaceId: string | null; runtime: RuntimePayload | null; activeJob: JobPayload | null; selectedObjectId: string | null;
+function BottomContent({ tab, project, workspaceId, runtime, engineeringJobs, selectedObjectId, onAskCopilot, onCancelJob }: {
+  tab: BottomTab; project: ProjectPayload | null; workspaceId: string | null; runtime: RuntimePayload | null; engineeringJobs: JobPayload[]; selectedObjectId: string | null;
   onAskCopilot: (workspaceId: string, path: string) => void;
+  onCancelJob: (job: JobPayload) => void;
 }) {
   if (tab === 'code') return workspaceId ? <CodeWorkspace workspaceId={workspaceId} onAskCopilot={onAskCopilot}/> : <div className="dock-empty"><Code2 size={18}/><span>Select a programmable component and choose “Open embedded code.”</span></div>;
   if (tab === 'history') return <div className="history-panel">{project?.history.length ? project.history.slice().reverse().map((item, index) => <div className="history-row" key={`${item.time}-${index}`}><span>{item.branch}</span><strong>{item.message}</strong><small>{item.actor}</small></div>) : <div className="dock-empty"><History size={18}/><span>No design operations yet.</span></div>}</div>;
-  if (tab === 'simulations') return <div className="dock-empty"><Activity size={18}/><strong>Simulation jobs</strong><span>{activeJob?.kind === 'simulation' ? `${activeJob.state}: ${activeJob.message ?? ''}` : 'Run Dynamics after geometry is present.'}</span></div>;
+  if (tab === 'simulations') return engineeringJobs.length ? <div className="history-panel" data-testid="simulation-job-status">
+    {engineeringJobs.slice(0, 12).map((job) => <div className="history-row" key={job.id}>
+      <span>{engineeringJobLabel(job)}</span>
+      <strong>{jobStateLabels[job.state]}{job.progress != null ? ` · ${Math.round(Math.max(0, Math.min(1, job.progress)) * 100)}%` : ''}</strong>
+      <small>{job.message || job.branch || 'Forge Engine job'}</small>
+      {!terminalStates.has(job.state) && <button className="editor-action" onClick={() => onCancelJob(job)}>Cancel</button>}
+    </div>)}
+  </div> : <div className="dock-empty" data-testid="simulation-job-status"><Activity size={18}/><strong>Simulation & campaign jobs</strong><span>Run Dynamics or a variant campaign after geometry is present.</span></div>;
   return <WorldSystemPanel selectedObjectId={selectedObjectId}/>;
 }
 
@@ -156,7 +171,8 @@ export default function App() {
   const [sceneReady, setSceneReady] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [activeJob, setActiveJob] = useState<JobPayload | null>(null);
+  const [jobsById, setJobsById] = useState<Record<string, JobPayload>>({});
+  const [activeAgentJobId, setActiveAgentJobId] = useState<string | null>(null);
   const [streamText, setStreamText] = useState('');
   const [submittingAgent, setSubmittingAgent] = useState(false);
   const [agentSubmitError, setAgentSubmitError] = useState<string | null>(null);
@@ -174,19 +190,24 @@ export default function App() {
 
   const selectedPart = useMemo(() => project?.parts.find((part) => part.id === selectedId) ?? null, [project, selectedId]);
   const workspaceId = openWorkspaceId;
-  const jobBusy = Boolean(activeJob && !terminalStates.has(activeJob.state));
-  const activeAgentJob = activeJob?.kind === 'agent' ? activeJob : null;
-  const statusJob = activeJob && (activeJob.kind === 'agent' || !terminalStates.has(activeJob.state)) ? activeJob : null;
+  const activeAgentJob = activeAgentJobId ? jobsById[activeAgentJobId] ?? null : null;
+  const engineeringJobs = useMemo(() => Object.values(jobsById)
+    .filter((job) => job.kind !== 'agent')
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)), [jobsById]);
+  const engineeringWorkingJob = engineeringJobs.find((job) => !terminalStates.has(job.state)) ?? null;
+  const latestCampaignJob = engineeringJobs.find((job) => job.kind === 'campaign') ?? null;
+  const statusJob = activeAgentJob;
   const copilotBusy = submittingAgent || Boolean(activeAgentJob && !terminalStates.has(activeAgentJob.state));
   const hasGeometry = Boolean(project?.parts.length);
   const sceneRevision = project ? `${project.active_branch}:${project.revision}` : 'loading';
   const visibleComponents = useMemo(() => components.slice(0, visibleComponentCount), [components, visibleComponentCount]);
   const statusWorking = submittingAgent || Boolean(statusJob && !terminalStates.has(statusJob.state));
   const statusProgress = submittingAgent ? 0.04 : Math.max(0, Math.min(1, statusJob?.progress ?? 0));
+  const globalWorking = statusWorking || Boolean(engineeringWorkingJob);
   const aiUnavailable = runtime?.ollama === 'offline' || runtime?.ollama === 'failed';
   const modelHealthLabel = runtime?.ollama === 'ready' ? 'AI ready' : runtime?.ollama === 'warming' ? 'AI warming' : runtime?.ollama === 'checking' || !runtime ? 'Checking AI' : 'AI unavailable';
   const agentTone = agentSubmitError || statusJob?.state === 'failed' ? 'error' : statusJob?.state === 'completed' ? 'done' : statusWorking ? 'working' : 'idle';
-  const agentTitle = agentSubmitError ? 'Could not start task' : submittingAgent ? 'Sending request' : statusJob?.kind && statusJob.kind !== 'agent' && !terminalStates.has(statusJob.state) ? `${statusJob.kind.replaceAll('-', ' ')} running` : statusJob ? ({ queued: 'Request queued', warming: 'Starting local AI', planning: 'Planning the design', applying: 'Applying design changes', analyzing: 'Analyzing the design', verifying: 'Verifying the result', completed: 'Task complete', failed: 'Task failed', cancelled: 'Task cancelled' } as Record<JobPayload['state'], string>)[statusJob.state] : aiUnavailable ? 'Local AI unavailable' : 'Ready for a task';
+  const agentTitle = agentSubmitError ? 'Could not start task' : submittingAgent ? 'Sending request' : statusJob ? ({ queued: 'Request queued', warming: 'Starting local AI', planning: 'Planning the design', applying: 'Applying design changes', analyzing: 'Analyzing the design', verifying: 'Verifying the result', completed: 'Task complete', failed: 'Task failed', cancelled: 'Task cancelled' } as Record<JobPayload['state'], string>)[statusJob.state] : aiUnavailable ? 'Local AI unavailable' : 'Ready for a task';
   const agentDetail = agentSubmitError ?? (submittingAgent ? 'Creating an engineering job and handing it to Forge Engine…' : statusJob?.message ?? (aiUnavailable ? `Forge Engine is ready, but ${runtime?.configured_model ?? 'the configured model'} is not currently available in Ollama. Start Ollama and install/start that model, then retry.` : 'Ready to inspect or modify the active design.'));
 
   useEffect(() => {
@@ -207,24 +228,27 @@ export default function App() {
   }, []);
 
   const acceptJobSnapshot = useCallback((job: JobPayload) => {
-    setActiveJob(job);
+    setJobsById((current) => ({ ...current, [job.id]: job }));
     if (job.kind === 'agent') {
+      setActiveAgentJobId(job.id);
       if (!terminalStates.has(job.state)) activeAgentJobIdRef.current = job.id;
+      else if (activeAgentJobIdRef.current === job.id) activeAgentJobIdRef.current = null;
       setSubmittingAgent(false);
       setAgentSubmitError(null);
     }
     if (!terminalStates.has(job.state) || handledJobs.current.has(job.id)) return;
     handledJobs.current.add(job.id);
-    if (job.kind === 'agent' && activeAgentJobIdRef.current === job.id) activeAgentJobIdRef.current = null;
-    if (job.state === 'completed') {
-      const text = job.assistant_text.trim();
-      if (text) setChat((items) => [...items, { role: 'agent', text }]);
-    } else if (job.state === 'failed') {
-      setChat((items) => [...items, { role: 'agent', text: `Engineering job failed: ${job.error?.message ?? job.message ?? 'Unknown local-engine error'}` }]);
-    } else if (job.state === 'cancelled' && job.kind === 'agent') {
-      setChat((items) => [...items, { role: 'agent', text: 'Task cancelled.' }]);
+    if (job.kind === 'agent') {
+      if (job.state === 'completed') {
+        const text = job.assistant_text.trim();
+        if (text) setChat((items) => [...items, { role: 'agent', text }]);
+      } else if (job.state === 'failed') {
+        setChat((items) => [...items, { role: 'agent', text: `Engineering job failed: ${job.error?.message ?? job.message ?? 'Unknown local-engine error'}` }]);
+      } else if (job.state === 'cancelled') {
+        setChat((items) => [...items, { role: 'agent', text: 'Task cancelled.' }]);
+      }
+      setStreamText('');
     }
-    setStreamText('');
     void refreshProject();
   }, [refreshProject]);
 
@@ -258,11 +282,13 @@ export default function App() {
   }, [acceptJobSnapshot]);
 
   useEffect(() => {
-    if (!activeJob || terminalStates.has(activeJob.state)) return;
-    const jobId = activeJob.id;
-    const poll = window.setInterval(() => void fetchJob(jobId).then(acceptJobSnapshot).catch(() => undefined), 900);
+    const ids = Object.values(jobsById).filter((job) => !terminalStates.has(job.state)).map((job) => job.id);
+    if (!ids.length) return;
+    const poll = window.setInterval(() => {
+      ids.forEach((jobId) => void fetchJob(jobId).then(acceptJobSnapshot).catch(() => undefined));
+    }, 900);
     return () => window.clearInterval(poll);
-  }, [activeJob?.id, activeJob?.state, acceptJobSnapshot]);
+  }, [jobsById, acceptJobSnapshot]);
 
   useEffect(() => {
     if (!agentStartedAt || !statusWorking) return;
@@ -286,7 +312,7 @@ export default function App() {
   }, [componentQuery, componentCategory, componentVoltage, componentCatalogRevision]);
 
   useEffect(() => setSceneReady(false), [sceneRevision]);
-  useEffect(() => { const node = conversationRef.current; if (node) node.scrollTop = node.scrollHeight; }, [chat, streamText, activeJob?.state, submittingAgent]);
+  useEffect(() => { const node = conversationRef.current; if (node) node.scrollTop = node.scrollHeight; }, [chat, streamText, activeAgentJob?.state, submittingAgent]);
 
   const deleteSelected = useCallback(async () => {
     const id = selectedId;
@@ -341,18 +367,21 @@ export default function App() {
       activeAgentJobIdRef.current = job.id;
       setChat((items) => [...items, { role: 'user', text: trimmed }]);
       setMessage('');
-      setActiveJob(job);
+      acceptJobSnapshot(job);
     } catch (error) {
       const detail = messageOf(error);
       setAgentSubmitError(detail);
       setAgentStartedAt(null);
     } finally { setSubmittingAgent(false); }
-  }, [aiUnavailable, copilotBusy, project?.active_branch, runtime?.configured_model, selectedId]);
+  }, [aiUnavailable, acceptJobSnapshot, copilotBusy, project?.active_branch, runtime?.configured_model, selectedId]);
 
-  async function cancelActiveJob() {
-    if (!activeJob || terminalStates.has(activeJob.state)) return;
-    try { acceptJobSnapshot(await engineFetch<JobPayload>(`/v2/jobs/${encodeURIComponent(activeJob.id)}/cancel`, { method: 'POST' })); }
-    catch (error) { setAgentSubmitError(messageOf(error)); }
+  async function cancelJob(job: JobPayload) {
+    if (terminalStates.has(job.state)) return;
+    try { acceptJobSnapshot(await engineFetch<JobPayload>(`/v2/jobs/${encodeURIComponent(job.id)}/cancel`, { method: 'POST' })); }
+    catch (error) {
+      if (job.kind === 'agent') setAgentSubmitError(messageOf(error));
+      else setActionError(messageOf(error));
+    }
   }
   async function switchBranch(name: string) {
     if (name === project?.active_branch) return;
@@ -416,12 +445,12 @@ export default function App() {
   async function startSimulation() {
     if (!hasGeometry) return;
     setBottomTab('simulations');
-    try { setActiveJob(await createJob({ kind: 'simulation', selected_object_id: selectedId, ...(project?.active_branch ? { branch: project.active_branch } : {}) })); }
+    try { acceptJobSnapshot(await createJob({ kind: 'simulation', selected_object_id: selectedId, ...(project?.active_branch ? { branch: project.active_branch } : {}) })); }
     catch (error) { setActionError(messageOf(error)); }
   }
   async function startCampaign() {
     if (!hasGeometry) return;
-    try { setActiveJob(await createJob({ kind: 'campaign', selected_object_id: selectedId, ...(project?.active_branch ? { branch: project.active_branch } : {}) })); setBottomTab('simulations'); }
+    try { acceptJobSnapshot(await createJob({ kind: 'campaign', selected_object_id: selectedId, ...(project?.active_branch ? { branch: project.active_branch } : {}) })); setBottomTab('simulations'); }
     catch (error) { setActionError(messageOf(error)); }
   }
   function openCodeForSelected() {
@@ -441,7 +470,7 @@ export default function App() {
       <div className="wordmark"><span className="wordmark-icon">F</span><strong>ForgeCAD</strong></div>
       <div className="doc-tab"><FileText size={13}/><span>{project?.name ?? 'Opening…'}</span><small>{project?.active_branch ?? ''}</small></div>
       <div className="app-bar-spacer"/>
-      {statusWorking && <button className="agent-global-status" data-testid="agent-global-status" onClick={() => setBrowserTab('copilot')} title="Open Copilot activity"><Activity size={12} className="agent-spin"/>Agent working · {agentTitle}</button>}
+      {globalWorking && <button className="agent-global-status" data-testid="agent-global-status" onClick={() => { if (statusWorking) setBrowserTab('copilot'); else setBottomTab('simulations'); }} title={statusWorking ? 'Open Copilot activity' : 'Open engineering job activity'}><Activity size={12} className="agent-spin"/>{statusWorking ? `Agent working · ${agentTitle}` : engineeringWorkingJob ? `${engineeringJobLabel(engineeringWorkingJob)} · ${jobStateLabels[engineeringWorkingJob.state]}` : 'Engineering job running'}</button>}
       <RuntimeStatus runtime={runtime} error={startupError}/>
       <button className="toolbar-button" onClick={() => void createBlankProject()} disabled={newBusy}><Plus size={14}/>New</button>
       <button className="toolbar-button" data-testid="open-focad" onClick={() => focadInput.current?.click()} title="Open a portable ForgeCAD design"><Upload size={14}/>Open .focad</button>
@@ -466,11 +495,11 @@ export default function App() {
             <div className="agent-status-row"><span className="agent-status-icon">{statusWorking ? <Activity size={14} className="agent-spin"/> : agentTone === 'done' ? <Check size={14}/> : agentTone === 'error' ? <CircleAlert size={14}/> : <Bot size={14}/>}</span><div className="agent-status-copy"><strong>{agentTitle}</strong><small>{agentDetail}</small></div>{(agentStartedAt || statusWorking) && <span className="agent-elapsed">{formatElapsed(agentElapsed)}</span>}</div>
             {statusWorking && <div className="agent-progress-track" title={`${Math.round(statusProgress * 100)}%`}><span style={{ width: `${Math.max(4, Math.round(statusProgress * 100))}%` }}/></div>}
             {(submittingAgent || statusJob) && <div className="agent-status-meta"><span>{submittingAgent ? 'Submitting' : statusJob ? jobStateLabels[statusJob.state] : 'Working'}</span><span>{Math.round(statusProgress * 100)}%</span><span>{statusJob?.branch ?? project?.active_branch ?? 'main'}</span></div>}
-            <div className="agent-status-actions">{statusWorking && activeJob && <button className="agent-cancel" onClick={() => void cancelActiveJob()}><X size={11}/>Cancel task</button>}{aiUnavailable && !statusWorking && <button className="agent-cancel" onClick={() => void refreshRuntimeNow()}>Retry AI status</button>}</div>
+            <div className="agent-status-actions">{statusWorking && activeAgentJob && <button className="agent-cancel" onClick={() => void cancelJob(activeAgentJob)}><X size={11}/>Cancel task</button>}{aiUnavailable && !statusWorking && <button className="agent-cancel" onClick={() => void refreshRuntimeNow()}>Retry AI status</button>}</div>
           </div>
           <section className="conversation" ref={conversationRef} data-testid="conversation">
             {chat.map((entry, index) => <div className={`message ${entry.role}`} key={`${index}-${entry.text.slice(0, 18)}`}><span className="message-author">{entry.role === 'agent' ? 'ForgeCAD' : 'You'}</span>{entry.role === 'agent' ? <MarkdownMessage text={entry.text}/> : <p>{entry.text}</p>}</div>)}
-            {statusWorking && (submittingAgent || statusJob?.kind === 'agent') && <div className="message agent live" data-testid="agent-live-message"><span className="message-author">ForgeCAD · live</span><div className="agent-live-line"><Activity size={12} className="agent-spin"/><strong>{agentTitle}</strong></div>{streamText ? <MarkdownMessage text={streamText}/> : <p className="agent-live-detail">{agentDetail}</p>}</div>}
+            {statusWorking && (submittingAgent || statusJob) && <div className="message agent live" data-testid="agent-live-message"><span className="message-author">ForgeCAD · live</span><div className="agent-live-line"><Activity size={12} className="agent-spin"/><strong>{agentTitle}</strong></div>{streamText ? <MarkdownMessage text={streamText}/> : <p className="agent-live-detail">{agentDetail}</p>}</div>}
           </section>
           <div className="composer" data-testid="composer">
             <textarea aria-label="Copilot request" value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => {
@@ -502,7 +531,7 @@ export default function App() {
           <button data-testid="tab-system" className={bottomTab === 'system' ? 'active' : ''} onClick={() => setBottomTab(bottomTab === 'system' ? null : 'system')}><Settings size={12}/>System</button>
           <div className="bottom-spacer"/><span>{project?.parts.length ?? 0} objects</span><span>mm</span><span>Z up</span>
         </div>
-        {bottomTab && <div className="bottom-dock"><BottomContent tab={bottomTab} project={project} workspaceId={workspaceId} runtime={runtime} activeJob={activeJob} selectedObjectId={selectedId} onAskCopilot={askCopilotAboutCode}/></div>}
+        {bottomTab && <div className="bottom-dock"><BottomContent tab={bottomTab} project={project} workspaceId={workspaceId} runtime={runtime} engineeringJobs={engineeringJobs} selectedObjectId={selectedId} onAskCopilot={askCopilotAboutCode} onCancelJob={(job) => void cancelJob(job)}/></div>}
       </section>
 
       <aside className="right-panel">
@@ -514,7 +543,7 @@ export default function App() {
           <div className="result-count">{components.length} results</div><div className="component-results">{visibleComponents.map((item) => <ComponentRow key={item.id} item={item} inserting={insertingComponentId === item.id} onInsert={(id) => void insertLibraryComponent(id)}/>)}{visibleComponents.length < components.length && <button className="wide-action" onClick={() => setVisibleComponentCount((count) => Math.min(components.length, count + 80))}>Load 80 more</button>}</div>
         </div> : rightTab === 'properties' ? <PropertiesPanel project={project} selectedPart={selectedPart} onOpenCode={openCodeForSelected} onDelete={() => void deleteSelected()}/> : rightTab === 'manufacture' ? <ManufacturePanel project={project} selectedId={selectedId} onSelectPart={setSelectedId} onDraftRedesign={(part) => {
           setSelectedId(part.id); setBrowserTab('copilot'); const warningText = part.warnings.map((warning) => warning.message).join(' '); setMessage(`Redesign "${part.name}" so it can be manufactured reliably on my Bambu Lab P2S. Preserve its functional role and interfaces. ${warningText} If the part is too large, split it into printable bodies with alignment features and a mechanically sound joining strategy, then re-check the design against the P2S manufacturing constraints.`);
-        }}/> : <EngineeringWorkbench mode="analysis" project={project} selectedId={selectedId} activeJob={activeJob} onProject={setProject} onStartSimulation={() => void startSimulation()} onStartCampaign={() => void startCampaign()}/>} 
+        }}/> : <EngineeringWorkbench mode="analysis" project={project} selectedId={selectedId} activeJob={latestCampaignJob} onProject={setProject} onStartSimulation={() => void startSimulation()} onStartCampaign={() => void startCampaign()} onJobStarted={acceptJobSnapshot}/>} 
       </aside>
     </div>
   </main>;
