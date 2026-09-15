@@ -7,6 +7,7 @@ on:
       - 'services/forge-engine/forge_engine/v600/autonomous_repair.py'
       - 'services/forge-engine/forge_engine/v600/milestone4_api.py'
       - 'services/forge-engine/forge_engine/v600/milestone4_selftest.py'
+      - 'services/forge-engine/forge_engine/v600/milestone4_strategy_selftest.py'
       - 'services/forge-engine/forge_engine/v600/analysis_refresh_repair.py'
       - 'services/forge-engine/forge_engine/desktop_entry.py'
       - '.github/workflows/v600-milestone4.yml'
@@ -33,7 +34,7 @@ jobs:
           FORGECAD_SESSION_TOKEN: test-session
           CI: 'true'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
-        run: python -m forge_engine.v600.milestone4_selftest
+        run: python -m forge_engine.v600.milestone4_strategy_selftest
       - name: Preserve milestone 3 fresh-analysis repair
         env:
           PYTHONPATH: services/forge-engine
