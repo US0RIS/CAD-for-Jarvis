@@ -52,6 +52,14 @@ jobs:
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v601_selftest
 
+      - name: Verify 6.0.1 local Ollama discovery
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v601-ollama-selftest-state
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v601_ollama_selftest
+
       - name: Verify 6.0.1 persistent viewport geometry cache
         env:
           PYTHONPATH: services/forge-engine
