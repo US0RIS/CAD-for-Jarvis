@@ -12,6 +12,7 @@ from .physical_retest import (
     begin_physical_retest_cycle,
     complete_physical_retest_cycle,
     physical_retest_cycles,
+    physical_retest_lineage,
 )
 
 
@@ -44,5 +45,9 @@ def install(app: Any, require_session: Callable[..., None]) -> None:
     @app.get("/v6/physical/retest-cycles", dependencies=[Depends(require_session)])
     async def list_retests() -> dict[str, Any]:
         return physical_retest_cycles()
+
+    @app.get("/v6/physical/retest-lineage", dependencies=[Depends(require_session)])
+    async def list_retest_lineage() -> dict[str, Any]:
+        return physical_retest_lineage()
 
     _INSTALLED = True
