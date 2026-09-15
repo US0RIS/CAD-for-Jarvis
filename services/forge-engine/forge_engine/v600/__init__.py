@@ -7,7 +7,7 @@ version: it becomes true only after native installer validation has passed on Wi
 and both supported macOS architectures.
 """
 
-MILESTONE_VERSION = "6.0.0"
+MILESTONE_VERSION = "6.0.1"
 RELEASE_COMPLETE = True
 ASSEMBLY_CONSTRAINT_SCHEMA_VERSION = 1
 GEOMETRY_BACKED_MOUNT_SCHEMA_VERSION = 1

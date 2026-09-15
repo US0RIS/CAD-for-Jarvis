@@ -2,14 +2,17 @@ from __future__ import annotations
 
 """Focused ForgeCAD 6.0.1 release-hardening checks.
 
-These checks intentionally exercise canonical branch state directly. They are not UI
-mocks: code must survive a branch round trip, job provenance must fail stale, and a
-human branch label must not rewrite evidence-owned physical verification.
+These checks intentionally exercise canonical branch state directly and through the
+installed HTTP route surface. They are not UI mocks: code must survive a branch round
+trip, job provenance must fail stale, and a human branch label must not rewrite
+evidence-owned physical verification.
 """
+
+from fastapi.testclient import TestClient
 
 from . import main as legacy
 from .engineering_state import PROJECT
-from .models import EngineeringJob
+from .models import EngineeringJob, JobState
 from .v110 import core
 from .v601_runtime import assert_job_source, set_design_label_preserving_evidence
 
@@ -93,11 +96,69 @@ def branch_label_preserves_physical_evidence() -> dict[str, object]:
     return {"ok": True, "branch": branch, "status": updated["status"], "physical_verified": True}
 
 
+def installed_routes_enforce_hardening() -> dict[str, object]:
+    # Importing desktop_entry installs the 6.0.1 route layer over the frozen v2 surface.
+    from .desktop_entry import app
+
+    PROJECT.new_project()
+    PROJECT.add_component("compute.raspberry_pi_5_8gb")
+    source = PROJECT.snapshot()
+    branch = str(source["active_branch"])
+
+    with TestClient(app) as client:
+        cross_branch = client.post(
+            "/v2/jobs",
+            json={"kind": "component-search", "branch": "not-the-active-branch", "text": "Raspberry Pi"},
+        )
+        assert cross_branch.status_code == 409, cross_branch.text
+
+        accepted = client.post(
+            "/v2/jobs",
+            json={"kind": "component-search", "branch": branch, "text": "Raspberry Pi"},
+        )
+        assert accepted.status_code == 200, accepted.text
+        queued = accepted.json()
+        assert queued["branch"] == branch
+        assert queued["revision"] == source["revision"]
+
+        with core.LOCK:
+            core.DESIGNS[branch]["physical_verified"] = True
+            core.persist()
+        status = client.put(
+            f"/v2/branches/{branch}/status",
+            json={"status": "not_working", "note": "label only", "physical_verified": False},
+        )
+        assert status.status_code == 200, status.text
+        assert status.json()["branch"]["physical_verified"] is True
+
+        fake = EngineeringJob(
+            kind="simulation",
+            state=JobState.ANALYZING,
+            branch=branch,
+            revision=PROJECT.snapshot()["revision"],
+            cancellable=False,
+            message="Non-interruptible test transaction",
+        )
+        legacy._jobs[fake.id] = fake
+        cancelled = client.post(f"/v2/jobs/{fake.id}/cancel")
+        assert cancelled.status_code == 409, cancelled.text
+        assert legacy._jobs[fake.id].state == JobState.ANALYZING
+
+    return {
+        "ok": True,
+        "cross_branch_job_status": cross_branch.status_code,
+        "accepted_job_revision": queued["revision"],
+        "physical_verified_preserved": True,
+        "noninterruptible_cancel_status": cancelled.status_code,
+    }
+
+
 def main() -> None:
     result = {
         "branch_persistence": code_write_survives_branch_round_trip(),
         "stale_job": stale_job_is_rejected(),
         "evidence_preservation": branch_label_preserves_physical_evidence(),
+        "installed_routes": installed_routes_enforce_hardening(),
     }
     print({"forgecad_v601_selftest": result})
 

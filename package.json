@@ -1,7 +1,7 @@
 {
   "name": "forgecad",
   "private": true,
-  "version": "6.0.0",
+  "version": "6.0.1",
   "description": "AI-native local-first physical engineering and world-model workstation",
   "packageManager": "pnpm@10.15.1",
   "scripts": {
