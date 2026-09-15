@@ -5,8 +5,10 @@ on:
     branches: [forgecad/6.0.0]
     paths:
       - 'services/forge-engine/forge_engine/v600/repair_trials.py'
+      - 'services/forge-engine/forge_engine/v600/analysis_refresh_repair.py'
       - 'services/forge-engine/forge_engine/v600/milestone3_api.py'
       - 'services/forge-engine/forge_engine/v600/milestone3_selftest.py'
+      - 'services/forge-engine/forge_engine/v600/analysis_refresh_selftest.py'
       - 'services/forge-engine/forge_engine/desktop_entry.py'
       - '.github/workflows/v600-milestone3.yml'
   workflow_dispatch:
@@ -15,7 +17,7 @@ jobs:
   milestone-3:
     name: Evidence-preserving bounded repair
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,6 +35,35 @@ jobs:
           CI: 'true'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v600.milestone3_selftest
+      - name: Run milestone 3 analysis-refreshing repair acceptance
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m3-refresh
+          FORGECAD_SESSION_TOKEN: test-session
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v600.analysis_refresh_selftest
+      - name: Preserve milestone 2 acceptance
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m2
+          FORGECAD_SESSION_TOKEN: test-session
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python -m forge_engine.v600.milestone2_selftest
+          python -m forge_engine.v600.frame_mate_selftest
+          python -m forge_engine.v600.constraint_rank_selftest
+          python -m forge_engine.v600.mount_hardware_selftest
+          python -m forge_engine.v600.mount_access_selftest
+      - name: Preserve milestone 1 acceptance
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m1
+          FORGECAD_SESSION_TOKEN: test-session
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v600.selftest
       - name: Preserve ForgeCAD 3.1 integration regression
         env:
           PYTHONPATH: services/forge-engine
@@ -41,3 +72,16 @@ jobs:
           CI: 'true'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v310.selftest
+      - name: Preserve complete historical engineering regression
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-legacy
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '1'
+        run: python -m forge_engine.full_scope_selftest
+      - name: Re-run solid FEA benchmark
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-fea
+          CI: 'true'
+        run: python -m forge_engine.v200.structural_fea_selftest
