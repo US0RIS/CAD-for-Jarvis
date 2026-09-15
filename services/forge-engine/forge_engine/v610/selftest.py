@@ -13,7 +13,7 @@ def _box(object_id: str, name: str, position: list[float]) -> dict:
         "id": object_id,
         "name": name,
         "kind": "box",
-        "params": {"x": 20.0, "y": 10.0, "z": 10.0},
+        "params": {"x": 6.0, "y": 6.0, "z": 6.0},
         "material": "aluminum_6061_t6",
         "transform": {"position": position, "rotation_deg": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]},
         "features": [],
