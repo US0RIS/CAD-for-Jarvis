@@ -5,17 +5,22 @@ on:
     branches: [forgecad/6.0.1]
     paths:
       - 'apps/desktop/**'
-      - 'services/forge-engine/**'
       - '.github/workflows/v601-ux-regression.yml'
+      - 'services/forge-engine/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
   workflow_dispatch:
 
+concurrency:
+  group: forgecad-6.0.1-ux-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  desktop-ux:
+  ux:
     name: Desktop interaction and Copilot acceptance
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,12 +65,13 @@ jobs:
           echo $! > "${RUNNER_TEMP}/forgecad-v601-engine.pid"
           python - <<'PY'
           import json, time, urllib.request
-          deadline = time.time() + 90
+          deadline = time.time() + 60
           while time.time() < deadline:
               try:
-                  with urllib.request.urlopen('http://127.0.0.1:8765/v2/health', timeout=2) as response:
+                  request = urllib.request.Request('http://127.0.0.1:8765/v2/health')
+                  with urllib.request.urlopen(request, timeout=2) as response:
                       body = json.load(response)
-                  if body.get('ok'):
+                  if body.get('ok') and body.get('api_version') == '2':
                       break
               except Exception:
                   time.sleep(.25)
