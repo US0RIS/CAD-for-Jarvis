@@ -1,0 +1,99 @@
+name: ForgeCAD 6.1 Simulation Regression
+
+on:
+  push:
+    branches: [forgecad/6.1.0]
+    paths:
+      - 'services/forge-engine/**'
+      - 'apps/desktop/**'
+      - '.github/workflows/v610-simulation-regression.yml'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+  workflow_dispatch:
+
+concurrency:
+  group: forgecad-6.1-simulation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulation:
+    name: Multibody and multiphysics acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Forge Engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine
+
+      - name: Verify ForgeCAD 6.1 simulation core
+        env:
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v610-simulation-state
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v610.selftest
+
+      - name: Preserve existing physics solvers
+        env:
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v610-legacy-state
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python -m forge_engine.v200.kinematics_selftest
+          python -m forge_engine.v200.rigid_body_selftest
+          python -m forge_engine.v200.thermal_network_selftest
+          python -m forge_engine.v200.fluid_network_selftest
+          python -m forge_engine.v200.structural_fea_selftest
+
+      - name: Verify 6.0.1 runtime hardening remains intact
+        env:
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v610-v601-state
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python -m forge_engine.v601_selftest
+          python -m forge_engine.v601_scene_selftest
+          python -m forge_engine.v601_ollama_selftest
+
+      - name: Smoke 6.1 desktop API registration
+        env:
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v610-api-state
+          FORGECAD_SESSION_TOKEN: test-session
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from forge_engine.desktop_entry import app
+          client = TestClient(app)
+          headers = {'X-ForgeCAD-Session': 'test-session'}
+          response = client.get('/v6/simulation/health', headers=headers)
+          assert response.status_code == 200, response.text
+          body = response.json()
+          assert body['version'] == '6.1.0'
+          assert body['domains']['multibody_kinematics']['available'] is True
+          assert body['domains']['transient_thermal']['available'] is True
+          assert body['domains']['integral_aerodynamics']['is_cfd'] is False
+          PY
+
+      - name: Install desktop dependencies
+        run: pnpm install --prod=false --frozen-lockfile=false
+
+      - name: Typecheck, test, and build desktop
+        run: |
+          pnpm --filter @forgecad/desktop typecheck
+          pnpm --filter @forgecad/desktop test
+          pnpm --filter @forgecad/desktop build
