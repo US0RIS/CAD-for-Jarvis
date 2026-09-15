@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Canonical simulation provenance and invalidation for ForgeCAD 6.1."""
+"""Canonical simulation provenance, invalidation and transform integration for ForgeCAD 6.1."""
 
 from copy import deepcopy
 from typing import Any, Iterable
@@ -8,9 +8,11 @@ from typing import Any, Iterable
 from ..v110 import core
 from ..v200 import physical_evidence
 from . import SIMULATION_SCHEMA_VERSION
+from . import multibody
 
 
 _ORIGINAL_MARK_STALE = None
+_ORIGINAL_EXECUTE = None
 _INSTALLED = False
 
 
@@ -90,15 +92,65 @@ def current_runs(project: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     return rows
 
 
+def _participates_in_joint_graph(object_id: str) -> bool:
+    try:
+        graph = multibody.assembly_graph(core.PROJECT)
+    except Exception:
+        return False
+    return any(object_id in {str(edge.get("parent_id")), str(edge.get("child_id"))} for edge in graph.get("edges") or [])
+
+
 def install() -> None:
-    global _INSTALLED, _ORIGINAL_MARK_STALE
+    global _INSTALLED, _ORIGINAL_MARK_STALE, _ORIGINAL_EXECUTE
     if _INSTALLED:
         return
     _ORIGINAL_MARK_STALE = core.mark_simulations_stale
+    _ORIGINAL_EXECUTE = core.execute
 
     def mark_simulations_stale(object_id: str | None = None) -> int:
         affected = None if object_id is None else [object_id]
         return invalidate_simulations(core.PROJECT, affected, reason="canonical object changed")
 
+    def execute(op: str, args: dict[str, Any] | None = None, actor: str = "human", reason: str = "") -> dict[str, Any]:
+        payload = deepcopy(args or {})
+        if op != "transform" or not payload.get("id") or not _participates_in_joint_graph(str(payload["id"])):
+            assert _ORIGINAL_EXECUTE is not None
+            return _ORIGINAL_EXECUTE(op, payload, actor=actor, reason=reason)
+
+        object_id = str(payload["id"])
+        with core.LOCK:
+            core.ensure_mutable(actor, reason or "constraint-preserving transform")
+            obj = core.object_by_id(object_id)
+            current = deepcopy(obj.get("transform") or {
+                "position": [0.0, 0.0, 0.0],
+                "rotation_deg": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+            })
+            requested = {
+                "position": payload.get("position", current["position"]),
+                "rotation_deg": payload.get("rotation_deg", current["rotation_deg"]),
+                "scale": payload.get("scale", current["scale"]),
+            }
+            result = multibody.apply_driver_transform(core.PROJECT, object_id, requested)
+            invalidate_simulations(
+                core.PROJECT,
+                result["affected_ids"],
+                reason="constraint-preserving viewport transform changed multibody pose",
+            )
+            core.push_history(op, actor, reason or "constraint-preserving transform")
+            core.persist()
+            return {
+                "ok": True,
+                "op": op,
+                "project": core.PROJECT,
+                "active_design": core.ACTIVE_DESIGN,
+                "simulation_propagation": {
+                    "solver": result["solver"],
+                    "affected_ids": result["affected_ids"],
+                    "mode": result["mode"],
+                },
+            }
+
     core.mark_simulations_stale = mark_simulations_stale
+    core.execute = execute
     _INSTALLED = True
