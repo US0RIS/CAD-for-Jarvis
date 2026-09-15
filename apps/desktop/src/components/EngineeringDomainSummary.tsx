@@ -106,7 +106,7 @@ export function EngineeringDomainSummary({ validation, project, mode = 'analysis
     </div>
 
     {mode === 'analysis' && <>
-      <SimulationWorkspace revision={project?.revision ?? null}/>
+      <SimulationWorkspace project={project}/>
       <div className="campaign-card" data-testid="analysis-domains">
         <div className="campaign-title"><Activity size={18}/><div><strong>System analyses</strong><span>Deterministic domain evidence from the same canonical project state. Unknown inputs remain unknown.</span></div></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
