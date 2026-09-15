@@ -125,7 +125,15 @@ def install(
                 artifacts = assert_artifact_contract_satisfied(cycle_id)
             else:
                 artifacts = physical_test_artifacts(cycle_id)["items"]
-            metrology = assert_metrology_contract_satisfied(cycle_id, request.measurements)
+            if cycle.get("metrology_requirements"):
+                metrology = assert_metrology_contract_satisfied(cycle_id, request.measurements)
+            else:
+                metrology = {
+                    "required": False,
+                    "results": [],
+                    "evidence_ids": [],
+                    "record_ids": [],
+                }
             extra_evidence = [
                 *artifact_evidence_ids(cycle_id),
                 *[str(row) for row in metrology.get("evidence_ids") or []],
