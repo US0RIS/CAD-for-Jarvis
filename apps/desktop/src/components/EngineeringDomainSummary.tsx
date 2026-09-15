@@ -127,7 +127,7 @@ export function EngineeringDomainSummary({ validation, project, mode = 'analysis
         </div>
         <div className="campaign-disclaimer"><ShieldAlert size={11}/>PASS is shown only when the domain explicitly reports <code>ok: true</code>. Modeled-but-unasserted results remain MODELED. Analysis evidence is not certification or physical verification.</div>
       </div>
-      <AdvancedEngineeringStatus revision={project?.revision}/>
+      <AdvancedEngineeringStatus revision={project?.revision ?? null}/>
     </>}
   </>;
 }
