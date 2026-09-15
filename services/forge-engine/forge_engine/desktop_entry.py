@@ -17,6 +17,7 @@ from forge_engine.v600.milestone4_api import install as install_v600_milestone4_
 from forge_engine.v600.milestone5_api import install as install_v600_milestone5_api
 from forge_engine.v600.milestone6_api import install as install_v600_milestone6_api
 from forge_engine.v601_runtime import install as install_v601_runtime
+from forge_engine.v601_scene_runtime import install as install_v601_scene_runtime
 
 
 # ForgeCAD 6.0 development keeps 3.1 as the validated production substrate and
@@ -84,6 +85,12 @@ install_v600_milestone6_api(
 # capability substrate. Existing /v2 route shapes stay compatible while job/branch
 # execution gains exact revision provenance and truthful cancellation semantics.
 install_v601_runtime(main_v31.app, main_v31.v3.legacy)
+
+# The packaged desktop must not cold-tessellate an entire real assembly on every
+# launch. Cache local-space viewport meshes by geometry identity, persist them across
+# launches, and reuse them across duplicate hardware / placement-only changes while
+# preserving the existing /v2/scene payload contract.
+install_v601_scene_runtime(main_v31.v3.legacy.PROJECT)
 
 # The legacy v2 CORS policy predates the v3.1 parametric feature editor and omits
 # PATCH. The desktop renderer is cross-origin in browser acceptance and may also use
