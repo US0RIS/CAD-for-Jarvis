@@ -11,6 +11,8 @@ retest evidence to match the redesigned fingerprint exactly.
 A causal explanation supplied during redesign is recorded only as an unproven
 hypothesis. When a retest cycle declares quantitative acceptance criteria, ForgeCAD
 derives pass/fail from the recorded measurements and rejects a contradictory status.
+Accepted measurements are also recorded through the canonical 3.1 inspection path so
+physical observations become Engineering Graph nodes on the exact CAD identity tested.
 Passing a scoped retest never silently marks the entire design physically verified.
 """
 
@@ -27,7 +29,8 @@ from ..v200.physical_evidence import (
     evidence_applies,
     verify_requirement,
 )
-from ..v310.integration_services import semantic_branch_diff
+from ..v310.engineering_graph import EngineeringGraphStore
+from ..v310.integration_services import InspectionRequest, record_inspection, semantic_branch_diff
 
 
 class PhysicalRepairMutation(BaseModel):
@@ -44,6 +47,7 @@ class PhysicalTestCriterion(BaseModel):
     minimum: float | None = None
     maximum: float | None = None
     required: bool = True
+    object_id: str | None = None
 
 
 class BeginPhysicalRetestCycleRequest(BaseModel):
@@ -62,6 +66,8 @@ class CompletePhysicalRetestRequest(BaseModel):
     note: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
     measurements: list[Measurement] = Field(default_factory=list)
+    instrument: str | None = None
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 def _requirement(requirement_id: str) -> dict[str, Any]:
@@ -105,13 +111,14 @@ def _cycle(cycle_id: str) -> dict[str, Any]:
     return row
 
 
-def _validate_criteria(criteria: list[PhysicalTestCriterion]) -> list[dict[str, Any]]:
+def _validate_criteria(criteria: list[PhysicalTestCriterion], requirement: dict[str, Any]) -> list[dict[str, Any]]:
     names = [row.measurement.strip() for row in criteria]
     if any(not name for name in names):
         raise ValueError("Physical test criteria require a non-empty measurement name")
     normalized = [name.casefold() for name in names]
     if len(normalized) != len(set(normalized)):
         raise ValueError("Physical test criteria must reference unique measurement names")
+    scope = [str(row) for row in requirement.get("scope_object_ids") or []]
     rows: list[dict[str, Any]] = []
     for criterion in criteria:
         if criterion.op in {"<=", ">="}:
@@ -126,9 +133,20 @@ def _validate_criteria(criteria: list[PhysicalTestCriterion]) -> list[dict[str, 
                 raise ValueError(f"Criterion {criterion.measurement} minimum exceeds maximum")
             if criterion.target is not None:
                 raise ValueError(f"Criterion {criterion.measurement} cannot mix target with range bounds")
+        object_id = str(criterion.object_id) if criterion.object_id else None
+        if object_id is None:
+            if len(scope) != 1:
+                raise ValueError(
+                    f"Criterion {criterion.measurement} must declare object_id because requirement {requirement.get('id')} does not have exactly one scoped object"
+                )
+            object_id = scope[0]
+        if scope and object_id not in scope:
+            raise ValueError(f"Criterion {criterion.measurement} targets object {object_id} outside requirement scope")
+        core.object_by_id(object_id)
         row = criterion.model_dump()
         row["measurement"] = criterion.measurement.strip()
         row["unit"] = criterion.unit.strip()
+        row["object_id"] = object_id
         rows.append(row)
     return rows
 
@@ -153,6 +171,7 @@ def _evaluate_criteria(criteria: list[dict[str, Any]], measurements: list[Measur
                 missing.append(name)
             results.append({
                 "measurement": name,
+                "object_id": criterion.get("object_id"),
                 "required": bool(criterion.get("required", True)),
                 "status": "missing",
                 "passed": None,
@@ -182,6 +201,7 @@ def _evaluate_criteria(criteria: list[dict[str, Any]], measurements: list[Measur
             raise ValueError(f"Unsupported physical test criterion operator: {op}")
         results.append({
             "measurement": name,
+            "object_id": criterion.get("object_id"),
             "unit": expected_unit,
             "value": value,
             "op": op,
@@ -204,6 +224,55 @@ def _append_unique(meta: dict[str, Any], key: str, value: str) -> None:
     meta[key] = values
 
 
+def _record_inspections(
+    cycle: dict[str, Any],
+    request: CompletePhysicalRetestRequest,
+    criterion_results: list[dict[str, Any]],
+    graph: EngineeringGraphStore | None,
+    fingerprint: str,
+) -> list[dict[str, Any]]:
+    if graph is None or not criterion_results:
+        return []
+    criteria = {str(row.get("measurement") or "").casefold(): row for row in cycle.get("test_criteria") or []}
+    measurements = {row.name.strip().casefold(): row for row in request.measurements}
+    records: list[dict[str, Any]] = []
+    for result in criterion_results:
+        if result.get("passed") is None:
+            continue
+        key = str(result.get("measurement") or "").casefold()
+        criterion = criteria[key]
+        measurement = measurements[key]
+        object_id = str(criterion.get("object_id") or "")
+        graph.node(f"cad:{object_id}")
+        observation = record_inspection(
+            InspectionRequest(
+                object_id=object_id,
+                metric=measurement.name.strip(),
+                observed=float(measurement.value),
+                unit=measurement.unit.strip(),
+                tolerance=None,
+                source="physical_retest",
+                instrument=request.instrument,
+                confidence=request.confidence,
+                metadata={
+                    "milestone": 5,
+                    "cycle_id": cycle.get("id"),
+                    "requirement_id": cycle.get("requirement_id"),
+                    "design_fingerprint": fingerprint,
+                    "criterion": deepcopy(criterion),
+                    "criterion_result": deepcopy(result),
+                    "acceptance_status": request.status,
+                    "semantics": "physical observation; criterion evaluation is not causal attribution",
+                },
+            ),
+            graph,
+        )
+        records.append(observation)
+    if design_fingerprint() != fingerprint:
+        raise RuntimeError("Recording physical inspections unexpectedly changed the engineering design fingerprint")
+    return records
+
+
 def begin_physical_retest_cycle(request: BeginPhysicalRetestCycleRequest) -> dict[str, Any]:
     requirement = _requirement(request.requirement_id)
     failed = _evidence(requirement, request.failed_evidence_id)
@@ -220,7 +289,7 @@ def begin_physical_retest_cycle(request: BeginPhysicalRetestCycleRequest) -> dic
     keys = [(row.object_id, row.parameter) for row in request.mutations]
     if len(keys) != len(set(keys)):
         raise ValueError("Physical redesign mutations must target unique object/parameter pairs")
-    criteria = _validate_criteria(request.criteria)
+    criteria = _validate_criteria(request.criteria, requirement)
 
     source_branch = core.ACTIVE_DESIGN
     source_fingerprint = design_fingerprint()
@@ -292,6 +361,7 @@ def begin_physical_retest_cycle(request: BeginPhysicalRetestCycleRequest) -> dic
         "test_criteria": criteria,
         "criterion_results": [],
         "derived_retest_status": None,
+        "inspection_ids": [],
         "semantic_diff_count": int(diff.get("count", 0)),
         "status": "pending_retest",
         "retest_evidence_id": None,
@@ -322,7 +392,11 @@ def begin_physical_retest_cycle(request: BeginPhysicalRetestCycleRequest) -> dic
     }
 
 
-def complete_physical_retest_cycle(cycle_id: str, request: CompletePhysicalRetestRequest) -> dict[str, Any]:
+def complete_physical_retest_cycle(
+    cycle_id: str,
+    request: CompletePhysicalRetestRequest,
+    graph: EngineeringGraphStore | None = None,
+) -> dict[str, Any]:
     cycle = _cycle(cycle_id)
     if cycle.get("status") != "pending_retest":
         raise ValueError(f"Retest cycle is not pending: {cycle.get('status')}")
@@ -342,13 +416,14 @@ def complete_physical_retest_cycle(cycle_id: str, request: CompletePhysicalRetes
             f"Declared retest status {request.status!r} contradicts criterion-derived status {derived_status!r}"
         )
 
+    inspection_records = _record_inspections(cycle, request, criterion_results, graph, current_fingerprint)
     evidence = verify_requirement(
         str(cycle["requirement_id"]),
         RequirementEvidenceRequest(
             status=request.status,
             method=request.method,
             note=request.note,
-            evidence_ids=list(request.evidence_ids),
+            evidence_ids=[*list(request.evidence_ids), *[str(row["evidence"]["id"]) for row in inspection_records]],
             measurements=list(request.measurements),
         ),
     )
@@ -364,6 +439,7 @@ def complete_physical_retest_cycle(cycle_id: str, request: CompletePhysicalRetes
         }[request.status]
         cycle["criterion_results"] = deepcopy(criterion_results)
         cycle["derived_retest_status"] = derived_status
+        cycle["inspection_ids"] = [str(row["record"]["id"]) for row in inspection_records]
         cycle["retest_evidence_id"] = evidence["id"]
         cycle["retest_design_fingerprint"] = current_fingerprint
         cycle["physical_validation_claimed"] = request.status == "passed"
@@ -388,6 +464,7 @@ def complete_physical_retest_cycle(cycle_id: str, request: CompletePhysicalRetes
         "ok": request.status == "passed",
         "cycle": deepcopy(_cycle(cycle_id)),
         "evidence": deepcopy(evidence),
+        "inspections": deepcopy(inspection_records),
         "criterion_results": deepcopy(criterion_results),
         "derived_retest_status": derived_status,
         "requirement_physically_verified_on_current_fingerprint": request.status == "passed",
