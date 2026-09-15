@@ -52,6 +52,14 @@ jobs:
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v601_selftest
 
+      - name: Verify 6.0.1 persistent viewport geometry cache
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v601-scene-selftest-state
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v601_scene_selftest
+
       - name: Install desktop dependencies
         run: pnpm install --prod=false --frozen-lockfile=false
 
@@ -95,7 +103,7 @@ jobs:
       - name: Run focused UX regressions
         # These tests intentionally mutate one canonical Forge Engine project. Running
         # them in parallel would make independent resets/branch switches race each other.
-        run: pnpm --filter @forgecad/desktop exec playwright test e2e/ux-regression.spec.ts e2e/design-lineage-ux.spec.ts e2e/feature-history-ux.spec.ts e2e/advanced-engineering-ux.spec.ts e2e/desktop-minimum-layout.spec.ts e2e/keyboard-shortcuts.spec.ts --workers=1
+        run: pnpm --filter @forgecad/desktop exec playwright test e2e/ux-regression.spec.ts e2e/design-lineage-ux.spec.ts e2e/feature-history-ux.spec.ts e2e/advanced-engineering-ux.spec.ts e2e/desktop-minimum-layout.spec.ts e2e/keyboard-shortcuts.spec.ts e2e/scene-startup-ux.spec.ts --workers=1
 
       - name: Preserve 3.1 browser integration
         run: pnpm --filter @forgecad/desktop exec playwright test e2e/v310-integration.spec.ts --workers=1
