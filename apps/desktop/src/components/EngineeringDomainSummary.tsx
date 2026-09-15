@@ -1,5 +1,6 @@
 import { Activity, Cable, Droplets, Flame, Orbit, ShieldAlert, Zap } from 'lucide-react';
 import type { ProjectPayload, ValidationPayload } from '../api/engine';
+import { AdvancedEngineeringStatus } from './AdvancedEngineeringStatus';
 
 type DomainKey = 'electrical' | 'thermal' | 'fluid' | 'routing' | 'safety' | 'kinematics';
 type LooseRecord = Record<string, unknown>;
@@ -103,27 +104,30 @@ export function EngineeringDomainSummary({ validation, project, mode = 'analysis
       </div>
     </div>
 
-    {mode === 'analysis' && <div className="campaign-card" data-testid="analysis-domains">
-      <div className="campaign-title"><Activity size={18}/><div><strong>System analyses</strong><span>Deterministic domain evidence from the same canonical project state. Unknown inputs remain unknown.</span></div></div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
-        {DOMAINS.map(({ key, title, icon: Icon, description }) => {
-          const data = record(root[key]);
-          const count = data ? countFor(key, data) : 0;
-          const requested = data?.requested;
-          const modeled = data != null && (requested === true || count > 0 || data.supported === false);
-          const errors = finite(record(data?.counts)?.error) ?? 0;
-          const state = analysisState(modeled, data, errors);
-          const solver = String(data?.solver ?? 'canonical validation');
-          const grade = String(data?.solver_grade ?? 'engineering state');
-          return <div key={key} data-testid={`analysis-domain-${key}`} style={{ border: '1px solid var(--border-subtle)', borderRadius: 7, padding: 10, minWidth: 0 }}>
-            <div className="campaign-title" style={{ marginBottom: 6 }}><Icon size={15}/><div><strong>{title}</strong><span>{state}</span></div></div>
-            <p style={{ margin: '0 0 6px', fontSize: 11 }}>{modeled && data ? detailFor(key, data, count) : description}</p>
-            <small>{modeled ? `${solver} · ${grade}${state === 'MODELED' ? ' · no explicit pass/fail assertion' : ''}` : 'No canonical model in this branch.'}</small>
-            {modeled && data && <details style={{ marginTop: 7 }}><summary style={{ cursor: 'pointer', fontSize: 11 }}>Inspect evidence</summary><pre style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 220, fontSize: 10 }}>{pretty(data)}</pre></details>}
-          </div>;
-        })}
+    {mode === 'analysis' && <>
+      <div className="campaign-card" data-testid="analysis-domains">
+        <div className="campaign-title"><Activity size={18}/><div><strong>System analyses</strong><span>Deterministic domain evidence from the same canonical project state. Unknown inputs remain unknown.</span></div></div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+          {DOMAINS.map(({ key, title, icon: Icon, description }) => {
+            const data = record(root[key]);
+            const count = data ? countFor(key, data) : 0;
+            const requested = data?.requested;
+            const modeled = data != null && (requested === true || count > 0 || data.supported === false);
+            const errors = finite(record(data?.counts)?.error) ?? 0;
+            const state = analysisState(modeled, data, errors);
+            const solver = String(data?.solver ?? 'canonical validation');
+            const grade = String(data?.solver_grade ?? 'engineering state');
+            return <div key={key} data-testid={`analysis-domain-${key}`} style={{ border: '1px solid var(--border-subtle)', borderRadius: 7, padding: 10, minWidth: 0 }}>
+              <div className="campaign-title" style={{ marginBottom: 6 }}><Icon size={15}/><div><strong>{title}</strong><span>{state}</span></div></div>
+              <p style={{ margin: '0 0 6px', fontSize: 11 }}>{modeled && data ? detailFor(key, data, count) : description}</p>
+              <small>{modeled ? `${solver} · ${grade}${state === 'MODELED' ? ' · no explicit pass/fail assertion' : ''}` : 'No canonical model in this branch.'}</small>
+              {modeled && data && <details style={{ marginTop: 7 }}><summary style={{ cursor: 'pointer', fontSize: 11 }}>Inspect evidence</summary><pre style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 220, fontSize: 10 }}>{pretty(data)}</pre></details>}
+            </div>;
+          })}
+        </div>
+        <div className="campaign-disclaimer"><ShieldAlert size={11}/>PASS is shown only when the domain explicitly reports <code>ok: true</code>. Modeled-but-unasserted results remain MODELED. Analysis evidence is not certification or physical verification.</div>
       </div>
-      <div className="campaign-disclaimer"><ShieldAlert size={11}/>PASS is shown only when the domain explicitly reports <code>ok: true</code>. Modeled-but-unasserted results remain MODELED. Analysis evidence is not certification or physical verification.</div>
-    </div>}
+      <AdvancedEngineeringStatus revision={project?.revision}/>
+    </>}
   </>;
 }
