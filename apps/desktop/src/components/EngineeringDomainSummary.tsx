@@ -72,6 +72,13 @@ function pretty(value: unknown): string {
   return text.length > 4800 ? `${text.slice(0, 4800)}\n…` : text;
 }
 
+function analysisState(modeled: boolean, data: LooseRecord | null, errors: number): 'NOT MODELED' | 'PASS' | 'ATTENTION' | 'MODELED' {
+  if (!modeled) return 'NOT MODELED';
+  if (errors > 0 || data?.ok === false) return 'ATTENTION';
+  if (data?.ok === true) return 'PASS';
+  return 'MODELED';
+}
+
 export function EngineeringDomainSummary({ validation, project, mode = 'analysis' }: { validation: ValidationPayload | null; project: ProjectPayload | null; mode?: 'design' | 'analysis' }) {
   const root = (validation ?? {}) as unknown as LooseRecord;
   const projectRoot = (project ?? {}) as unknown as LooseRecord;
@@ -105,19 +112,18 @@ export function EngineeringDomainSummary({ validation, project, mode = 'analysis
           const requested = data?.requested;
           const modeled = data != null && (requested === true || count > 0 || data.supported === false);
           const errors = finite(record(data?.counts)?.error) ?? 0;
-          const ok = modeled && data?.ok !== false && errors === 0;
-          const state = !modeled ? 'NOT MODELED' : ok ? 'PASS' : 'ATTENTION';
+          const state = analysisState(modeled, data, errors);
           const solver = String(data?.solver ?? 'canonical validation');
           const grade = String(data?.solver_grade ?? 'engineering state');
           return <div key={key} data-testid={`analysis-domain-${key}`} style={{ border: '1px solid var(--border-subtle)', borderRadius: 7, padding: 10, minWidth: 0 }}>
             <div className="campaign-title" style={{ marginBottom: 6 }}><Icon size={15}/><div><strong>{title}</strong><span>{state}</span></div></div>
             <p style={{ margin: '0 0 6px', fontSize: 11 }}>{modeled && data ? detailFor(key, data, count) : description}</p>
-            <small>{modeled ? `${solver} · ${grade}` : 'No canonical model in this branch.'}</small>
+            <small>{modeled ? `${solver} · ${grade}${state === 'MODELED' ? ' · no explicit pass/fail assertion' : ''}` : 'No canonical model in this branch.'}</small>
             {modeled && data && <details style={{ marginTop: 7 }}><summary style={{ cursor: 'pointer', fontSize: 11 }}>Inspect evidence</summary><pre style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 220, fontSize: 10 }}>{pretty(data)}</pre></details>}
           </div>;
         })}
       </div>
-      <div className="campaign-disclaimer"><ShieldAlert size={11}/>Analysis results are engineering-iteration evidence. Solver limits and provenance remain visible; none of these cards converts screening into certification or physical verification.</div>
+      <div className="campaign-disclaimer"><ShieldAlert size={11}/>PASS is shown only when the domain explicitly reports <code>ok: true</code>. Modeled-but-unasserted results remain MODELED. Analysis evidence is not certification or physical verification.</div>
     </div>}
   </>;
 }
