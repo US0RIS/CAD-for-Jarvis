@@ -18,9 +18,6 @@ function packagedEnginePath(): string | undefined {
   const candidates = process.platform === 'win32'
     ? [path.join(root, 'forge-engine.exe')]
     : [
-        // macOS 1.1.2+ uses PyInstaller onedir so CAD/OCP/VTK libraries do not need to
-        // unpack from a giant one-file executable on every launch. Keep the legacy path
-        // as a fallback so development and older packages remain diagnosable.
         path.join(root, 'forge-engine', 'forge-engine'),
         path.join(root, 'forge-engine'),
       ];
@@ -39,9 +36,6 @@ const engine = new EngineSupervisor({
 let mainWindow: BrowserWindow | null = null;
 let engineLoadingWindow: BrowserWindow | null = null;
 
-// Always resolve the current engine connection dynamically. If the native engine exits,
-// EngineSupervisor.start() creates a fresh process/port/session and the renderer can recover
-// without being stranded on the stale connection captured when the window first opened.
 ipcMain.handle('forgecad:connection', () => engine.start());
 
 const ENGINE_LOADING_HTML = `<!doctype html>
@@ -138,7 +132,6 @@ function waitForComponentCatalogSignal(window: BrowserWindow, timeoutMs = 90_000
   return new Promise((resolve) => {
     let settled = false;
     let timer: NodeJS.Timeout | null = null;
-
     const finish = (result: CatalogStartupResult) => {
       if (settled) return;
       settled = true;
@@ -147,15 +140,12 @@ function waitForComponentCatalogSignal(window: BrowserWindow, timeoutMs = 90_000
       window.webContents.off('destroyed', onDestroyed);
       resolve(result);
     };
-
     const onCatalogState = (event: Electron.IpcMainEvent, state: unknown, detail?: unknown) => {
       if (event.sender !== window.webContents) return;
       if (state === 'ready') finish({ state: 'ready' });
       else if (state === 'failed') finish({ state: 'failed', detail: typeof detail === 'string' ? detail : 'Component catalog failed to load' });
     };
-
     const onDestroyed = () => finish({ state: 'failed', detail: 'ForgeCAD renderer closed before the component catalog became ready' });
-
     ipcMain.on('forgecad:component-catalog-state', onCatalogState);
     window.webContents.once('destroyed', onDestroyed);
     timer = setTimeout(() => finish({ state: 'timeout', detail: 'Component catalog did not report readiness within 90 seconds' }), timeoutMs);
@@ -186,23 +176,14 @@ async function createMainWindow() {
     if (engineLoadingWindow && !engineLoadingWindow.isDestroyed()) engineLoadingWindow.destroy();
   });
 
-  // Start the native engine immediately, but do not hold the entire desktop window back.
-  // The user sees ForgeCAD at once with a true modal child window over it. Because the
-  // child is `modal: true`, the CAD workbench cannot receive pointer or keyboard input
-  // until EngineSupervisor has passed its health gate and the renderer explicitly reports
-  // that the component catalog has committed usable rows.
   const engineStartup = engine.start().then(
     (connection) => ({ ok: true as const, connection }),
     (error: unknown) => ({ ok: false as const, error }),
   );
-
   engineLoadingWindow = await createEngineLoadingModal(window);
 
-  if (VITE_DEV_SERVER_URL) {
-    await window.loadURL(VITE_DEV_SERVER_URL);
-  } else {
-    await window.loadFile(path.join(RENDERER_DIST, 'index.html'));
-  }
+  if (VITE_DEV_SERVER_URL) await window.loadURL(VITE_DEV_SERVER_URL);
+  else await window.loadFile(path.join(RENDERER_DIST, 'index.html'));
 
   if (window.isDestroyed()) return;
   window.show();
@@ -216,9 +197,7 @@ async function createMainWindow() {
     if (engineLoadingWindow && !engineLoadingWindow.isDestroyed()) {
       await showComponentLoadingStage(engineLoadingWindow);
       const catalog = await catalogStartup;
-      if (catalog.state !== 'ready') {
-        console.warn(`[ForgeCAD] Component catalog startup ${catalog.state}: ${catalog.detail ?? 'unknown reason'}`);
-      }
+      if (catalog.state !== 'ready') console.warn(`[ForgeCAD] Component catalog startup ${catalog.state}: ${catalog.detail ?? 'unknown reason'}`);
       if (!engineLoadingWindow.isDestroyed()) engineLoadingWindow.destroy();
     }
     engineLoadingWindow = null;
@@ -230,11 +209,7 @@ async function createMainWindow() {
   engineLoadingWindow = null;
   const detail = startup.error instanceof Error ? startup.error.message : String(startup.error);
   await dialog.showMessageBox(window, {
-    type: 'error',
-    title: 'ForgeCAD could not start',
-    message: 'Forge Engine failed its startup gate.',
-    detail,
-    buttons: ['Quit'],
+    type: 'error', title: 'ForgeCAD could not start', message: 'Forge Engine failed its startup gate.', detail, buttons: ['Quit'],
   });
   app.quit();
 }
@@ -243,11 +218,8 @@ function createMenu() {
   const template: Electron.MenuItemConstructorOptions[] = [
     { role: 'appMenu' },
     { label: 'File', submenu: [{ role: 'close' }] },
-    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }] },
-    { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
-    { label: 'Project', submenu: [] },
-    { label: 'Simulation', submenu: [] },
-    { label: 'Tools', submenu: [] },
+    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+    { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
     { role: 'windowMenu' },
     { role: 'help' },
   ];
@@ -260,23 +232,12 @@ app.whenReady().then(async () => {
     await createMainWindow();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    await dialog.showMessageBox({
-      type: 'error',
-      title: 'ForgeCAD could not open',
-      message: 'ForgeCAD could not create its desktop window.',
-      detail,
-      buttons: ['Quit'],
-    });
+    await dialog.showMessageBox({ type: 'error', title: 'ForgeCAD could not open', message: 'ForgeCAD could not create its desktop window.', detail, buttons: ['Quit'] });
     app.quit();
     return;
   }
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createMainWindow();
-  });
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createMainWindow(); });
 });
 
 app.on('before-quit', () => engine.stop());
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
