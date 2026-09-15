@@ -1,4 +1,5 @@
 .section-heading .section-link{height:20px;min-height:20px;border:0;background:transparent;padding:0 2px;color:var(--text-3);font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}.section-heading .section-link:hover:not(:disabled){background:transparent;color:var(--accent-2)}
+.property-feature-history [data-testid="feature-history-panel"]{border-top:0!important;margin-top:0!important;padding-top:0!important}.property-feature-history{padding-bottom:10px}.property-feature-history .wide-action{min-height:26px}
 .lineage-panel{border-top:1px solid var(--border);background:#171a1e}
 .lineage-heading{min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border)}
 .lineage-heading>div{min-width:0;display:flex;align-items:flex-start;gap:7px}.lineage-heading>div>span{min-width:0;display:flex;flex-direction:column;gap:2px}.lineage-heading strong{font-size:10px}.lineage-heading small{font-size:8.5px;color:var(--text-3);line-height:1.35}
