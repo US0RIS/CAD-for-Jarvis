@@ -62,6 +62,8 @@ class EngineeringJob(BaseModel):
     progress: float | None = None
     message: str | None = None
     branch: str | None = None
+    revision: str | None = None
+    cancellable: bool = True
     selected_object_id: str | None = None
     assistant_text: str = ""
     result: dict[str, Any] = Field(default_factory=dict)
