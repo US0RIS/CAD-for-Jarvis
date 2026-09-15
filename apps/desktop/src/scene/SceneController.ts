@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { executeOperation, fetchScene, type ScenePayload } from '../api/engine';
+import { fetchSimulationGraph } from '../api/simulation';
 
 export type TransformMode = 'move' | 'rotate' | 'scale';
 export type CameraPreset = 'fit' | 'iso' | 'top' | 'front' | 'right';
@@ -11,7 +12,26 @@ interface ScenePartRecord {
   id: string;
   object: THREE.Object3D;
   basePosition: THREE.Vector3;
+  baseRotation: THREE.Euler;
+  baseScale: THREE.Vector3;
   explodeVector: THREE.Vector3;
+}
+
+interface SimulationPreviewTransform {
+  position?: number[];
+  rotation_deg?: number[];
+  scale?: number[];
+}
+
+interface SimulationPreviewFrame {
+  time_s?: number;
+  transforms?: Record<string, SimulationPreviewTransform>;
+  collisions?: Array<{ a_id?: string; b_id?: string }>;
+}
+
+interface SimulationPreviewEventDetail {
+  frames?: SimulationPreviewFrame[];
+  duration_s?: number;
 }
 
 export interface SceneControllerEvents {
@@ -51,6 +71,11 @@ function transformVectors(part: ScenePayload['parts'][number]) {
   return { position, rotation, scale };
 }
 
+function finiteNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export class SceneController {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(38, 1, 0.1, 10000);
@@ -63,6 +88,8 @@ export class SceneController {
   private readonly parts = new Map<string, ScenePartRecord>();
   private readonly assemblyRoot = new THREE.Group();
   private readonly userHiddenIds = new Set<string>();
+  private readonly kinematicChildren = new Map<string, string[]>();
+  private readonly kinematicParent = new Map<string, string>();
   private optimisticHiddenIds = new Set<string>();
   private isolatedId: string | null = null;
   private resizeObserver?: ResizeObserver;
@@ -73,8 +100,15 @@ export class SceneController {
   private authoritative = false;
   private pointerDownHandler?: (event: PointerEvent) => void;
   private contextMenuHandler?: (event: Event) => void;
+  private simulationPreviewHandler?: EventListener;
   private reloadGeneration = 0;
   private hasFramedScene = false;
+  private dragRootStartMatrix: THREE.Matrix4 | null = null;
+  private readonly dragDescendantStartMatrices = new Map<string, THREE.Matrix4>();
+  private simulationPreviewHandle = 0;
+  private simulationPreviewRestoreTimer = 0;
+  private simulationPreviewGeneration = 0;
+  private simulationPreviewActive = false;
 
   private static detectSoftwareRenderer(): boolean {
     try {
@@ -119,6 +153,8 @@ export class SceneController {
     this.transform.setSpace('world');
     this.transform.setSize(0.72);
     this.transform.addEventListener('dragging-changed', (event) => { this.orbit.enabled = !event.value; });
+    this.transform.addEventListener('mouseDown', () => this.beginConstraintDrag());
+    this.transform.addEventListener('objectChange', () => this.propagateConstraintDrag());
     this.transform.addEventListener('mouseUp', () => { void this.commitTransform(); });
     this.transformHelper = this.transform.getHelper();
     this.scene.add(this.transformHelper);
@@ -126,6 +162,7 @@ export class SceneController {
     this.scene.add(this.assemblyRoot);
     this.installLightingAndGround();
     this.installEvents();
+    this.installSimulationPreviewEvents();
     this.resize();
     this.animate();
   }
@@ -215,10 +252,85 @@ export class SceneController {
     }
   }
 
+  private rebuildKinematicGraph(edges: Array<{ parent_id?: string; child_id?: string }> = []) {
+    this.kinematicChildren.clear();
+    this.kinematicParent.clear();
+    for (const edge of edges) {
+      const parent = String(edge.parent_id ?? '');
+      const child = String(edge.child_id ?? '');
+      if (!parent || !child || parent === child || !this.parts.has(parent) || !this.parts.has(child)) continue;
+      const children = this.kinematicChildren.get(parent) ?? [];
+      children.push(child);
+      this.kinematicChildren.set(parent, children);
+      this.kinematicParent.set(child, parent);
+    }
+  }
+
+  private descendants(rootId: string): string[] {
+    const result: string[] = [];
+    const stack = [...(this.kinematicChildren.get(rootId) ?? [])].reverse();
+    const seen = new Set<string>();
+    while (stack.length) {
+      const current = stack.pop();
+      if (!current || seen.has(current)) continue;
+      seen.add(current);
+      result.push(current);
+      stack.push(...(this.kinematicChildren.get(current) ?? []).slice().reverse());
+    }
+    return result;
+  }
+
+  private beginConstraintDrag() {
+    this.dragRootStartMatrix = null;
+    this.dragDescendantStartMatrices.clear();
+    if (!this.selectedId || this.explode !== 0 || this.simulationPreviewActive) return;
+    if (this.kinematicParent.has(this.selectedId)) return;
+    const root = this.parts.get(this.selectedId);
+    if (!root) return;
+    root.object.updateMatrix();
+    this.dragRootStartMatrix = root.object.matrix.clone();
+    for (const id of this.descendants(this.selectedId)) {
+      const part = this.parts.get(id);
+      if (!part) continue;
+      part.object.updateMatrix();
+      this.dragDescendantStartMatrices.set(id, part.object.matrix.clone());
+    }
+  }
+
+  private propagateConstraintDrag() {
+    if (!this.selectedId || !this.dragRootStartMatrix || !this.dragDescendantStartMatrices.size) return;
+    const root = this.parts.get(this.selectedId);
+    if (!root) return;
+    root.object.updateMatrix();
+    const delta = root.object.matrix.clone().multiply(this.dragRootStartMatrix.clone().invert());
+    for (const [id, startMatrix] of this.dragDescendantStartMatrices) {
+      const part = this.parts.get(id);
+      if (!part) continue;
+      const matrix = delta.clone().multiply(startMatrix);
+      matrix.decompose(part.object.position, part.object.quaternion, part.object.scale);
+    }
+  }
+
+  private clearConstraintDrag() {
+    this.dragRootStartMatrix = null;
+    this.dragDescendantStartMatrices.clear();
+  }
+
+  private updateBaseTransform(record: ScenePartRecord) {
+    record.basePosition.copy(record.object.position);
+    record.baseRotation.copy(record.object.rotation);
+    record.baseScale.copy(record.object.scale);
+  }
+
   async reload(): Promise<void> {
     const generation = ++this.reloadGeneration;
+    this.cancelSimulationPreview(false);
+    this.clearConstraintDrag();
     try {
-      const payload = await fetchScene();
+      const [payload, graph] = await Promise.all([
+        fetchScene(),
+        fetchSimulationGraph().catch(() => null),
+      ]);
       if (this.disposed || generation !== this.reloadGeneration) return;
       const previousSelected = this.selectedId;
       this.authoritative = Boolean(payload.authoritative);
@@ -256,9 +368,17 @@ export class SceneController {
           Number(part.explode_vector?.[2] ?? 1),
         );
         if (explodeVector.lengthSq() < 1e-9) explodeVector.set(0, 0, 1);
-        this.parts.set(part.id, { id: part.id, object, basePosition: object.position.clone(), explodeVector: explodeVector.normalize() });
+        this.parts.set(part.id, {
+          id: part.id,
+          object,
+          basePosition: object.position.clone(),
+          baseRotation: object.rotation.clone(),
+          baseScale: object.scale.clone(),
+          explodeVector: explodeVector.normalize(),
+        });
       }
 
+      this.rebuildKinematicGraph(graph?.ok ? graph.edges : []);
       for (const hiddenId of [...this.userHiddenIds]) {
         if (!this.parts.has(hiddenId)) this.userHiddenIds.delete(hiddenId);
       }
@@ -300,23 +420,38 @@ export class SceneController {
     this.canvas.addEventListener('contextmenu', this.contextMenuHandler);
   }
 
-  private select(id: string | null) {
-    this.selectedId = id;
-    this.transform.detach();
-    if (id) {
-      const part = this.parts.get(id);
-      if (part && part.object.visible && this.explode === 0) this.transform.attach(part.object);
-    }
+  private installSimulationPreviewEvents() {
+    this.simulationPreviewHandler = ((event: Event) => {
+      const detail = (event as CustomEvent<SimulationPreviewEventDetail>).detail;
+      if (!detail || !Array.isArray(detail.frames) || !detail.frames.length) return;
+      this.playSimulationPreview(detail.frames, finiteNumber(detail.duration_s, 0));
+    }) as EventListener;
+    window.addEventListener('forgecad:simulation-preview', this.simulationPreviewHandler);
+  }
+
+  private updateEmissive(collidingIds: ReadonlySet<string> = new Set()) {
     for (const part of this.parts.values()) {
-      const selected = part.id === id;
+      const selected = part.id === this.selectedId;
+      const colliding = collidingIds.has(part.id);
       part.object.traverse((node) => {
         if (!(node instanceof THREE.Mesh)) return;
         const materials = Array.isArray(node.material) ? node.material : [node.material];
         for (const material of materials) {
-          if (material instanceof THREE.MeshPhysicalMaterial) material.emissive.setHex(selected ? 0x17324d : 0x000000);
+          if (!(material instanceof THREE.MeshPhysicalMaterial)) continue;
+          material.emissive.setHex(colliding ? 0x5f1717 : selected ? 0x17324d : 0x000000);
         }
       });
     }
+  }
+
+  private select(id: string | null) {
+    this.selectedId = id;
+    this.transform.detach();
+    if (id && !this.simulationPreviewActive) {
+      const part = this.parts.get(id);
+      if (part && part.object.visible && this.explode === 0) this.transform.attach(part.object);
+    }
+    this.updateEmissive();
     this.events.onSelectionChange?.(id);
   }
 
@@ -332,10 +467,16 @@ export class SceneController {
   }
 
   private async commitTransform() {
-    if (!this.selectedId || !this.authoritative || this.explode !== 0) return;
+    if (!this.selectedId || !this.authoritative || this.explode !== 0 || this.simulationPreviewActive) {
+      this.clearConstraintDrag();
+      return;
+    }
     const selectedId = this.selectedId;
     const record = this.parts.get(selectedId);
-    if (!record) return;
+    if (!record) {
+      this.clearConstraintDrag();
+      return;
+    }
     const object = record.object;
     const args = {
       id: selectedId,
@@ -349,16 +490,136 @@ export class SceneController {
     };
     try {
       await executeOperation('transform', args, 'Viewport transform');
-      record.basePosition.copy(object.position);
+      this.updateBaseTransform(record);
+      for (const id of this.dragDescendantStartMatrices.keys()) {
+        const descendant = this.parts.get(id);
+        if (descendant) this.updateBaseTransform(descendant);
+      }
     } catch (error) {
       this.events.onError?.(error instanceof Error ? error : new Error(String(error)));
       await this.reload();
       this.selectPart(selectedId);
+    } finally {
+      this.clearConstraintDrag();
     }
+  }
+
+  private restoreCanonicalPose() {
+    for (const part of this.parts.values()) {
+      part.object.position.copy(part.basePosition);
+      part.object.rotation.copy(part.baseRotation);
+      part.object.scale.copy(part.baseScale);
+    }
+    this.updateEmissive();
+    if (this.explode !== 0) {
+      const amount = this.explode * 0.9;
+      for (const part of this.parts.values()) part.object.position.copy(part.basePosition).addScaledVector(part.explodeVector, amount);
+    }
+    if (this.explode === 0 && this.selectedId) {
+      const selected = this.parts.get(this.selectedId);
+      if (selected?.object.visible) this.transform.attach(selected.object);
+    }
+  }
+
+  private cancelSimulationPreview(restore = true) {
+    this.simulationPreviewGeneration += 1;
+    if (this.simulationPreviewHandle) cancelAnimationFrame(this.simulationPreviewHandle);
+    if (this.simulationPreviewRestoreTimer) window.clearTimeout(this.simulationPreviewRestoreTimer);
+    this.simulationPreviewHandle = 0;
+    this.simulationPreviewRestoreTimer = 0;
+    this.simulationPreviewActive = false;
+    if (restore) this.restoreCanonicalPose();
+  }
+
+  private applyPreviewFrame(a: SimulationPreviewFrame, b: SimulationPreviewFrame, mix: number) {
+    const transformsA = a.transforms ?? {};
+    const transformsB = b.transforms ?? transformsA;
+    const ids = new Set([...Object.keys(transformsA), ...Object.keys(transformsB)]);
+    for (const id of ids) {
+      const part = this.parts.get(id);
+      if (!part) continue;
+      const ta = transformsA[id] ?? transformsB[id];
+      const tb = transformsB[id] ?? ta;
+      if (!ta || !tb) continue;
+      const pa = new THREE.Vector3(finiteNumber(ta.position?.[0]), finiteNumber(ta.position?.[1]), finiteNumber(ta.position?.[2]));
+      const pb = new THREE.Vector3(finiteNumber(tb.position?.[0]), finiteNumber(tb.position?.[1]), finiteNumber(tb.position?.[2]));
+      part.object.position.copy(pa.lerp(pb, mix));
+
+      const ea = new THREE.Euler(
+        THREE.MathUtils.degToRad(finiteNumber(ta.rotation_deg?.[0])),
+        THREE.MathUtils.degToRad(finiteNumber(ta.rotation_deg?.[1])),
+        THREE.MathUtils.degToRad(finiteNumber(ta.rotation_deg?.[2])),
+        'XYZ',
+      );
+      const eb = new THREE.Euler(
+        THREE.MathUtils.degToRad(finiteNumber(tb.rotation_deg?.[0])),
+        THREE.MathUtils.degToRad(finiteNumber(tb.rotation_deg?.[1])),
+        THREE.MathUtils.degToRad(finiteNumber(tb.rotation_deg?.[2])),
+        'XYZ',
+      );
+      const qa = new THREE.Quaternion().setFromEuler(ea);
+      const qb = new THREE.Quaternion().setFromEuler(eb);
+      part.object.quaternion.copy(qa.slerp(qb, mix));
+
+      const sa = new THREE.Vector3(finiteNumber(ta.scale?.[0], 1), finiteNumber(ta.scale?.[1], 1), finiteNumber(ta.scale?.[2], 1));
+      const sb = new THREE.Vector3(finiteNumber(tb.scale?.[0], 1), finiteNumber(tb.scale?.[1], 1), finiteNumber(tb.scale?.[2], 1));
+      part.object.scale.copy(sa.lerp(sb, mix));
+    }
+    const collisionIds = new Set<string>();
+    for (const collision of [...(a.collisions ?? []), ...(b.collisions ?? [])]) {
+      if (collision.a_id) collisionIds.add(String(collision.a_id));
+      if (collision.b_id) collisionIds.add(String(collision.b_id));
+    }
+    this.updateEmissive(collisionIds);
+  }
+
+  playSimulationPreview(frames: SimulationPreviewFrame[], requestedDurationS = 0) {
+    if (!frames.length || this.disposed) return;
+    this.cancelSimulationPreview(true);
+    this.simulationPreviewActive = true;
+    this.transform.detach();
+    const sorted = [...frames].sort((a, b) => finiteNumber(a.time_s) - finiteNumber(b.time_s));
+    const lastTime = Math.max(0, finiteNumber(sorted.at(-1)?.time_s));
+    const durationS = requestedDurationS > 0 ? requestedDurationS : lastTime > 0 ? lastTime : 1;
+    const sourceDuration = lastTime > 0 ? lastTime : durationS;
+    const generation = ++this.simulationPreviewGeneration;
+    const start = performance.now();
+
+    const step = (now: number) => {
+      if (this.disposed || generation !== this.simulationPreviewGeneration) return;
+      const elapsed = Math.min(durationS, Math.max(0, (now - start) / 1000));
+      const sourceTime = durationS > 0 ? (elapsed / durationS) * sourceDuration : sourceDuration;
+      let upperIndex = sorted.findIndex((frame) => finiteNumber(frame.time_s) >= sourceTime);
+      if (upperIndex < 0) upperIndex = sorted.length - 1;
+      const lowerIndex = Math.max(0, upperIndex - 1);
+      const lower = sorted[lowerIndex] ?? sorted[0];
+      const upper = sorted[upperIndex] ?? lower;
+      if (!lower || !upper) return;
+      const t0 = finiteNumber(lower.time_s);
+      const t1 = finiteNumber(upper.time_s, t0);
+      const mix = t1 > t0 ? Math.max(0, Math.min(1, (sourceTime - t0) / (t1 - t0))) : 0;
+      this.applyPreviewFrame(lower, upper, mix);
+      if (elapsed < durationS) {
+        this.simulationPreviewHandle = requestAnimationFrame(step);
+        return;
+      }
+      this.simulationPreviewHandle = 0;
+      this.simulationPreviewRestoreTimer = window.setTimeout(() => {
+        if (generation !== this.simulationPreviewGeneration) return;
+        this.simulationPreviewRestoreTimer = 0;
+        this.simulationPreviewActive = false;
+        this.restoreCanonicalPose();
+      }, 650);
+    };
+    this.simulationPreviewHandle = requestAnimationFrame(step);
   }
 
   setExplode(value: number) {
     this.explode = Math.max(0, Math.min(100, value));
+    if (this.simulationPreviewActive) {
+      this.transform.detach();
+      return;
+    }
     if (this.explode !== 0) this.transform.detach();
     const amount = this.explode * 0.9;
     for (const part of this.parts.values()) {
@@ -434,10 +695,13 @@ export class SceneController {
   dispose() {
     this.disposed = true;
     this.reloadGeneration += 1;
+    this.cancelSimulationPreview(false);
+    this.clearConstraintDrag();
     cancelAnimationFrame(this.frameHandle);
     this.resizeObserver?.disconnect();
     if (this.pointerDownHandler) this.canvas.removeEventListener('pointerdown', this.pointerDownHandler);
     if (this.contextMenuHandler) this.canvas.removeEventListener('contextmenu', this.contextMenuHandler);
+    if (this.simulationPreviewHandler) window.removeEventListener('forgecad:simulation-preview', this.simulationPreviewHandler);
     this.transform.detach();
     this.transform.dispose();
     this.orbit.dispose();
