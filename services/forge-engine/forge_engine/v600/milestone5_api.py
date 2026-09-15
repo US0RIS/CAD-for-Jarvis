@@ -81,7 +81,17 @@ def install(
     @app.post("/v6/physical/retest-cycles/{cycle_id}/complete", dependencies=[Depends(require_session)])
     async def complete_retest(cycle_id: str, request: CompletePhysicalRetestRequest) -> dict[str, Any]:
         try:
-            artifacts = assert_artifact_contract_satisfied(cycle_id)
+            cycle_rows = physical_retest_cycles()["items"]
+            cycle = next((row for row in cycle_rows if str(row.get("id")) == cycle_id), None)
+            if cycle is None:
+                raise KeyError(cycle_id)
+            # Artifact contracts are additive. A cycle created before this feature,
+            # or a cycle that deliberately has no artifact contract, must preserve
+            # the original physical-retest fingerprint checks and error semantics.
+            if cycle.get("artifact_requirements"):
+                artifacts = assert_artifact_contract_satisfied(cycle_id)
+            else:
+                artifacts = physical_test_artifacts(cycle_id)["items"]
             artifact_evidence = artifact_evidence_ids(cycle_id)
             effective_request = request.model_copy(
                 update={"evidence_ids": [*request.evidence_ids, *[row for row in artifact_evidence if row not in request.evidence_ids]]}
