@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException
 
 from ..v110 import core
 from . import MILESTONE_VERSION
-from . import manufacturer_truth
+from . import manufacturer_cad_registration, manufacturer_truth
 from .assembly_frame_constraints import MateRequest, apply_mate, solve_mate_transform, validate_constraint_set
 from .constraint_rank import analyze_constraint_rank
 from .geometry_mounts import MountGeometryRequest, audit_mount_geometry, materialize_mount_geometry, plan_mount_geometry
@@ -35,6 +35,7 @@ def install(
     # the registry, so later immutable component snapshots inherit the same
     # coordinates, datum and provenance used by the deterministic B-rep builders.
     manufacturer_truth.install_manufacturer_truth()
+    manufacturer_cad_registration.install(manufacturer_truth.MANUFACTURER_MOUNT_TRUTH)
 
     @app.get("/v6/health")
     async def v6_health() -> dict[str, Any]:
@@ -58,6 +59,7 @@ def install(
             "geometry_backed_mount_count": geometry_backed_mounts,
             "mount_hardware_realization_count": hardware_realizations,
             "manufacturer_mount_truth": manufacturer_truth.summary(),
+            "manufacturer_cad_registration": manufacturer_cad_registration.summary(),
             "invariants": [
                 "designed truth != observed state != inference",
                 "autonomous placement derives from declared engineering interfaces",
@@ -66,6 +68,7 @@ def install(
                 "assembly mobility and redundant constraints are derived from the spatial constraint Jacobian rather than guessed from mate count",
                 "a mechanical mount is not verified until declared mounting geometry is present in the fabricated B-rep",
                 "manufacturer mounting patterns use explicit coordinates, coordinate datums and source provenance when spacing alone cannot define physical location",
+                "manufacturer STEP geometry is authoritative only after rigid registration to a validated mechanical datum; whole-assembly bounding-box centering is not engineering truth",
                 "a realized mount is not assembly-ready if neighboring B-reps occupy its standoff or straight-driver access envelopes",
                 "standard mount hardware may be specified before supplier selection, but unresolved manufacturer/MPN remains explicitly unresolved",
                 "ambiguous component mounting topology fails closed rather than being guessed",
