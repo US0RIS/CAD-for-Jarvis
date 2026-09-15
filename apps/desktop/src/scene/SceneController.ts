@@ -62,6 +62,9 @@ export class SceneController {
   private readonly pointer = new THREE.Vector2();
   private readonly parts = new Map<string, ScenePartRecord>();
   private readonly assemblyRoot = new THREE.Group();
+  private readonly userHiddenIds = new Set<string>();
+  private optimisticHiddenIds = new Set<string>();
+  private isolatedId: string | null = null;
   private resizeObserver?: ResizeObserver;
   private frameHandle = 0;
   private selectedId: string | null = null;
@@ -70,6 +73,8 @@ export class SceneController {
   private authoritative = false;
   private pointerDownHandler?: (event: PointerEvent) => void;
   private contextMenuHandler?: (event: Event) => void;
+  private reloadGeneration = 0;
+  private hasFramedScene = false;
 
   private static detectSoftwareRenderer(): boolean {
     try {
@@ -202,10 +207,19 @@ export class SceneController {
     return geometry;
   }
 
+  private applyVisibility() {
+    for (const part of this.parts.values()) {
+      part.object.visible = !this.optimisticHiddenIds.has(part.id)
+        && !this.userHiddenIds.has(part.id)
+        && (this.isolatedId == null || part.id === this.isolatedId);
+    }
+  }
+
   async reload(): Promise<void> {
+    const generation = ++this.reloadGeneration;
     try {
       const payload = await fetchScene();
-      if (this.disposed) return;
+      if (this.disposed || generation !== this.reloadGeneration) return;
       const previousSelected = this.selectedId;
       this.authoritative = Boolean(payload.authoritative);
       this.transform.detach();
@@ -245,12 +259,16 @@ export class SceneController {
         this.parts.set(part.id, { id: part.id, object, basePosition: object.position.clone(), explodeVector: explodeVector.normalize() });
       }
       this.setExplode(this.explode);
-      if (this.parts.size) this.setCameraPreset('fit');
-      if (previousSelected && this.parts.has(previousSelected)) this.select(previousSelected);
-      else this.selectedId = null;
+      this.applyVisibility();
+      if (!this.hasFramedScene && this.parts.size) {
+        this.setCameraPreset('fit');
+        this.hasFramedScene = true;
+      }
+      if (previousSelected && this.parts.has(previousSelected) && !this.optimisticHiddenIds.has(previousSelected)) this.select(previousSelected);
+      else if (previousSelected) this.select(null);
       this.events.onReady?.();
     } catch (error) {
-      this.events.onError?.(error instanceof Error ? error : new Error(String(error)));
+      if (generation === this.reloadGeneration) this.events.onError?.(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -262,7 +280,8 @@ export class SceneController {
       this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       this.raycaster.setFromCamera(this.pointer, this.camera);
-      const hits = this.raycaster.intersectObjects([...this.parts.values()].map((part) => part.object), true);
+      const visible = [...this.parts.values()].filter((part) => part.object.visible).map((part) => part.object);
+      const hits = this.raycaster.intersectObjects(visible, true);
       const id = hits[0]?.object.userData.partId as string | undefined;
       this.select(id ?? null);
     };
@@ -279,7 +298,7 @@ export class SceneController {
     this.transform.detach();
     if (id) {
       const part = this.parts.get(id);
-      if (part && this.explode === 0) this.transform.attach(part.object);
+      if (part && part.object.visible && this.explode === 0) this.transform.attach(part.object);
     }
     for (const part of this.parts.values()) {
       const selected = part.id === id;
@@ -297,6 +316,12 @@ export class SceneController {
   selectPart(id: string | null) {
     if (id && !this.parts.has(id)) return;
     this.select(id);
+  }
+
+  setOptimisticHidden(ids: Iterable<string>) {
+    this.optimisticHiddenIds = new Set(ids);
+    if (this.selectedId && this.optimisticHiddenIds.has(this.selectedId)) this.select(null);
+    this.applyVisibility();
   }
 
   private async commitTransform() {
@@ -317,8 +342,10 @@ export class SceneController {
     };
     try {
       await executeOperation('transform', args, 'Viewport transform');
-      await this.reload();
-      this.selectPart(selectedId);
+      // executeOperation publishes the canonical project update, which causes exactly
+      // one authoritative scene reload through the React revision boundary. Keeping the
+      // current mesh in place avoids a second expensive tessellation and camera flash.
+      record.basePosition.copy(object.position);
     } catch (error) {
       this.events.onError?.(error instanceof Error ? error : new Error(String(error)));
       await this.reload();
@@ -335,15 +362,28 @@ export class SceneController {
     }
     if (this.explode === 0 && this.selectedId) {
       const part = this.parts.get(this.selectedId);
-      if (part) this.transform.attach(part.object);
+      if (part?.object.visible) this.transform.attach(part.object);
     }
   }
 
   setTransformMode(mode: TransformMode) { this.transform.setMode(mode === 'move' ? 'translate' : mode); }
   setAutoRotate(enabled: boolean) { this.orbit.autoRotate = enabled; this.orbit.autoRotateSpeed = 1.0; }
-  isolateSelected() { if (this.selectedId) for (const part of this.parts.values()) part.object.visible = part.id === this.selectedId; }
-  hideSelected() { if (this.selectedId) { const part = this.parts.get(this.selectedId); if (part) part.object.visible = false; this.transform.detach(); } }
-  showAll() { for (const part of this.parts.values()) part.object.visible = true; }
+  isolateSelected() {
+    if (!this.selectedId) return;
+    this.isolatedId = this.selectedId;
+    this.applyVisibility();
+  }
+  hideSelected() {
+    if (!this.selectedId) return;
+    this.userHiddenIds.add(this.selectedId);
+    this.transform.detach();
+    this.applyVisibility();
+  }
+  showAll() {
+    this.isolatedId = null;
+    this.userHiddenIds.clear();
+    this.applyVisibility();
+  }
 
   setCameraPreset(preset: CameraPreset) {
     if (preset === 'fit') {
@@ -358,6 +398,7 @@ export class SceneController {
       this.camera.far = Math.max(2000, radius * 20);
       this.camera.updateProjectionMatrix();
       this.orbit.update();
+      this.hasFramedScene = true;
       return;
     }
     const center = this.orbit.target.clone();
@@ -388,6 +429,7 @@ export class SceneController {
 
   dispose() {
     this.disposed = true;
+    this.reloadGeneration += 1;
     cancelAnimationFrame(this.frameHandle);
     this.resizeObserver?.disconnect();
     if (this.pointerDownHandler) this.canvas.removeEventListener('pointerdown', this.pointerDownHandler);
