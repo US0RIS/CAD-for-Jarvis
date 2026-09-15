@@ -13,6 +13,7 @@ from . import manufacturer_truth
 from .assembly_frame_constraints import MateRequest, apply_mate, solve_mate_transform, validate_constraint_set
 from .constraint_rank import analyze_constraint_rank
 from .geometry_mounts import MountGeometryRequest, audit_mount_geometry, materialize_mount_geometry, plan_mount_geometry
+from .mount_access import MountAccessRequest, audit_mount_access, plan_mount_access
 from .mount_hardware import MountHardwareRequest, audit_mount_hardware, plan_mount_hardware, realize_mount_hardware
 
 
@@ -65,6 +66,7 @@ def install(
                 "assembly mobility and redundant constraints are derived from the spatial constraint Jacobian rather than guessed from mate count",
                 "a mechanical mount is not verified until declared mounting geometry is present in the fabricated B-rep",
                 "manufacturer mounting patterns use explicit coordinates, coordinate datums and source provenance when spacing alone cannot define physical location",
+                "a realized mount is not assembly-ready if neighboring B-reps occupy its standoff or straight-driver access envelopes",
                 "standard mount hardware may be specified before supplier selection, but unresolved manufacturer/MPN remains explicitly unresolved",
                 "ambiguous component mounting topology fails closed rather than being guessed",
             ],
@@ -194,5 +196,19 @@ def install(
     @app.post("/v6/assembly/mounts/hardware/audit", dependencies=[Depends(require_session)])
     async def mount_hardware_audit(request: MountHardwareRequest) -> dict[str, Any]:
         return audit_mount_hardware(core.PROJECT, request)
+
+    @app.post("/v6/assembly/mounts/access/plan", dependencies=[Depends(require_session)])
+    async def mount_access_plan(request: MountAccessRequest) -> dict[str, Any]:
+        try:
+            plan = plan_mount_access(core.PROJECT, request)
+            return {key: value for key, value in plan.items() if key != "_runtime_envelopes"}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown object/interface: {exc.args[0]}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/v6/assembly/mounts/access/audit", dependencies=[Depends(require_session)])
+    async def mount_access_audit(request: MountAccessRequest) -> dict[str, Any]:
+        return audit_mount_access(core.PROJECT, request)
 
     _INSTALLED = True
