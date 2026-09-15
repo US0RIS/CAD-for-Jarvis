@@ -1,0 +1,77 @@
+name: Bind ForgeCAD 6.0.1 Tested Release
+
+on:
+  push:
+    branches: [forgecad/6.0.1]
+    paths:
+      - '.github/workflows/v601-bind-tested-release.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  bind:
+    name: Bind v6.0.1 to exact native-tested source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      RELEASE_SHA: 79295c299bb77f20e1e7fd7be8670017a5b1246b
+      NATIVE_RUN_ID: '35035541014'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Wait for exact native release run
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 300); do
+            STATUS=$(gh run view "$NATIVE_RUN_ID" --json status --jq '.status')
+            HEAD=$(gh run view "$NATIVE_RUN_ID" --json headSha --jq '.headSha')
+            test "$HEAD" = "$RELEASE_SHA"
+            if [ "$STATUS" = completed ]; then
+              CONCLUSION=$(gh run view "$NATIVE_RUN_ID" --json conclusion --jq '.conclusion')
+              test "$CONCLUSION" = success
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'Timed out waiting for exact native release run.' >&2
+          exit 1
+      - name: Verify published native assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for NAME in \
+            ForgeCAD-Setup-6.0.1.exe \
+            ForgeCAD-6.0.1-arm64.dmg \
+            ForgeCAD-6.0.1-x64.dmg \
+            SHA256SUMS.txt
+          do
+            gh release view v6.0.1 --json assets --jq '.assets[].name' | grep -Fx "$NAME"
+          done
+      - name: Bind tag and release target to tested SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin "$RELEASE_SHA"
+          git tag -f v6.0.1 "$RELEASE_SHA"
+          git push --force origin refs/tags/v6.0.1
+          gh release edit v6.0.1 \
+            --target "$RELEASE_SHA" \
+            --title 'ForgeCAD 6.0.1' \
+            --notes-file docs/RELEASE_6_0_1.md
+      - name: Verify exact provenance binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin tag v6.0.1
+          TAG_SHA=$(git rev-list -n 1 v6.0.1)
+          test "$TAG_SHA" = "$RELEASE_SHA"
+          TARGET=$(gh release view v6.0.1 --json targetCommitish --jq '.targetCommitish')
+          test "$TARGET" = "$RELEASE_SHA"
+          echo "ForgeCAD 6.0.1 provenance PASS: $RELEASE_SHA"
