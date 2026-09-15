@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import math
 
-from . import aerodynamics, joint_loads, multibody, simulation_state, thermal_transient
+from . import aerodynamics, joint_loads, motion_simulation, multibody, simulation_state, thermal_transient
 
 
 def _box(object_id: str, name: str, position: list[float]) -> dict:
@@ -105,6 +105,46 @@ def run() -> dict:
     assert _near(arm_position[0], 0.0) and _near(arm_position[1], 10.0)
     assert _near(payload_position[0], 0.0) and _near(payload_position[1], 20.0)
 
+    # Time-domain motion must use the same descendant propagation, not the legacy
+    # one-child sweep. The final frame therefore moves both arm and payload.
+    motion = motion_simulation.simulate_joint_sweep(
+        mechanism,
+        "hinge",
+        start_state={"rotation_deg": 0.0},
+        end_state={"rotation_deg": 90.0},
+        duration_s=2.0,
+        samples=9,
+        gravity_m_s2=[0.0, 0.0, -9.80665],
+    )
+    assert motion["moving_object_ids"] == ["arm", "payload"]
+    assert motion["sample_count"] == 9
+    assert motion["collision_free"] is True
+    final_frame = motion["frames"][-1]
+    assert _near(final_frame["transforms"]["arm"]["position"][0], 0.0)
+    assert _near(final_frame["transforms"]["arm"]["position"][1], 10.0)
+    assert _near(final_frame["transforms"]["payload"]["position"][0], 0.0)
+    assert _near(final_frame["transforms"]["payload"]["position"][1], 20.0)
+    assert motion["dynamics"]["peak_support_reaction_n"] > 0.0
+    assert all("velocity_m_s" in row and "acceleration_m_s2" in row for row in motion["dynamics"]["bodies"])
+
+    # Non-mated geometry in the sweep path must be reported as interference rather
+    # than ignored or treated as a solved contact event.
+    collision_project = deepcopy(mechanism)
+    obstacle = _box("obstacle", "Obstacle", [0.0, 20.0, 0.0])
+    obstacle["params"] = {"x": 10.0, "y": 10.0, "z": 20.0}
+    collision_project["objects"].append(obstacle)
+    collision_motion = motion_simulation.simulate_joint_sweep(
+        collision_project,
+        "hinge",
+        start_state={"rotation_deg": 0.0},
+        end_state={"rotation_deg": 90.0},
+        duration_s=1.0,
+        samples=13,
+    )
+    assert collision_motion["collision_free"] is False
+    assert collision_motion["collision_count"] > 0
+    assert any("obstacle" in {row["a_id"], row["b_id"]} for row in collision_motion["collisions"])
+
     closed = deepcopy(mechanism)
     closed["joints"].append({
         "id": "loop", "type": "fixed", "parent_id": "payload", "child_id": "base",
@@ -173,6 +213,8 @@ def run() -> dict:
             "joint_graph": True,
             "supporting_body_rotation_propagates": True,
             "joint_actuation_propagates_descendants": True,
+            "time_domain_subtree_motion": True,
+            "motion_collision_detection": True,
             "closed_loops_fail_closed": True,
             "gravity_load_path": True,
             "transient_thermal": True,
