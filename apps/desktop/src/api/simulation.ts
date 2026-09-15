@@ -77,6 +77,16 @@ export interface JointPoseInput {
   reason?: string;
 }
 
+export interface JointSweepInput {
+  joint_id: string;
+  start_state: Record<string, number>;
+  end_state: Record<string, number>;
+  duration_s: number;
+  samples?: number;
+  gravity_m_s2?: [number, number, number];
+  collision_tolerance_mm3?: number;
+}
+
 export interface ThermalTransientInput {
   duration_s: number;
   timestep_s: number;
@@ -99,6 +109,24 @@ export interface AerodynamicInput {
   moment_reference_mm?: [number, number, number];
 }
 
+export interface StructuralInput {
+  object_id: string;
+  mode?: 'canonical' | 'screening';
+  force_n?: number;
+  load_direction?: 'x' | 'y' | 'z';
+  convergence?: boolean;
+}
+
+export interface RigidBodyInput {
+  object_ids?: string[];
+  force_n?: [number, number, number];
+  torque_nm?: [number, number, number];
+  gravity_m_s2?: [number, number, number];
+  duration_s?: number;
+  initial_velocity_m_s?: [number, number, number];
+  initial_angular_velocity_rad_s?: [number, number, number];
+}
+
 export const fetchSimulationHealth = () => engineFetch<SimulationHealth>('/v6/simulation/health');
 export const fetchSimulationGraph = () => engineFetch<SimulationAssemblyGraph>('/v6/simulation/assembly/graph');
 export const fetchSimulationRuns = () => engineFetch<SimulationRuns>('/v6/simulation/runs');
@@ -106,6 +134,11 @@ export const fetchSimulationRuns = () => engineFetch<SimulationRuns>('/v6/simula
 export const driveSimulationJoint = (input: JointPoseInput) => engineFetch<Record<string, unknown>>('/v6/simulation/joints/pose', {
   method: 'POST',
   body: JSON.stringify({ ...input, commit: input.commit ?? true }),
+});
+
+export const sweepSimulationJoint = (input: JointSweepInput) => engineFetch<Record<string, unknown>>('/v6/simulation/joints/sweep', {
+  method: 'POST',
+  body: JSON.stringify(input),
 });
 
 export const runGravityLoadPath = (gravity: [number, number, number] = [0, 0, -9.80665]) => engineFetch<Record<string, unknown>>('/v6/simulation/joints/gravity-loads', {
@@ -121,4 +154,28 @@ export const runTransientThermal = (input: ThermalTransientInput) => engineFetch
 export const runAerodynamics = (input: AerodynamicInput) => engineFetch<Record<string, unknown>>('/v6/simulation/aerodynamics', {
   method: 'POST',
   body: JSON.stringify({ solver: 'integral', ...input }),
+});
+
+export const runStructural = (input: StructuralInput) => engineFetch<Record<string, unknown>>('/v6/simulation/structural', {
+  method: 'POST',
+  body: JSON.stringify({ mode: 'canonical', convergence: true, ...input }),
+});
+
+export const runFluidSteady = () => engineFetch<Record<string, unknown>>('/v6/simulation/fluid/steady', {
+  method: 'POST',
+  body: JSON.stringify({ record: true }),
+});
+
+export const runRigidBody = (input: RigidBodyInput = {}) => engineFetch<Record<string, unknown>>('/v6/simulation/rigid-body', {
+  method: 'POST',
+  body: JSON.stringify({
+    object_ids: [],
+    force_n: [0, 0, 0],
+    torque_nm: [0, 0, 0],
+    gravity_m_s2: [0, 0, -9.80665],
+    duration_s: 0,
+    initial_velocity_m_s: [0, 0, 0],
+    initial_angular_velocity_rad_s: [0, 0, 0],
+    ...input,
+  }),
 });
