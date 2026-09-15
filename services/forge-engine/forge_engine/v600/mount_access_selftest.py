@@ -155,13 +155,20 @@ def run() -> dict[str, object]:
             "surface_epsilon_mm": 0.05,
             "interference_volume_tolerance_mm3": 0.00001,
         }
-        clear = _ok(client.post("/v6/assembly/mounts/access/audit", json=access_request), "audit clear mount access").json()
+        clear = _ok(client.post("/v6/assembly/mounts/access/audit", json=access_request), "audit clear neighboring-object access").json()
         assert clear["ok"] is True, clear
         assert clear["mount_positions"] == 4, clear
         assert clear["envelope_count"] == 12, clear
+        assert clear["counts"]["warning"] >= 1, clear
+        assert any(row.get("code") == "component_self_access_unverified" for row in clear["findings"]), clear
         assert clear["evidence"]["world_space_brep_intersection_checked"] is True, clear
+        assert clear["evidence"]["neighboring_object_access_checked"] is True, clear
+        assert clear["evidence"]["component_self_access_checked"] is False, clear
+        assert clear["plan"]["component_self_access"]["checked"] is False, clear
+        assert clear["plan"]["component_self_access"]["geometry_status"].get("fallback") is True, clear
 
         top = next(row for row in clear["plan"]["envelopes"] if row["kind"] == "top_driver_access")
+        assert pi_id in top["excluded_object_ids"], top
         blocker_name = "Top Driver Blocker"
         blocker_id = _add_blocker(client, blocker_name, list(top["center_world_mm"]))
         blocked_top = _ok(client.post("/v6/assembly/mounts/access/audit", json=access_request), "detect blocked top tool access").json()
@@ -181,6 +188,7 @@ def run() -> dict[str, object]:
         _move(client, blocker_id, far_above, "clear top driver path")
         recovered_top = _ok(client.post("/v6/assembly/mounts/access/audit", json=access_request), "verify recovered top access").json()
         assert recovered_top["ok"] is True, recovered_top
+        assert any(row.get("code") == "component_self_access_unverified" for row in recovered_top["findings"]), recovered_top
 
         standoff = next(row for row in recovered_top["plan"]["envelopes"] if row["kind"] == "standoff_body")
         _move(client, blocker_id, list(standoff["center_world_mm"]), "block standoff body envelope")
@@ -199,8 +207,9 @@ def run() -> dict[str, object]:
         cleared_position[0] = float(cleared_position[0]) + 20.0
         cleared_position[2] = float(cleared_position[2]) + 30.0
         _move(client, blocker_id, cleared_position, "clear all mount envelopes")
-        recovered_all = _ok(client.post("/v6/assembly/mounts/access/audit", json=access_request), "verify all access restored").json()
+        recovered_all = _ok(client.post("/v6/assembly/mounts/access/audit", json=access_request), "verify all neighboring-object access restored").json()
         assert recovered_all["ok"] is True, recovered_all
+        assert recovered_all["evidence"]["component_self_access_checked"] is False, recovered_all
 
         return {
             "ok": True,
@@ -210,6 +219,7 @@ def run() -> dict[str, object]:
             "standoff_blocker_detected": True,
             "exact_blocking_object_reported": True,
             "recovery_after_geometry_change": True,
+            "component_self_access_remains_explicitly_unverified": True,
         }
 
 
