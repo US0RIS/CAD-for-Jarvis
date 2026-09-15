@@ -130,6 +130,7 @@ export type EngineEvent =
   | { type: 'project.updated'; project: ProjectPayload };
 
 type ComponentSearchResult = { items: ComponentPayload[]; stats?: RegistryStatsPayload };
+type ProjectMutationGuard = () => Promise<void>;
 
 let cachedConnection: ForgeEngineConnection | null = null;
 let runtimeRequest: Promise<RuntimePayload> | null = null;
@@ -138,6 +139,7 @@ let sceneRequest: Promise<ScenePayload> | null = null;
 let componentRequestSerial = 0;
 let latestComponentRequest: Promise<ComponentSearchResult> | null = null;
 const localEngineEventSubscribers = new Set<(event: EngineEvent) => void>();
+const projectMutationGuards = new Set<ProjectMutationGuard>();
 
 function invalidateProjectRequests() {
   projectRequest = null;
@@ -154,6 +156,15 @@ function invalidateConnection() {
   runtimeRequest = null;
   projectRequest = null;
   sceneRequest = null;
+}
+
+export function registerProjectMutationGuard(guard: ProjectMutationGuard): () => void {
+  projectMutationGuards.add(guard);
+  return () => projectMutationGuards.delete(guard);
+}
+
+async function flushProjectMutationGuards(): Promise<void> {
+  for (const guard of [...projectMutationGuards]) await guard();
 }
 
 export async function engineConnection(): Promise<ForgeEngineConnection> {
@@ -295,11 +306,13 @@ export const saveCodeFile = (workspaceId: string, path: string, content: string)
 export const fetchJob = (id: string) => engineFetch<JobPayload>(`/v2/jobs/${encodeURIComponent(id)}`);
 
 export async function activateBranch(name: string) {
+  await flushProjectMutationGuards();
   const result = await engineFetch<ProjectPayload>(`/v2/branches/${encodeURIComponent(name)}/activate`, { method: 'POST' });
   invalidateProjectRequests();
   return result;
 }
 export async function createBranch(name: string, reason = '') {
+  await flushProjectMutationGuards();
   const result = await engineFetch<ProjectPayload>('/v2/branches', { method: 'POST', body: JSON.stringify({ name, reason }) });
   invalidateProjectRequests();
   return result;
@@ -312,7 +325,6 @@ export async function setBranchStatus(name: string, status: BranchPayload['statu
       const current = await fetchProject();
       verified = Boolean(current.branches.find((branch) => branch.name === name)?.physical_verified);
     } catch {
-      // The status request can still proceed if the read fails. Never invent verification.
       verified = false;
     }
   }
@@ -332,9 +344,11 @@ export async function executeOperation(op: string, args: Record<string, unknown>
   return result;
 }
 export async function deleteObject(id: string, reason = 'Delete selected object') {
+  await flushProjectMutationGuards();
   return executeOperation('delete', { id }, reason);
 }
 export async function newProject() {
+  await flushProjectMutationGuards();
   const result = await executeOperation('new_project', {}, 'Create blank design');
   return result.project;
 }
@@ -358,6 +372,7 @@ export async function importStepFile(file: File) {
 }
 
 export async function importProjectBundle(file: File) {
+  await flushProjectMutationGuards();
   const body = new FormData();
   body.set('file', file);
   const result = await engineFetch<{ project: ProjectPayload }>('/v2/project/import', { method: 'POST', body });
