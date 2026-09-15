@@ -252,7 +252,8 @@ def run() -> dict[str, object]:
         ids = {row["id"] for row in graph["nodes"]}
         assert f"cad:{plate_id}" in ids and f"cad:{pi_id}" in ids, ids
         health = _ok(client.get("/v6/health"), "v6 health").json()
-        assert health["current_milestone"] == "geometry_backed_assembly_truth", health
+        assert "geometry_backed_assembly_truth" in health["completed_milestones"], health
+        assert int((health.get("maturity") or {}).get("milestone_2", 0)) >= 2, health
         assert health["geometry_backed_mount_count"] >= 1, health
         assert health["manufacturer_mount_truth"]["installed"] is True, health
         assert health["manufacturer_mount_truth"]["component_count"] >= 2, health
