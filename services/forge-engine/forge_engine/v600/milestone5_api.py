@@ -19,7 +19,12 @@ from .physical_retest import (
 _INSTALLED = False
 
 
-def install(app: Any, require_session: Callable[..., None]) -> None:
+def install(
+    app: Any,
+    require_session: Callable[..., None],
+    graph: Any | None = None,
+    sync_graph: Callable[..., dict[str, Any]] | None = None,
+) -> None:
     global _INSTALLED
     if _INSTALLED:
         return
@@ -27,7 +32,10 @@ def install(app: Any, require_session: Callable[..., None]) -> None:
     @app.post("/v6/physical/retest-cycles", dependencies=[Depends(require_session)])
     async def begin_retest(request: BeginPhysicalRetestCycleRequest) -> dict[str, Any]:
         try:
-            return begin_physical_retest_cycle(request)
+            result = begin_physical_retest_cycle(request)
+            if sync_graph is not None:
+                result["graph_sync"] = sync_graph(reason="v600_physical_retest_redesign")
+            return result
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Unknown engineering identity: {exc.args[0]}") from exc
         except ValueError as exc:
@@ -36,7 +44,12 @@ def install(app: Any, require_session: Callable[..., None]) -> None:
     @app.post("/v6/physical/retest-cycles/{cycle_id}/complete", dependencies=[Depends(require_session)])
     async def complete_retest(cycle_id: str, request: CompletePhysicalRetestRequest) -> dict[str, Any]:
         try:
-            return complete_physical_retest_cycle(cycle_id, request)
+            if sync_graph is not None:
+                sync_graph(reason="v600_physical_retest_precomplete")
+            result = complete_physical_retest_cycle(cycle_id, request, graph=graph)
+            if sync_graph is not None:
+                result["graph_sync"] = sync_graph(reason="v600_physical_retest_complete")
+            return result
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Unknown retest/requirement identity: {exc.args[0]}") from exc
         except ValueError as exc:
