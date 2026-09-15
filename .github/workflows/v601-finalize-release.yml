@@ -1,0 +1,60 @@
+name: ForgeCAD 6.0.1 Finalize Release
+
+on:
+  push:
+    branches: [forgecad/6.0.1]
+    paths:
+      - '.github/workflows/v601-finalize-release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    name: Bind v6.0.1 to native-tested source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RELEASE_SHA: f938136eca69755ed714343829d3144de58d18a4
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f938136eca69755ed714343829d3144de58d18a4
+          fetch-depth: 0
+
+      - name: Verify published assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t ASSETS < <(gh release view v6.0.1 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)
+          for expected in \
+            ForgeCAD-Setup-6.0.1.exe \
+            ForgeCAD-6.0.1-arm64.dmg \
+            ForgeCAD-6.0.1-x64.dmg \
+            SHA256SUMS.txt; do
+            printf '%s\n' "${ASSETS[@]}" | grep -Fxq "$expected" || { echo "Missing release asset: $expected" >&2; exit 1; }
+          done
+
+      - name: Bind tag and release to accepted source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f v6.0.1 "$RELEASE_SHA"
+          git push --force origin refs/tags/v6.0.1
+          gh release edit v6.0.1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title 'ForgeCAD 6.0.1' \
+            --notes-file docs/RELEASE_6_0_1.md \
+            --target "$RELEASE_SHA"
+
+      - name: Verify final binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          TAG_SHA=$(git rev-list -n 1 v6.0.1)
+          test "$TAG_SHA" = "$RELEASE_SHA"
+          echo "ForgeCAD 6.0.1 final release binding: PASS ($RELEASE_SHA)"
