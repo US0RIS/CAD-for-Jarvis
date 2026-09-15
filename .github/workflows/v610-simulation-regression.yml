@@ -7,6 +7,10 @@ on:
       - 'services/forge-engine/**'
       - 'apps/desktop/**'
       - '.github/workflows/v610-simulation-regression.yml'
+      - '.github/workflows/v610-native-release.yml'
+      - 'scripts/validate_v610_runtime.py'
+      - 'README.md'
+      - 'docs/RELEASE_6_1_0.md'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - 'package.json'
@@ -94,6 +98,7 @@ jobs:
           assert response.status_code == 200, response.text
           body = response.json()
           assert body['version'] == '6.1.0'
+          assert body['release_complete'] is True
           assert body['assembly']['joint_count'] == 2
           assert body['domains']['multibody_kinematics']['available'] is True
           assert body['domains']['transient_thermal']['available'] is True
