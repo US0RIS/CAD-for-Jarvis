@@ -44,7 +44,9 @@ jobs:
           FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v610-simulation-state
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
-        run: python -m forge_engine.v610.selftest
+        run: |
+          python -m forge_engine.v610.selftest
+          python -m forge_engine.v610.thermal_field_selftest
 
       - name: Preserve existing physics solvers
         env:
@@ -84,8 +86,6 @@ jobs:
           client = TestClient(app)
           headers = {'X-ForgeCAD-Session': 'test-session'}
 
-          # Install a deterministic two-link mechanism into the canonical runtime so
-          # the HTTP path proves descendant propagation rather than route registration only.
           with core.LOCK:
               core.PROJECT.clear()
               core.PROJECT.update(_mechanism())
@@ -138,9 +138,27 @@ jobs:
           assert fluid.status_code == 200, fluid.text
           assert fluid.json()['requested'] is False
 
+          thermal_field = client.post('/v6/simulation/thermal/field', headers=headers, json={
+              'object_id': 'arm',
+              'duration_s': 0.05,
+              'timestep_s': 0.01,
+              'initial_temperature_c': 25,
+              'heat_w': 5,
+              'convection_h_w_m2k': 10,
+              'ambient_temperature_c': 25,
+              'emissivity': 0.8,
+              'grid': [4, 4, 4],
+              'max_samples': 20,
+          })
+          assert thermal_field.status_code == 200, thermal_field.text
+          field_body = thermal_field.json()
+          assert field_body['supported'] is True
+          assert field_body['grid'] == [4, 4, 4]
+          assert field_body['temperature']['maximum_c'] > 25
+
           runs = client.get('/v6/simulation/runs', headers=headers)
           assert runs.status_code == 200, runs.text
-          assert runs.json()['count'] >= 3
+          assert runs.json()['count'] >= 4
           PY
 
       - name: Install desktop dependencies
