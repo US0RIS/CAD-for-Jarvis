@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, Focus, Move3d, Orbit, Rotate3d, Scaling, Scan, Square, View } from 'lucide-react';
 import { SceneController, type CameraPreset, type TransformMode } from '../scene/SceneController';
+import '../styles/scene-startup.css';
 
 const EMPTY_HIDDEN_IDS: ReadonlySet<string> = new Set();
+const SLOW_SCENE_MS = 8_000;
+const AUTO_RETRY_MS = 900;
 
 interface ViewportProps {
   explode: number;
@@ -22,40 +25,111 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
   const controllerRef = useRef<SceneController | null>(null);
   const mountedRevision = useRef<string | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
+  const callbacksRef = useRef({ onSelectionChange, onReady, onLoading, onError });
+  const slowTimerRef = useRef<number | null>(null);
+  const retryTimerRef = useRef<number | null>(null);
+  const automaticRetriesRef = useRef(0);
   const [mode, setMode] = useState<TransformMode>('move');
   const [autoRotate, setAutoRotate] = useState(false);
+  const [sceneSlow, setSceneSlow] = useState(false);
+  const [sceneError, setSceneError] = useState<string | null>(null);
+
+  callbacksRef.current = { onSelectionChange, onReady, onLoading, onError };
+
+  function clearSlowTimer() {
+    if (slowTimerRef.current != null) {
+      window.clearTimeout(slowTimerRef.current);
+      slowTimerRef.current = null;
+    }
+  }
+
+  function beginLoading() {
+    clearSlowTimer();
+    setSceneSlow(false);
+    setSceneError(null);
+    callbacksRef.current.onLoading();
+    slowTimerRef.current = window.setTimeout(() => {
+      slowTimerRef.current = null;
+      setSceneSlow(true);
+    }, SLOW_SCENE_MS);
+  }
+
+  function reloadScene(controller: SceneController) {
+    beginLoading();
+    void controller.reload().then(() => controller.selectPart(selectedIdRef.current));
+  }
+
+  function sceneReady() {
+    clearSlowTimer();
+    if (retryTimerRef.current != null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    automaticRetriesRef.current = 0;
+    setSceneSlow(false);
+    setSceneError(null);
+    callbacksRef.current.onReady();
+  }
+
+  function sceneFailed(error: Error) {
+    clearSlowTimer();
+    setSceneSlow(false);
+    setSceneError(error.message || 'ForgeCAD could not build the 3D scene.');
+    callbacksRef.current.onError(error);
+
+    // Recover once automatically from transient engine/session failures. The engine
+    // client de-duplicates an in-flight /v2/scene promise, so this cannot create a
+    // parallel tessellation storm if the original request is still settling.
+    if (automaticRetriesRef.current < 1 && retryTimerRef.current == null) {
+      automaticRetriesRef.current += 1;
+      retryTimerRef.current = window.setTimeout(() => {
+        retryTimerRef.current = null;
+        const controller = controllerRef.current;
+        if (controller) reloadScene(controller);
+      }, AUTO_RETRY_MS);
+    }
+  }
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
     controllerRef.current?.selectPart(selectedId);
   }, [selectedId]);
 
+  const sceneEnabled = sceneRevision !== 'loading';
   useEffect(() => {
+    if (!sceneEnabled) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     try {
-      const controller = new SceneController(canvas, { onSelectionChange, onReady, onError });
+      const controller = new SceneController(canvas, {
+        onSelectionChange: (id) => callbacksRef.current.onSelectionChange(id),
+        onReady: sceneReady,
+        onError: sceneFailed,
+      });
       controllerRef.current = controller;
       controller.setExplode(explode);
       controller.setOptimisticHidden(optimisticHiddenIds);
       mountedRevision.current = sceneRevision;
-      onLoading();
-      void controller.reload().then(() => controller.selectPart(selectedIdRef.current));
+      automaticRetriesRef.current = 0;
+      reloadScene(controller);
       return () => {
+        clearSlowTimer();
+        if (retryTimerRef.current != null) window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
         controller.dispose();
         controllerRef.current = null;
       };
     } catch (error) {
-      onError(error instanceof Error ? error : new Error(String(error)));
+      sceneFailed(error instanceof Error ? error : new Error(String(error)));
     }
-  }, []);
+  }, [sceneEnabled]);
 
   useEffect(() => {
     const controller = controllerRef.current;
     if (!controller || mountedRevision.current === sceneRevision) return;
     mountedRevision.current = sceneRevision;
-    onLoading();
-    void controller.reload().then(() => controller.selectPart(selectedIdRef.current));
+    automaticRetriesRef.current = 0;
+    reloadScene(controller);
   }, [sceneRevision]);
 
   useEffect(() => controllerRef.current?.setExplode(explode), [explode]);
@@ -66,6 +140,16 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
     controllerRef.current?.setTransformMode(next);
   }
   function preset(next: CameraPreset) { controllerRef.current?.setCameraPreset(next); }
+  function retryScene() {
+    const controller = controllerRef.current;
+    if (!controller) return;
+    automaticRetriesRef.current = 0;
+    if (retryTimerRef.current != null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    reloadScene(controller);
+  }
 
   return <div className="viewport-panel" data-testid="viewport-panel">
     <div className="viewport-toolbar">
@@ -93,6 +177,8 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
     <div className="scene-host">
       <canvas ref={canvasRef} className="scene-canvas" data-testid="scene-canvas"/>
       <div className="axis-gizmo"><b>Z</b><span>X</span><i>Y</i></div>
+      {sceneSlow && !sceneError && <div className="scene-startup-overlay slow" data-testid="scene-startup-slow"><strong>Building 3D geometry…</strong><span>This assembly is taking longer than expected. ForgeCAD is still working; cached geometry will make subsequent launches substantially faster.</span></div>}
+      {sceneError && <div className="scene-startup-overlay error" data-testid="scene-startup-error"><strong>3D scene did not finish</strong><span>{sceneError}</span><button data-testid="retry-3d" onClick={retryScene}>Retry 3D</button></div>}
       {!empty ? <div className="explode-control">
         <span>Explode</span>
         <input aria-label="Explode assembly" data-testid="explode-slider" type="range" min="0" max="100" value={explode} onChange={(event) => onExplode(Number(event.target.value))}/>
