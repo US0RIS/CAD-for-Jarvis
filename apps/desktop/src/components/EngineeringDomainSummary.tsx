@@ -1,6 +1,7 @@
 import { Activity, Cable, Droplets, Flame, Orbit, ShieldAlert, Zap } from 'lucide-react';
 import type { ProjectPayload, ValidationPayload } from '../api/engine';
 import { AdvancedEngineeringStatus } from './AdvancedEngineeringStatus';
+import { SimulationWorkspace } from './SimulationWorkspace';
 
 type DomainKey = 'electrical' | 'thermal' | 'fluid' | 'routing' | 'safety' | 'kinematics';
 type LooseRecord = Record<string, unknown>;
@@ -105,6 +106,7 @@ export function EngineeringDomainSummary({ validation, project, mode = 'analysis
     </div>
 
     {mode === 'analysis' && <>
+      <SimulationWorkspace revision={project?.revision ?? null}/>
       <div className="campaign-card" data-testid="analysis-domains">
         <div className="campaign-title"><Activity size={18}/><div><strong>System analyses</strong><span>Deterministic domain evidence from the same canonical project state. Unknown inputs remain unknown.</span></div></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
