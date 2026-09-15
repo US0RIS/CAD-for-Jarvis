@@ -258,6 +258,13 @@ export class SceneController {
         if (explodeVector.lengthSq() < 1e-9) explodeVector.set(0, 0, 1);
         this.parts.set(part.id, { id: part.id, object, basePosition: object.position.clone(), explodeVector: explodeVector.normalize() });
       }
+
+      for (const hiddenId of [...this.userHiddenIds]) {
+        if (!this.parts.has(hiddenId)) this.userHiddenIds.delete(hiddenId);
+      }
+      if (this.isolatedId && !this.parts.has(this.isolatedId)) this.isolatedId = null;
+      if (!this.parts.size) this.hasFramedScene = false;
+
       this.setExplode(this.explode);
       this.applyVisibility();
       if (!this.hasFramedScene && this.parts.size) {
@@ -342,9 +349,6 @@ export class SceneController {
     };
     try {
       await executeOperation('transform', args, 'Viewport transform');
-      // executeOperation publishes the canonical project update, which causes exactly
-      // one authoritative scene reload through the React revision boundary. Keeping the
-      // current mesh in place avoids a second expensive tessellation and camera flash.
       record.basePosition.copy(object.position);
     } catch (error) {
       this.events.onError?.(error instanceof Error ? error : new Error(String(error)));
