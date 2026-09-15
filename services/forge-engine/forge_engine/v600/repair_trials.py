@@ -7,18 +7,20 @@ letting an agent mutate arbitrary CAD. A repair trial may vary only numeric
 parameters explicitly authorized on a canonical CAD object. It preserves the
 failing requirement evidence, forks an experiment branch, evaluates a bounded
 finite search, keeps the least-change passing candidate, re-verifies the same
-requirement, and returns a semantic branch diff.
+requirement plus explicit guardrails, and returns a semantic branch diff.
 
-No gradient, monotonicity or causal relationship is invented. Search candidates
-are explicit and finite; if none pass, the repair branch is restored to its
-starting parameter values and remains unverified.
+Geometry changes invalidate solver evidence tied to the changed object before
+requirements are re-evaluated. ForgeCAD therefore never treats a pre-change
+simulation as proof that a repaired design is safe. No gradient, monotonicity or
+causal relationship is invented. Search candidates are explicit and finite; if
+none pass, the repair branch is restored to its starting parameter values and
+remains unverified.
 """
 
 from copy import deepcopy
 import hashlib
 import itertools
 import json
-import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -38,6 +40,7 @@ class RepairVariable(BaseModel):
 
 class ParametricRepairTrialRequest(BaseModel):
     requirement_id: str
+    guardrail_requirement_ids: list[str] = Field(default_factory=list, max_length=24)
     variables: list[RepairVariable] = Field(min_length=1, max_length=3)
     max_evaluations: int = Field(default=64, ge=2, le=256)
     branch_prefix: str = "analysis-repair"
@@ -57,12 +60,17 @@ def _sync(graph: EngineeringGraphStore, world: Any | None) -> dict[str, Any]:
     return synchronize_graph(graph, _project_snapshot(), world)
 
 
-def _result_for(graph: EngineeringGraphStore, requirement_id: str) -> dict[str, Any]:
+def _verification_map(graph: EngineeringGraphStore, requirement_ids: set[str]) -> dict[str, dict[str, Any]]:
     verification = verify_requirements(graph)
-    row = next((item for item in verification["items"] if str(item["requirement"].get("id")) == requirement_id), None)
-    if row is None:
-        raise KeyError(requirement_id)
-    return row
+    rows = {
+        str(item["requirement"].get("id")): item
+        for item in verification["items"]
+        if str(item["requirement"].get("id")) in requirement_ids
+    }
+    missing = sorted(requirement_ids - set(rows))
+    if missing:
+        raise KeyError(", ".join(missing))
+    return rows
 
 
 def _canonical_hash(project: dict[str, Any]) -> str:
@@ -123,21 +131,42 @@ def _normalized_distance(combo: tuple[float, ...], baselines: list[float], varia
     return total
 
 
-def _set_combo(variables: list[RepairVariable], combo: tuple[float, ...]) -> list[dict[str, Any]]:
+def _set_combo(variables: list[RepairVariable], combo: tuple[float, ...]) -> tuple[list[dict[str, Any]], list[str], int]:
     mutations: list[dict[str, Any]] = []
+    changed_object_ids: set[str] = set()
     for variable, value in zip(variables, combo):
         obj = core.object_by_id(variable.object_id)
         before = float(obj["params"][variable.parameter])
-        obj["params"][variable.parameter] = float(value)
+        after = float(value)
+        obj["params"][variable.parameter] = after
+        changed = abs(before - after) > 1e-12
+        if changed:
+            changed_object_ids.add(variable.object_id)
         mutations.append(
             {
                 "object_id": variable.object_id,
                 "parameter": variable.parameter,
                 "before": before,
-                "after": float(value),
+                "after": after,
+                "changed": changed,
             }
         )
-    return mutations
+    stale_count = 0
+    for object_id in sorted(changed_object_ids):
+        stale_count += int(core.mark_simulations_stale(object_id))
+    return mutations, sorted(changed_object_ids), stale_count
+
+
+def _guardrail_state(rows: dict[str, dict[str, Any]], guardrail_ids: list[str]) -> dict[str, Any]:
+    items = [deepcopy(rows[requirement_id]) for requirement_id in guardrail_ids]
+    failed = [row for row in items if row["status"] == "fail"]
+    unknown = [row for row in items if row["status"] == "unknown"]
+    return {
+        "items": items,
+        "ok": not failed and not unknown,
+        "failed_requirement_ids": [str(row["requirement"].get("id")) for row in failed],
+        "unknown_requirement_ids": [str(row["requirement"].get("id")) for row in unknown],
+    }
 
 
 def run_parametric_repair_trial(
@@ -145,6 +174,11 @@ def run_parametric_repair_trial(
     world: Any | None,
     request: ParametricRepairTrialRequest,
 ) -> dict[str, Any]:
+    if request.requirement_id in request.guardrail_requirement_ids:
+        raise ValueError("The target requirement must not also be listed as a guardrail")
+    if len(set(request.guardrail_requirement_ids)) != len(request.guardrail_requirement_ids):
+        raise ValueError("Guardrail requirement IDs must be unique")
+
     requirement = next((row for row in core.PROJECT.get("requirements", []) if str(row.get("id")) == request.requirement_id), None)
     if requirement is None:
         raise KeyError(request.requirement_id)
@@ -156,10 +190,18 @@ def run_parametric_repair_trial(
     baseline_project = deepcopy(core.PROJECT)
     baseline_hash = _canonical_hash(baseline_project)
 
+    selected_ids = {request.requirement_id, *request.guardrail_requirement_ids}
     _sync(graph, world)
-    baseline_verification = _result_for(graph, request.requirement_id)
+    baseline_rows = _verification_map(graph, selected_ids)
+    baseline_verification = baseline_rows[request.requirement_id]
+    baseline_guardrails = _guardrail_state(baseline_rows, request.guardrail_requirement_ids)
     if baseline_verification["status"] == "unknown":
         raise ValueError("Bounded repair is blocked because the selected requirement has unknown evidence")
+    if not baseline_guardrails["ok"]:
+        raise ValueError(
+            "Bounded repair is blocked because baseline guardrails are not all passing: "
+            f"failed={baseline_guardrails['failed_requirement_ids']} unknown={baseline_guardrails['unknown_requirement_ids']}"
+        )
     if baseline_verification["status"] == "pass":
         return {
             "ok": True,
@@ -167,12 +209,18 @@ def run_parametric_repair_trial(
             "baseline_branch": baseline_branch,
             "repair_branch": None,
             "baseline_verification": baseline_verification,
+            "baseline_guardrails": baseline_guardrails,
             "final_verification": baseline_verification,
+            "final_guardrails": baseline_guardrails,
             "evaluations": [],
             "semantic_diff": {"source": baseline_branch, "target": baseline_branch, "changes": [], "count": 0},
         }
 
     baseline_evidence_id = str(baseline_verification["evidence_id"])
+    baseline_guardrail_evidence_ids = {
+        requirement_id: str(baseline_rows[requirement_id]["evidence_id"])
+        for requirement_id in request.guardrail_requirement_ids
+    }
     core.DESIGNS.setdefault(baseline_branch, {})["analysis_status"] = "requirements_failed"
     core.DESIGNS[baseline_branch]["last_failed_requirement_id"] = request.requirement_id
     core.persist()
@@ -193,10 +241,11 @@ def run_parametric_repair_trial(
     evaluations: list[dict[str, Any]] = []
     passing: dict[str, Any] | None = None
     baseline_combo = tuple(baselines)
+    blocked_by_unknown_guardrail = False
     for index, combo in enumerate(combinations, start=1):
         with core.LOCK:
             _set_combo(request.variables, baseline_combo)
-            mutations = _set_combo(request.variables, combo)
+            mutations, changed_object_ids, stale_simulation_count = _set_combo(request.variables, combo)
             core.push_history(
                 "v6 bounded repair candidate",
                 request.actor,
@@ -204,30 +253,46 @@ def run_parametric_repair_trial(
             )
             core.persist()
         _sync(graph, world)
-        verification = _result_for(graph, request.requirement_id)
+        rows = _verification_map(graph, selected_ids)
+        verification = rows[request.requirement_id]
+        guardrails = _guardrail_state(rows, request.guardrail_requirement_ids)
         record = {
             "index": index,
             "values": [float(value) for value in combo],
             "normalized_change": _normalized_distance(combo, baselines, request.variables),
             "mutations": mutations,
+            "changed_object_ids": changed_object_ids,
+            "stale_simulation_count": stale_simulation_count,
             "verification": deepcopy(verification),
+            "guardrails": guardrails,
         }
         evaluations.append(record)
-        if verification["status"] == "pass":
+        if verification["status"] == "pass" and guardrails["ok"]:
             passing = record
             break
         if verification["status"] == "unknown":
+            break
+        if guardrails["unknown_requirement_ids"]:
+            blocked_by_unknown_guardrail = True
             break
 
     if passing is None:
         with core.LOCK:
             _set_combo(request.variables, baseline_combo)
-            core.DESIGNS.setdefault(repair_branch, {})["analysis_status"] = "repair_search_failed"
-            core.push_history("v6 bounded repair exhausted", request.actor, f"No passing candidate for {request.requirement_id}")
+            core.DESIGNS.setdefault(repair_branch, {})["analysis_status"] = (
+                "blocked_by_unknown_guardrail" if blocked_by_unknown_guardrail else "repair_search_failed"
+            )
+            core.push_history(
+                "v6 bounded repair exhausted",
+                request.actor,
+                f"No verified passing candidate for {request.requirement_id}",
+            )
             core.persist()
         _sync(graph, world)
-        final_verification = _result_for(graph, request.requirement_id)
-        outcome = "no_passing_candidate"
+        final_rows = _verification_map(graph, selected_ids)
+        final_verification = final_rows[request.requirement_id]
+        final_guardrails = _guardrail_state(final_rows, request.guardrail_requirement_ids)
+        outcome = "blocked_by_unknown_guardrail" if blocked_by_unknown_guardrail else "no_passing_candidate"
         ok = False
     else:
         winner = tuple(float(value) for value in passing["values"])
@@ -235,14 +300,20 @@ def run_parametric_repair_trial(
             _set_combo(request.variables, winner)
             core.DESIGNS.setdefault(repair_branch, {})["analysis_status"] = "requirements_passed"
             core.DESIGNS[repair_branch]["verified_requirement_ids"] = sorted(
-                set([*(core.DESIGNS[repair_branch].get("verified_requirement_ids") or []), request.requirement_id])
+                set([
+                    *(core.DESIGNS[repair_branch].get("verified_requirement_ids") or []),
+                    request.requirement_id,
+                    *request.guardrail_requirement_ids,
+                ])
             )
             core.DESIGNS[repair_branch]["physical_verified"] = False
             core.push_history("v6 bounded repair selected", request.actor, f"Selected least-change passing candidate for {request.requirement_id}")
             core.persist()
         _sync(graph, world)
-        final_verification = _result_for(graph, request.requirement_id)
-        ok = final_verification["status"] == "pass"
+        final_rows = _verification_map(graph, selected_ids)
+        final_verification = final_rows[request.requirement_id]
+        final_guardrails = _guardrail_state(final_rows, request.guardrail_requirement_ids)
+        ok = final_verification["status"] == "pass" and final_guardrails["ok"]
         outcome = "requirement_satisfied" if ok else "verification_regressed"
 
     final_evidence_id = str(final_verification["evidence_id"])
@@ -255,12 +326,14 @@ def run_parametric_repair_trial(
 
     diff = semantic_branch_diff(baseline_branch, repair_branch)
     trial = {
-        "schema": "forgecad-parametric-repair-trial/1",
+        "schema": "forgecad-parametric-repair-trial/2",
         "requirement_id": request.requirement_id,
+        "guardrail_requirement_ids": list(request.guardrail_requirement_ids),
         "baseline_branch": baseline_branch,
         "repair_branch": repair_branch,
         "baseline_project_fingerprint": baseline_hash,
         "baseline_evidence_id": baseline_evidence_id,
+        "baseline_guardrail_evidence_ids": baseline_guardrail_evidence_ids,
         "final_evidence_id": final_evidence_id,
         "variables": [variable.model_dump(mode="json") for variable in request.variables],
         "authorities": authorities,
@@ -274,7 +347,6 @@ def run_parametric_repair_trial(
         core.push_history("v6 record repair trial", request.actor, outcome)
         core.persist()
 
-    # Prove the parent branch snapshot was not rewritten while the experiment ran.
     parent_snapshot = core.BRANCHES.get(baseline_branch)
     if parent_snapshot is None or _canonical_hash(parent_snapshot) != baseline_hash:
         raise RuntimeError("Repair trial mutated the preserved baseline branch")
@@ -285,7 +357,9 @@ def run_parametric_repair_trial(
         "baseline_branch": baseline_branch,
         "repair_branch": repair_branch,
         "baseline_verification": baseline_verification,
+        "baseline_guardrails": baseline_guardrails,
         "final_verification": final_verification,
+        "final_guardrails": final_guardrails,
         "baseline_evidence_preserved": True,
         "baseline_project_preserved": True,
         "evaluations": evaluations,
@@ -296,6 +370,8 @@ def run_parametric_repair_trial(
             "mutation_boundary": "explicit numeric params inside canonical semantic.repair_authority only",
             "search": "deterministic finite least-change search",
             "max_evaluations": request.max_evaluations,
+            "guardrails": "all explicit guardrail requirements must remain pass; unknown blocks acceptance",
+            "simulation_invalidation": "changed geometry marks object-linked simulations stale before re-verification",
             "physical_validation": "not claimed",
         },
     }
