@@ -19,11 +19,13 @@ from forge_engine.v600.milestone6_api import install as install_v600_milestone6_
 from forge_engine.v601_ollama_runtime import install as install_v601_ollama_runtime
 from forge_engine.v601_runtime import install as install_v601_runtime
 from forge_engine.v601_scene_runtime import install as install_v601_scene_runtime
+from forge_engine.v610.api import install as install_v610_api
 
 
-# ForgeCAD 6.0 development keeps 3.1 as the validated production substrate and
-# installs new semantic capabilities additively. A 6.0 capability does not replace
-# a 3.1 path until its own acceptance gate proves equivalent or stronger behavior.
+# ForgeCAD 6.x keeps 3.1 as the validated desktop substrate and installs semantic,
+# physical-engineering and simulation capabilities additively. A newer capability does
+# not replace a validated path until its own acceptance gate proves equivalent or
+# stronger behavior.
 install_world_aware_planner(main_v31.v3.WORLD)
 install_world_event_stream(
     main_v31.app,
@@ -82,28 +84,28 @@ install_v600_milestone6_api(
     main_v31._sync_graph,
 )
 
-# The packaged app must discover the same local Ollama daemon the user's terminal
-# sees. Probe explicit/local loopback endpoints without proxy interference, retry a
-# daemon that is still waking, and bind all existing planner/chat calls to the endpoint
-# that actually returned the configured model.
+# The packaged app must discover the same local Ollama daemon the user's terminal sees.
 install_v601_ollama_runtime(main_v31.v3.legacy)
 
-# 6.0.1 hardens the mutable desktop runtime without altering the frozen 6.0.0
-# capability substrate. Existing /v2 route shapes stay compatible while job/branch
-# execution gains exact revision provenance and truthful cancellation semantics.
+# 6.0.1 hardens mutable desktop runtime behavior and viewport geometry startup.
 install_v601_runtime(main_v31.app, main_v31.v3.legacy)
-
-# The packaged desktop must not cold-tessellate an entire real assembly on every
-# launch. Cache local-space viewport meshes by geometry identity, persist them across
-# launches, and reuse them across duplicate hardware / placement-only changes while
-# preserving the existing /v2/scene payload contract.
 install_v601_scene_runtime(main_v31.v3.legacy.PROJECT)
 
+# 6.1 turns canonical mechanical connectivity and analysis inputs into one executable
+# simulation state. Viewport transforms propagate through the joint tree, joint
+# actuation moves complete downstream subassemblies, and thermal/aerodynamic/load-path
+# runs are fingerprinted and invalidated by subsequent canonical edits.
+install_v610_api(
+    main_v31.app,
+    main_v31.v3.legacy.require_session,
+    main_v31.v3._sync_current_project,
+    main_v31._sync_graph,
+    main_v31.v3.legacy.PROJECT.snapshot,
+    main_v31.v3.legacy.broadcast,
+)
+
 # The legacy v2 CORS policy predates the v3.1 parametric feature editor and omits
-# PATCH. The desktop renderer is cross-origin in browser acceptance and may also use
-# a null/file origin when packaged, so feature parameter edits need an outer policy
-# that covers the complete mutable desktop method set. Keep the inner legacy policy
-# intact for compatibility and make the desktop entrypoint explicitly complete.
+# PATCH. Keep the outer desktop policy complete for all current mutable methods.
 main_v31.app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
