@@ -73,6 +73,11 @@ test('packaged 1280x760 minimum keeps core shell and primary bottom workspaces u
   expect(systemBox?.height ?? 0).toBeGreaterThanOrEqual(279);
   await expectInsideViewport(page, '[data-testid="world-system-panel"]');
 
+  // System is an evidence/state inspector, not a second CAD editor. In particular,
+  // a purchased Raspberry Pi must never acquire a hidden feature-editing path here.
+  await expect(system.getByTestId('feature-history-panel')).toHaveCount(0);
+  await expect(page.getByText('PARAMETRIC CAD')).toHaveCount(0);
+
   // No document-level horizontal overflow is allowed at the packaged minimum size.
   const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(horizontalOverflow).toBeLessThanOrEqual(1);
