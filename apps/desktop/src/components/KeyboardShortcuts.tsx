@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Keyboard, X } from 'lucide-react';
-import { executeOperation, fetchProject } from '../api/engine';
 
 type Shortcut = { keys: string; action: string; group: 'Editing' | 'Viewport' | 'Navigation' | 'Project' };
 
@@ -48,32 +47,22 @@ function editableTarget(target: EventTarget | null): boolean {
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return true;
   return Boolean(target.closest('.monaco-editor,[contenteditable="true"]'));
 }
-
-function buttons(selector = 'button'): HTMLButtonElement[] {
-  return Array.from(document.querySelectorAll<HTMLButtonElement>(selector));
-}
-
+function buttons(selector = 'button'): HTMLButtonElement[] { return Array.from(document.querySelectorAll<HTMLButtonElement>(selector)); }
 function clickButtonByTitle(title: string): boolean {
   const button = buttons().find((candidate) => candidate.title === title && !candidate.disabled);
   if (!button) return false;
-  button.click();
-  return true;
+  button.click(); return true;
 }
-
 function clickButtonByText(text: string, selector = 'button'): boolean {
   const button = buttons(selector).find((candidate) => candidate.textContent?.trim() === text && !candidate.disabled);
   if (!button) return false;
-  button.click();
-  return true;
+  button.click(); return true;
 }
-
 function clickTestId(testId: string): boolean {
   const button = document.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`);
   if (!button || button.disabled) return false;
-  button.click();
-  return true;
+  button.click(); return true;
 }
-
 function setExplode(value: number) {
   const slider = document.querySelector<HTMLInputElement>('[data-testid="explode-slider"]');
   if (!slider || slider.classList.contains('hidden-slider')) return;
@@ -81,28 +70,9 @@ function setExplode(value: number) {
   setter?.call(slider, String(value));
   slider.dispatchEvent(new Event('change', { bubbles: true }));
 }
-
 function currentExplode(): number {
   const slider = document.querySelector<HTMLInputElement>('[data-testid="explode-slider"]');
   return slider ? Number(slider.value || 0) : 0;
-}
-
-async function deleteSelectedObject() {
-  const selectedRow = document.querySelector<HTMLElement>('.object-row.selected');
-  if (!selectedRow) return false;
-
-  const rows = Array.from(document.querySelectorAll<HTMLElement>('.object-row'));
-  const selectedIndex = rows.indexOf(selectedRow);
-  if (selectedIndex < 0) return false;
-
-  const project = await fetchProject();
-  const selected = project.parts[selectedIndex];
-  if (!selected) return false;
-
-  // Clear renderer selection first so no stale object id survives the mutation.
-  document.querySelector<HTMLButtonElement>('.selection-chip button')?.click();
-  await executeOperation('delete', { id: selected.id }, 'Delete selected object with keyboard');
-  return true;
 }
 
 export function KeyboardShortcuts() {
@@ -112,15 +82,22 @@ export function KeyboardShortcuts() {
 
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 1800);
+    const timer = window.setTimeout(() => setNotice(null), 2400);
     return () => window.clearTimeout(timer);
   }, [notice]);
 
   useEffect(() => {
-    const settings = document.querySelector<HTMLButtonElement>('button[title="Settings"]');
-    const openSettings = () => setOpen(true);
-    settings?.addEventListener('click', openSettings);
-    return () => settings?.removeEventListener('click', openSettings);
+    const show = () => setOpen(true);
+    const notify = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail) setNotice(detail);
+    };
+    window.addEventListener('forgecad:show-shortcuts', show);
+    window.addEventListener('forgecad:notice', notify);
+    return () => {
+      window.removeEventListener('forgecad:show-shortcuts', show);
+      window.removeEventListener('forgecad:notice', notify);
+    };
   }, []);
 
   useEffect(() => {
@@ -130,129 +107,55 @@ export function KeyboardShortcuts() {
       const mod = event.metaKey || event.ctrlKey;
 
       if (key === 'Escape') {
-        if (open) {
+        if (open) { event.preventDefault(); setOpen(false); return; }
+        if (!editableTarget(event.target)) {
           event.preventDefault();
-          setOpen(false);
-          return;
-        }
-        const clear = document.querySelector<HTMLButtonElement>('.selection-chip button');
-        if (clear) {
-          event.preventDefault();
-          clear.click();
+          window.dispatchEvent(new Event('forgecad:deselect'));
         }
         return;
       }
-
       if (editableTarget(event.target)) return;
-
-      if (key === 'F1' || (key === '?' && event.shiftKey)) {
-        event.preventDefault();
-        setOpen(true);
-        return;
-      }
-
+      if (key === 'F1' || (key === '?' && event.shiftKey)) { event.preventDefault(); setOpen(true); return; }
       if ((key === 'Backspace' || key === 'Delete') && !mod && !event.altKey) {
         event.preventDefault();
-        void deleteSelectedObject()
-          .then((deleted) => setNotice(deleted ? 'Object deleted · Ctrl/Cmd+Z to undo' : 'Select an object to delete'))
-          .catch((error) => setNotice(error instanceof Error ? error.message : String(error)));
+        window.dispatchEvent(new Event('forgecad:delete-selected'));
         return;
       }
-
-      if (mod && lower === 'z') {
-        event.preventDefault();
-        clickButtonByTitle(event.shiftKey ? 'Redo' : 'Undo');
-        return;
-      }
-      if (mod && lower === 'y') {
-        event.preventDefault();
-        clickButtonByTitle('Redo');
-        return;
-      }
-      if (mod && lower === 'n') {
-        event.preventDefault();
-        clickButtonByText('New');
-        return;
-      }
-      if (mod && lower === 'o' && event.shiftKey) {
-        event.preventDefault();
-        clickButtonByText('Import STEP');
-        return;
-      }
-      if (mod && lower === 'o') {
-        event.preventDefault();
-        clickTestId('open-focad');
-        return;
-      }
-      if (mod && lower === 's') {
-        event.preventDefault();
-        clickTestId('export-focad');
-        return;
-      }
+      if (mod && lower === 'z') { event.preventDefault(); clickButtonByTitle(event.shiftKey ? 'Redo' : 'Undo'); return; }
+      if (mod && lower === 'y') { event.preventDefault(); clickButtonByTitle('Redo'); return; }
+      if (mod && lower === 'n') { event.preventDefault(); clickButtonByText('New'); return; }
+      if (mod && lower === 'o' && event.shiftKey) { event.preventDefault(); clickButtonByText('Import STEP'); return; }
+      if (mod && lower === 'o') { event.preventDefault(); clickTestId('open-focad'); return; }
+      if (mod && lower === 's') { event.preventDefault(); clickTestId('export-focad'); return; }
       if (mod && lower === 'k') {
-        event.preventDefault();
-        clickButtonByText('Components', '.right-tabs button');
-        window.setTimeout(() => document.querySelector<HTMLInputElement>('.search-control input')?.focus(), 0);
-        return;
+        event.preventDefault(); clickButtonByText('Components', '.right-tabs button');
+        window.setTimeout(() => document.querySelector<HTMLInputElement>('.search-control input')?.focus(), 0); return;
       }
       if (mod && lower === 'j') {
-        event.preventDefault();
-        clickButtonByText('Copilot', '.panel-tabs.compact button');
-        window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Copilot request"]')?.focus(), 0);
-        return;
+        event.preventDefault(); clickButtonByText('Copilot', '.panel-tabs.compact button');
+        window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Copilot request"]')?.focus(), 0); return;
       }
       if (mod && ['1', '2', '3', '4'].includes(key)) {
-        event.preventDefault();
-        const tabs = ['Properties', 'Components', 'Analyze', 'Manufacture'] as const;
-        const tab = tabs[Number(key) - 1];
-        if (tab) clickButtonByText(tab, '.right-tabs button');
-        return;
+        event.preventDefault(); const tabs = ['Properties', 'Components', 'Analyze', 'Manufacture'] as const;
+        const tab = tabs[Number(key) - 1]; if (tab) clickButtonByText(tab, '.right-tabs button'); return;
       }
       if (event.altKey && ['1', '2', '3', '4'].includes(key)) {
-        event.preventDefault();
-        const dockTabs = ['tab-history', 'tab-code', 'tab-simulations', 'tab-system'] as const;
-        const dockTab = dockTabs[Number(key) - 1];
-        if (dockTab) clickTestId(dockTab);
-        return;
+        event.preventDefault(); const dockTabs = ['tab-history', 'tab-code', 'tab-simulations', 'tab-system'] as const;
+        const dockTab = dockTabs[Number(key) - 1]; if (dockTab) clickTestId(dockTab); return;
       }
-      if (event.altKey && lower === 'd') {
-        event.preventDefault();
-        clickButtonByText('Dynamics');
-        return;
-      }
-
+      if (event.altKey && lower === 'd') { event.preventDefault(); clickButtonByText('Dynamics'); return; }
       if (mod || event.altKey) return;
 
       const simple: Record<string, () => void> = {
-        g: () => { clickButtonByTitle('Move'); },
-        r: () => { clickButtonByTitle('Rotate'); },
-        s: () => { clickButtonByTitle('Scale'); },
-        f: () => { clickButtonByTitle('Fit'); },
-        '1': () => { clickButtonByTitle('Front'); },
-        '2': () => { clickButtonByTitle('Right'); },
-        '3': () => { clickButtonByTitle('Top'); },
-        '4': () => { clickButtonByTitle('Isometric'); },
-        '/': () => { clickButtonByTitle('Isolate'); },
+        g: () => { clickButtonByTitle('Move'); }, r: () => { clickButtonByTitle('Rotate'); }, s: () => { clickButtonByTitle('Scale'); },
+        f: () => { clickButtonByTitle('Fit'); }, '1': () => { clickButtonByTitle('Front'); }, '2': () => { clickButtonByTitle('Right'); },
+        '3': () => { clickButtonByTitle('Top'); }, '4': () => { clickButtonByTitle('Isometric'); }, '/': () => { clickButtonByTitle('Isolate'); },
         o: () => { clickButtonByTitle('Auto rotate'); },
       };
-
-      if (lower === 'h') {
-        event.preventDefault();
-        clickButtonByTitle(event.shiftKey ? 'Show all' : 'Hide');
-        return;
-      }
-      if (lower === 'e') {
-        event.preventDefault();
-        setExplode(event.shiftKey ? 0 : currentExplode() > 0 ? 0 : 65);
-        return;
-      }
-      const command = simple[lower];
-      if (command) {
-        event.preventDefault();
-        command();
-      }
+      if (lower === 'h') { event.preventDefault(); clickButtonByTitle(event.shiftKey ? 'Show all' : 'Hide'); return; }
+      if (lower === 'e') { event.preventDefault(); setExplode(event.shiftKey ? 0 : currentExplode() > 0 ? 0 : 65); return; }
+      const command = simple[lower]; if (command) { event.preventDefault(); command(); }
     };
-
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [open]);
@@ -262,9 +165,7 @@ export function KeyboardShortcuts() {
     {open && <div className="shortcut-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
       <section className="shortcut-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" data-testid="keyboard-shortcuts-dialog">
         <header><div><Keyboard size={17}/><span><strong>Keyboard shortcuts</strong><small>ForgeCAD is designed to stay under your hands.</small></span></div><button onClick={() => setOpen(false)} aria-label="Close keyboard shortcuts"><X size={15}/></button></header>
-        <div className="shortcut-grid">
-          {groups.map((group) => <div className="shortcut-group" key={group}><h3>{group}</h3>{shortcuts.filter((shortcut) => shortcut.group === group).map((shortcut) => <div className="shortcut-row" key={`${group}-${shortcut.keys}`}><span>{shortcut.action}</span><kbd>{shortcut.keys}</kbd></div>)}</div>)}
-        </div>
+        <div className="shortcut-grid">{groups.map((group) => <div className="shortcut-group" key={group}><h3>{group}</h3>{shortcuts.filter((shortcut) => shortcut.group === group).map((shortcut) => <div className="shortcut-row" key={`${group}-${shortcut.keys}`}><span>{shortcut.action}</span><kbd>{shortcut.keys}</kbd></div>)}</div>)}</div>
         <footer>Shortcuts are disabled while typing in text fields, search boxes, selects, or Monaco code editors.</footer>
       </section>
     </div>}
