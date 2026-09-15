@@ -225,9 +225,6 @@ export async function engineRawFetch(path: string, init: RequestInit = {}): Prom
   try {
     return await rawFetchWithConnection(connection, path, init);
   } catch (error) {
-    // A rendered Three.js scene can outlive the native process that produced it. If the
-    // engine dies, don't leave ForgeCAD showing stale geometry plus a permanent error.
-    // Ask Electron for a fresh supervised engine and retry the request exactly once.
     if (!window.forgeDesktop?.getEngineConnection || !isConnectionFailure(error)) throw error;
     invalidateConnection();
     const replacement = await engineConnection();
@@ -363,8 +360,10 @@ export async function downloadProjectBundle(): Promise<Blob> {
   return response.blob();
 }
 
-export function createJob(input: { kind: 'agent' | 'simulation' | 'campaign' | 'component-search' | 'deploy'; text?: string; branch?: string; selected_object_id?: string | null; apply_edits?: boolean; payload?: Record<string, unknown> }) {
-  return engineFetch<JobPayload>('/v2/jobs', { method: 'POST', body: JSON.stringify(input) });
+export async function createJob(input: { kind: 'agent' | 'simulation' | 'campaign' | 'component-search' | 'deploy'; text?: string; branch?: string; selected_object_id?: string | null; apply_edits?: boolean; payload?: Record<string, unknown> }) {
+  const job = await engineFetch<JobPayload>('/v2/jobs', { method: 'POST', body: JSON.stringify(input) });
+  publishLocalEngineEvent({ type: 'job.updated', job });
+  return job;
 }
 
 export async function subscribeEngineEvents(onEvent: (event: EngineEvent) => void): Promise<() => void> {
@@ -398,8 +397,6 @@ export async function subscribeEngineEvents(onEvent: (event: EngineEvent) => voi
   const connect = async () => {
     if (disposed) return;
     try {
-      // A WebSocket close commonly means the supervised native engine exited. Discard
-      // the cached port/token before asking Electron for the replacement process.
       if (reconnectAttempt > 0) invalidateConnection();
       const connection = await engineConnection();
       if (disposed) return;
@@ -434,8 +431,6 @@ export async function subscribeEngineEvents(onEvent: (event: EngineEvent) => voi
       });
 
       next.addEventListener('error', () => {
-        // Browsers provide intentionally little WebSocket error detail. Closing the
-        // socket funnels all recovery through one path and prevents duplicate retries.
         if (!disposed && socket === next && next.readyState !== WebSocket.CLOSED) next.close();
       });
     } catch {
