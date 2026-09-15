@@ -184,3 +184,75 @@ test('an engineering job cannot overwrite a running Copilot job in the UI', asyn
   await expect(page.getByTestId('agent-status')).toContainText('Request queued');
   await expect(page.getByTestId('send-button')).toBeDisabled();
 });
+
+test('a branch switch waits for the in-flight code save and preserves the edited branch', async ({ page, request }) => {
+  test.setTimeout(120_000);
+  await resetWithPi(request);
+
+  const initial = await request.get(`${engineUrl}/v2/project`, { headers });
+  expect(initial.ok()).toBeTruthy();
+  const initialProject = await initial.json() as { parts: Array<{ id: string }> };
+  const workspaceId = initialProject.parts[0]?.id;
+  expect(workspaceId).toBeTruthy();
+
+  const branch = await request.post(`${engineUrl}/v2/branches`, {
+    headers,
+    data: { name: 'guard-sibling', reason: 'UX regression sibling before editor change' },
+  });
+  expect(branch.ok()).toBeTruthy();
+  const main = await request.post(`${engineUrl}/v2/branches/main/activate`, { headers });
+  expect(main.ok()).toBeTruthy();
+
+  let releaseSave: (() => void) | null = null;
+  let markSaveStarted: (() => void) | null = null;
+  const saveGate = new Promise<void>((resolve) => { releaseSave = resolve; });
+  const saveStarted = new Promise<void>((resolve) => { markSaveStarted = resolve; });
+  let codeWrites = 0;
+  let siblingActivations = 0;
+
+  await page.route('**/v2/code/workspaces/**', async (route) => {
+    if (route.request().method() !== 'PUT') { await route.continue(); return; }
+    codeWrites += 1;
+    markSaveStarted?.();
+    await saveGate;
+    await route.continue();
+  });
+  page.on('request', (networkRequest) => {
+    if (networkRequest.method() === 'POST' && networkRequest.url().includes('/v2/branches/guard-sibling/activate')) siblingActivations += 1;
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.object-row')).toHaveCount(1, { timeout: 30_000 });
+  await page.locator('.object-row').first().click();
+  await page.getByTestId('tab-code').click();
+  await expect(page.getByTestId('code-workspace')).toBeVisible();
+  await expect(page.locator('.tree-file').filter({ hasText: 'main.py' })).toBeVisible({ timeout: 30_000 });
+
+  const editorInput = page.locator('.monaco-editor textarea.inputarea').first();
+  await editorInput.waitFor({ state: 'attached', timeout: 30_000 });
+  await editorInput.focus();
+  await page.keyboard.press('Control+End');
+  const marker = `# guard-regression-${Date.now()}`;
+  await page.keyboard.insertText(`\n${marker}`);
+  await expect(page.locator('.editor-toolbar')).toContainText('Unsaved');
+
+  // Let autosave begin, but hold its response open. The canonical branch switch must
+  // not be sent until this exact editor write has finished.
+  await saveStarted;
+  await page.locator('.branch-picker select').selectOption('guard-sibling');
+  await page.waitForTimeout(150);
+  expect(siblingActivations).toBe(0);
+  expect(codeWrites).toBe(1);
+
+  releaseSave?.();
+  await expect(page.locator('.doc-tab small')).toHaveText('guard-sibling', { timeout: 15_000 });
+  expect(siblingActivations).toBe(1);
+  expect(codeWrites).toBe(1);
+
+  await page.locator('.branch-picker select').selectOption('main');
+  await expect(page.locator('.doc-tab small')).toHaveText('main', { timeout: 15_000 });
+  const saved = await request.get(`${engineUrl}/v2/code/workspaces/${encodeURIComponent(String(workspaceId))}/files/main.py`, { headers });
+  expect(saved.ok()).toBeTruthy();
+  const savedFile = await saved.json() as { content: string };
+  expect(savedFile.content).toContain(marker);
+});
