@@ -68,7 +68,7 @@ jobs:
           python -m forge_engine.v601_scene_selftest
           python -m forge_engine.v601_ollama_selftest
 
-      - name: Smoke 6.1 desktop API registration
+      - name: Smoke 6.1 desktop simulation API
         env:
           FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v610-api-state
           FORGECAD_SESSION_TOKEN: test-session
@@ -78,15 +78,69 @@ jobs:
           python - <<'PY'
           from fastapi.testclient import TestClient
           from forge_engine.desktop_entry import app
+          from forge_engine.v110 import core
+          from forge_engine.v610.selftest import _mechanism
+
           client = TestClient(app)
           headers = {'X-ForgeCAD-Session': 'test-session'}
+
+          # Install a deterministic two-link mechanism into the canonical runtime so
+          # the HTTP path proves descendant propagation rather than route registration only.
+          with core.LOCK:
+              core.PROJECT.clear()
+              core.PROJECT.update(_mechanism())
+
           response = client.get('/v6/simulation/health', headers=headers)
           assert response.status_code == 200, response.text
           body = response.json()
           assert body['version'] == '6.1.0'
+          assert body['assembly']['joint_count'] == 2
           assert body['domains']['multibody_kinematics']['available'] is True
           assert body['domains']['transient_thermal']['available'] is True
           assert body['domains']['integral_aerodynamics']['is_cfd'] is False
+
+          sweep = client.post('/v6/simulation/joints/sweep', headers=headers, json={
+              'joint_id': 'hinge',
+              'start_state': {'rotation_deg': 0},
+              'end_state': {'rotation_deg': 90},
+              'duration_s': 1,
+              'samples': 5,
+          })
+          assert sweep.status_code == 200, sweep.text
+          sweep_body = sweep.json()
+          assert sweep_body['moving_object_ids'] == ['arm', 'payload']
+          assert sweep_body['sample_count'] == 5
+          assert sweep_body['frames'][-1]['transforms']['payload']['position'][1] > 19.9
+
+          rigid = client.post('/v6/simulation/rigid-body', headers=headers, json={
+              'object_ids': [],
+              'force_n': [0, 0, 0],
+              'torque_nm': [0, 0, 0],
+              'gravity_m_s2': [0, 0, -9.80665],
+              'duration_s': 1,
+              'initial_velocity_m_s': [0, 0, 0],
+              'initial_angular_velocity_rad_s': [0, 0, 0],
+          })
+          assert rigid.status_code == 200, rigid.text
+          assert rigid.json()['mass_kg'] > 0
+
+          structural = client.post('/v6/simulation/structural', headers=headers, json={
+              'object_id': 'arm',
+              'mode': 'canonical',
+              'force_n': 100,
+              'load_direction': 'z',
+              'convergence': True,
+          })
+          assert structural.status_code == 200, structural.text
+          assert structural.json()['supported'] is False
+
+          fluid = client.post('/v6/simulation/fluid/steady', headers=headers, json={'record': True})
+          assert fluid.status_code == 200, fluid.text
+          assert fluid.json()['requested'] is False
+
+          runs = client.get('/v6/simulation/runs', headers=headers)
+          assert runs.status_code == 200, runs.text
+          assert runs.json()['count'] >= 3
           PY
 
       - name: Install desktop dependencies
