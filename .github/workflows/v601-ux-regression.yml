@@ -10,6 +10,9 @@ on:
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
+      - 'README.md'
+      - 'docs/RELEASE_6_0_1.md'
+      - 'docs/UX_AUDIT_6_0_1.md'
   workflow_dispatch:
 
 concurrency:
