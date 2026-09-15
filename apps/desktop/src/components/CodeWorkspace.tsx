@@ -80,6 +80,15 @@ export function CodeWorkspace({ workspaceId, onAskCopilot }: CodeWorkspaceProps)
     if (!activePath) return;
     return registerProjectMutationGuard(async () => {
       const current = editorRef.current?.getValue();
+      const queued = lastQueuedRef.current;
+      const sameAlreadyQueued = current != null
+        && queued?.workspaceId === workspaceId
+        && queued.path === activePath
+        && queued.content === current;
+      if (sameAlreadyQueued) {
+        await saveQueueRef.current;
+        return;
+      }
       if (current != null && current !== savedContentRef.current) {
         const ok = await persist(activePath, current);
         if (!ok) throw new Error(`Could not save ${activePath} before changing project state.`);
