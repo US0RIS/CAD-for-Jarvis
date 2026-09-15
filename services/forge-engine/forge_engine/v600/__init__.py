@@ -2,14 +2,18 @@
 
 6.0 is intentionally not marked release-complete. Each milestone must move a
 capability from schema/API existence toward externally validated engineering use.
+Milestone 5 is a controlled software capability: its physical-evidence lineage is
+validated synthetically against exact design fingerprints, not yet by real hardware.
 """
 
-MILESTONE_VERSION = "6.0.0-dev.2"
+MILESTONE_VERSION = "6.0.0-dev.5"
 ASSEMBLY_CONSTRAINT_SCHEMA_VERSION = 1
 GEOMETRY_BACKED_MOUNT_SCHEMA_VERSION = 1
+PHYSICAL_RETEST_SCHEMA_VERSION = 1
 
 __all__ = [
     "MILESTONE_VERSION",
     "ASSEMBLY_CONSTRAINT_SCHEMA_VERSION",
     "GEOMETRY_BACKED_MOUNT_SCHEMA_VERSION",
+    "PHYSICAL_RETEST_SCHEMA_VERSION",
 ]
