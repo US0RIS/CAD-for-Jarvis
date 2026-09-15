@@ -7,6 +7,7 @@ on:
       - 'apps/desktop/**'
       - '.github/workflows/v601-ux-regression.yml'
       - '.github/workflows/v601-native-release.yml'
+      - '.github/workflows/v601-release-provenance.yml'
       - 'services/forge-engine/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
