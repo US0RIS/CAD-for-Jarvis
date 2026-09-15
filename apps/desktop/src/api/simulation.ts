@@ -136,10 +136,23 @@ export const driveSimulationJoint = (input: JointPoseInput) => engineFetch<Recor
   body: JSON.stringify({ ...input, commit: input.commit ?? true }),
 });
 
-export const sweepSimulationJoint = (input: JointSweepInput) => engineFetch<Record<string, unknown>>('/v6/simulation/joints/sweep', {
-  method: 'POST',
-  body: JSON.stringify(input),
-});
+export async function sweepSimulationJoint(input: JointSweepInput): Promise<Record<string, unknown>> {
+  const result = await engineFetch<Record<string, unknown>>('/v6/simulation/joints/sweep', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  const frames = Array.isArray(result.frames) ? result.frames : [];
+  if (frames.length && typeof window !== 'undefined') {
+    const returnedDuration = Number(result.duration_s);
+    window.dispatchEvent(new CustomEvent('forgecad:simulation-preview', {
+      detail: {
+        frames,
+        duration_s: Number.isFinite(returnedDuration) && returnedDuration > 0 ? returnedDuration : input.duration_s,
+      },
+    }));
+  }
+  return result;
+}
 
 export const runGravityLoadPath = (gravity: [number, number, number] = [0, 0, -9.80665]) => engineFetch<Record<string, unknown>>('/v6/simulation/joints/gravity-loads', {
   method: 'POST',
