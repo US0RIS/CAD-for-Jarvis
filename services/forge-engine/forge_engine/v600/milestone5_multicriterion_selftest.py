@@ -55,12 +55,15 @@ def run() -> dict[str, object]:
         _ok(client.post("/v3.1/requirements", json={
             "id": requirement_id,
             "name": "Multi-object bench acceptance",
-            "metric": "physical_test_plan",
+            "metric": "physical_test_pass_fraction",
+            "op": ">=",
+            "target": 1.0,
+            "unit": "ratio",
             "criticality": "important",
             "scope_object_ids": [bracket_id, shield_id],
             "source": "v600-milestone5-multicriterion-acceptance",
             "confidence": 1.0,
-            "rationale": "Bracket fit and shield temperature must both satisfy the physical test plan.",
+            "rationale": "All required criteria in the revision-bound physical test plan must pass; the aggregate target is not inferred from simulation.",
         }), "create multi-object physical requirement")
 
         source_branch = core.ACTIVE_DESIGN
