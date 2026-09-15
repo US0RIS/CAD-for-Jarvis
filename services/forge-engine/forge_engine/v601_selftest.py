@@ -4,8 +4,9 @@ from __future__ import annotations
 
 These checks intentionally exercise canonical branch state directly and through the
 installed HTTP route surface. They are not UI mocks: code must survive a branch round
-trip, job provenance must fail stale, and a human branch label must not rewrite
-evidence-owned physical verification.
+trip, job provenance must fail stale, a human branch label must not rewrite
+evidence-owned physical verification, scene startup must preserve the local geometry
+cache contract, and local Ollama discovery must remain robust across loopback aliases.
 """
 
 from fastapi.testclient import TestClient
@@ -163,6 +164,16 @@ def main() -> None:
         "evidence_preservation": branch_label_preserves_physical_evidence(),
         "installed_routes": installed_routes_enforce_hardening(),
     }
+
+    # Keep the two newer runtime-hardening suites inside the canonical release gate so
+    # native packaging cannot pass while viewport startup or local-AI discovery regresses.
+    from . import v601_ollama_selftest, v601_scene_selftest
+
+    v601_ollama_selftest.main()
+    result["ollama_discovery"] = {"ok": True}
+    v601_scene_selftest.main()
+    result["scene_startup"] = {"ok": True}
+
     print({"forgecad_v601_selftest": result})
 
 
