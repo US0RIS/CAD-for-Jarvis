@@ -7,10 +7,13 @@ interface CodeWorkspaceProps {
   onAskCopilot?: (workspaceId: string, path: string) => void;
 }
 
+const AUTOSAVE_DELAY_MS = 700;
+
 export function CodeWorkspace({ workspaceId, onAskCopilot }: CodeWorkspaceProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<import('monaco-editor').editor.IStandaloneCodeEditor | null>(null);
   const savedContentRef = useRef('');
+  const saveSerialRef = useRef(0);
   const [workspace, setWorkspace] = useState<WorkspacePayload | null>(null);
   const [activePath, setActivePath] = useState('src/main.py');
   const [status, setStatus] = useState('Connecting to device workspace…');
@@ -33,18 +36,21 @@ export function CodeWorkspace({ workspaceId, onAskCopilot }: CodeWorkspaceProps)
   }, [workspaceId]);
 
   async function persist(path: string, content: string): Promise<boolean> {
+    const serial = ++saveSerialRef.current;
     setSaving(true);
     try {
       await saveCodeFile(workspaceId, path, content);
+      if (serial !== saveSerialRef.current) return true;
       savedContentRef.current = content;
-      setDirty(false);
+      const latest = editorRef.current?.getValue();
+      setDirty(latest != null && latest !== content);
       setStatus(`Saved ${path} to design history`);
       return true;
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      if (serial === saveSerialRef.current) setStatus(error instanceof Error ? error.message : String(error));
       return false;
     } finally {
-      setSaving(false);
+      if (serial === saveSerialRef.current) setSaving(false);
     }
   }
 
@@ -52,6 +58,13 @@ export function CodeWorkspace({ workspaceId, onAskCopilot }: CodeWorkspaceProps)
     let disposed = false;
     let editor: import('monaco-editor').editor.IStandaloneCodeEditor | null = null;
     let changeDisposable: { dispose(): void } | null = null;
+    let autosaveTimer: number | null = null;
+
+    const clearAutosave = () => {
+      if (autosaveTimer != null) window.clearTimeout(autosaveTimer);
+      autosaveTimer = null;
+    };
+
     void Promise.all([import('monaco-editor'), fetchCodeFile(workspaceId, activePath)]).then(([monaco, file]) => {
       if (disposed || !hostRef.current) return;
       editorRef.current?.dispose();
@@ -72,15 +85,27 @@ export function CodeWorkspace({ workspaceId, onAskCopilot }: CodeWorkspaceProps)
       });
       editorRef.current = editor;
       changeDisposable = editor.onDidChangeModelContent(() => {
-        setDirty(editor?.getValue() !== savedContentRef.current);
+        const content = editor?.getValue() ?? '';
+        const changed = content !== savedContentRef.current;
+        setDirty(changed);
+        clearAutosave();
+        if (changed) {
+          autosaveTimer = window.setTimeout(() => {
+            autosaveTimer = null;
+            const current = editor?.getValue();
+            if (current != null && current !== savedContentRef.current) void persist(activePath, current);
+          }, AUTOSAVE_DELAY_MS);
+        }
       });
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+        clearAutosave();
         const content = editor?.getValue();
         if (content != null) void persist(activePath, content);
       });
     }).catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
     return () => {
       disposed = true;
+      clearAutosave();
       changeDisposable?.dispose();
       editor?.dispose();
       if (editorRef.current === editor) editorRef.current = null;
@@ -121,7 +146,7 @@ export function CodeWorkspace({ workspaceId, onAskCopilot }: CodeWorkspaceProps)
       <aside className="run-output">
         <div className="run-title">Workspace status</div>
         <div>[+] {status}</div>
-        <div>[+] Workspace files are versioned with the active design branch.</div>
+        <div>[+] Changes autosave after {AUTOSAVE_DELAY_MS} ms of idle time and are versioned with the active design branch.</div>
         <div>[+] Execution controls appear only when a real device/runtime adapter is available.</div>
       </aside>
     </div>
