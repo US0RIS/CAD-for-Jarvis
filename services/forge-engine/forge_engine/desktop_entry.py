@@ -16,6 +16,7 @@ from forge_engine.v600.milestone3_api import install as install_v600_milestone3_
 from forge_engine.v600.milestone4_api import install as install_v600_milestone4_api
 from forge_engine.v600.milestone5_api import install as install_v600_milestone5_api
 from forge_engine.v600.milestone6_api import install as install_v600_milestone6_api
+from forge_engine.v601_ollama_runtime import install as install_v601_ollama_runtime
 from forge_engine.v601_runtime import install as install_v601_runtime
 from forge_engine.v601_scene_runtime import install as install_v601_scene_runtime
 
@@ -80,6 +81,12 @@ install_v600_milestone6_api(
     main_v31.GRAPH,
     main_v31._sync_graph,
 )
+
+# The packaged app must discover the same local Ollama daemon the user's terminal
+# sees. Probe explicit/local loopback endpoints without proxy interference, retry a
+# daemon that is still waking, and bind all existing planner/chat calls to the endpoint
+# that actually returned the configured model.
+install_v601_ollama_runtime(main_v31.v3.legacy)
 
 # 6.0.1 hardens the mutable desktop runtime without altering the frozen 6.0.0
 # capability substrate. Existing /v2 route shapes stay compatible while job/branch
