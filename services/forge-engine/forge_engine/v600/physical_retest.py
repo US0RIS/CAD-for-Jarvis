@@ -8,8 +8,10 @@ This service creates a controlled redesign branch using explicitly authorized nu
 CAD mutations, preserves the failed evidence on its source revision, and requires any
 retest evidence to match the redesigned fingerprint exactly.
 
+A causal explanation supplied during redesign is recorded only as an unproven
+hypothesis. When a retest cycle declares quantitative acceptance criteria, ForgeCAD
+derives pass/fail from the recorded measurements and rejects a contradictory status.
 Passing a scoped retest never silently marks the entire design physically verified.
-It only records that one requirement has current passing physical evidence.
 """
 
 from copy import deepcopy
@@ -34,10 +36,21 @@ class PhysicalRepairMutation(BaseModel):
     value: float
 
 
+class PhysicalTestCriterion(BaseModel):
+    measurement: str = Field(min_length=1, max_length=128)
+    unit: str = Field(default="", max_length=64)
+    op: Literal["<=", ">=", "between"]
+    target: float | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    required: bool = True
+
+
 class BeginPhysicalRetestCycleRequest(BaseModel):
     requirement_id: str
     failed_evidence_id: str
     mutations: list[PhysicalRepairMutation] = Field(min_length=1, max_length=8)
+    criteria: list[PhysicalTestCriterion] = Field(default_factory=list, max_length=16)
     branch_prefix: str = "physical-retest-redesign"
     actor: Literal["jarvis", "forgecad", "human"] = "jarvis"
     diagnosis: str = ""
@@ -92,6 +105,105 @@ def _cycle(cycle_id: str) -> dict[str, Any]:
     return row
 
 
+def _validate_criteria(criteria: list[PhysicalTestCriterion]) -> list[dict[str, Any]]:
+    names = [row.measurement.strip() for row in criteria]
+    if any(not name for name in names):
+        raise ValueError("Physical test criteria require a non-empty measurement name")
+    normalized = [name.casefold() for name in names]
+    if len(normalized) != len(set(normalized)):
+        raise ValueError("Physical test criteria must reference unique measurement names")
+    rows: list[dict[str, Any]] = []
+    for criterion in criteria:
+        if criterion.op in {"<=", ">="}:
+            if criterion.target is None:
+                raise ValueError(f"Criterion {criterion.measurement} with operator {criterion.op} requires target")
+            if criterion.minimum is not None or criterion.maximum is not None:
+                raise ValueError(f"Criterion {criterion.measurement} cannot mix target with range bounds")
+        elif criterion.op == "between":
+            if criterion.minimum is None or criterion.maximum is None:
+                raise ValueError(f"Criterion {criterion.measurement} requires minimum and maximum")
+            if float(criterion.minimum) > float(criterion.maximum):
+                raise ValueError(f"Criterion {criterion.measurement} minimum exceeds maximum")
+            if criterion.target is not None:
+                raise ValueError(f"Criterion {criterion.measurement} cannot mix target with range bounds")
+        row = criterion.model_dump()
+        row["measurement"] = criterion.measurement.strip()
+        row["unit"] = criterion.unit.strip()
+        rows.append(row)
+    return rows
+
+
+def _evaluate_criteria(criteria: list[dict[str, Any]], measurements: list[Measurement]) -> tuple[list[dict[str, Any]], str | None]:
+    if not criteria:
+        return [], None
+    by_name: dict[str, Measurement] = {}
+    for measurement in measurements:
+        key = measurement.name.strip().casefold()
+        if key in by_name:
+            raise ValueError(f"Physical retest contains duplicate measurement {measurement.name}")
+        by_name[key] = measurement
+
+    results: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for criterion in criteria:
+        name = str(criterion.get("measurement") or "").strip()
+        measurement = by_name.get(name.casefold())
+        if measurement is None:
+            if bool(criterion.get("required", True)):
+                missing.append(name)
+            results.append({
+                "measurement": name,
+                "required": bool(criterion.get("required", True)),
+                "status": "missing",
+                "passed": None,
+            })
+            continue
+        expected_unit = str(criterion.get("unit") or "").strip()
+        observed_unit = measurement.unit.strip()
+        if observed_unit.casefold() != expected_unit.casefold():
+            raise ValueError(
+                f"Physical retest measurement {name} uses unit {observed_unit!r}; criterion requires {expected_unit!r}"
+            )
+        value = float(measurement.value)
+        op = str(criterion.get("op") or "")
+        if op == "<=":
+            threshold = float(criterion["target"])
+            passed = value <= threshold
+            limit = {"target": threshold}
+        elif op == ">=":
+            threshold = float(criterion["target"])
+            passed = value >= threshold
+            limit = {"target": threshold}
+        elif op == "between":
+            lo, hi = float(criterion["minimum"]), float(criterion["maximum"])
+            passed = lo <= value <= hi
+            limit = {"minimum": lo, "maximum": hi}
+        else:
+            raise ValueError(f"Unsupported physical test criterion operator: {op}")
+        results.append({
+            "measurement": name,
+            "unit": expected_unit,
+            "value": value,
+            "op": op,
+            **limit,
+            "required": bool(criterion.get("required", True)),
+            "status": "pass" if passed else "fail",
+            "passed": passed,
+        })
+
+    if missing:
+        raise ValueError("Physical retest is missing required measurements: " + ", ".join(sorted(missing)))
+    derived = "failed" if any(row.get("passed") is False for row in results) else "passed"
+    return results, derived
+
+
+def _append_unique(meta: dict[str, Any], key: str, value: str) -> None:
+    values = [str(row) for row in meta.get(key) or []]
+    if value not in values:
+        values.append(value)
+    meta[key] = values
+
+
 def begin_physical_retest_cycle(request: BeginPhysicalRetestCycleRequest) -> dict[str, Any]:
     requirement = _requirement(request.requirement_id)
     failed = _evidence(requirement, request.failed_evidence_id)
@@ -108,13 +220,15 @@ def begin_physical_retest_cycle(request: BeginPhysicalRetestCycleRequest) -> dic
     keys = [(row.object_id, row.parameter) for row in request.mutations]
     if len(keys) != len(set(keys)):
         raise ValueError("Physical redesign mutations must target unique object/parameter pairs")
+    criteria = _validate_criteria(request.criteria)
 
     source_branch = core.ACTIVE_DESIGN
     source_fingerprint = design_fingerprint()
     with core.LOCK:
-        core.DESIGNS.setdefault(source_branch, {})["physical_verified"] = False
-        core.DESIGNS[source_branch]["physical_status"] = "failed_current_physical_evidence"
-        core.DESIGNS[source_branch]["failed_physical_evidence_id"] = request.failed_evidence_id
+        source_meta = core.DESIGNS.setdefault(source_branch, {})
+        source_meta["physical_verified"] = False
+        source_meta["physical_status"] = "failed_current_physical_evidence"
+        source_meta["failed_physical_evidence_id"] = request.failed_evidence_id
         core.persist()
 
     core.create_branch(
@@ -152,9 +266,10 @@ def begin_physical_retest_cycle(request: BeginPhysicalRetestCycleRequest) -> dic
         raise RuntimeError("Source physical failure incorrectly remained current after redesign")
 
     diff = semantic_branch_diff(source_branch, redesign_branch)
+    cycle_id = core.uid()
     cycle = {
-        "id": core.uid(),
-        "schema": "forgecad-physical-retest-cycle/1",
+        "id": cycle_id,
+        "schema": "forgecad-physical-retest-cycle/2",
         "milestone": 5,
         "requirement_id": request.requirement_id,
         "source_branch": source_branch,
@@ -166,6 +281,17 @@ def begin_physical_retest_cycle(request: BeginPhysicalRetestCycleRequest) -> dic
         "mutations": changes,
         "stale_simulation_count": stale,
         "diagnosis": request.diagnosis,
+        "failure_assessment": {
+            "observation_evidence_id": request.failed_evidence_id,
+            "observation_status": "failed",
+            "observed_measurements": deepcopy(failed.get("measurements") or []),
+            "hypothesis": request.diagnosis,
+            "causality_status": "unproven_hypothesis",
+            "interpretation_policy": "Physical evidence establishes the observation, not the cause. Redesign causality requires independent analysis or discriminating retest evidence.",
+        },
+        "test_criteria": criteria,
+        "criterion_results": [],
+        "derived_retest_status": None,
         "semantic_diff_count": int(diff.get("count", 0)),
         "status": "pending_retest",
         "retest_evidence_id": None,
@@ -174,8 +300,17 @@ def begin_physical_retest_cycle(request: BeginPhysicalRetestCycleRequest) -> dic
     }
     with core.LOCK:
         core.PROJECT.setdefault("physical_retest_cycles", []).append(deepcopy(cycle))
-        core.DESIGNS.setdefault(redesign_branch, {})["physical_verified"] = False
-        core.DESIGNS[redesign_branch]["physical_status"] = "pending_retest"
+        source_meta = core.DESIGNS.setdefault(source_branch, {})
+        redesign_meta = core.DESIGNS.setdefault(redesign_branch, {})
+        _append_unique(source_meta, "physical_retest_cycle_ids", cycle_id)
+        _append_unique(source_meta, "physical_redesign_branches", redesign_branch)
+        source_meta.setdefault("physical_retest_cycle_status", {})[cycle_id] = "pending_retest"
+        _append_unique(redesign_meta, "physical_retest_cycle_ids", cycle_id)
+        redesign_meta["physical_source_branch"] = source_branch
+        redesign_meta["physical_source_evidence_id"] = request.failed_evidence_id
+        redesign_meta.setdefault("physical_retest_cycle_status", {})[cycle_id] = "pending_retest"
+        redesign_meta["physical_verified"] = False
+        redesign_meta["physical_status"] = "pending_retest"
         core.persist()
 
     return {
@@ -198,6 +333,15 @@ def complete_physical_retest_cycle(cycle_id: str, request: CompletePhysicalRetes
     if current_fingerprint != expected_fingerprint:
         raise ValueError("Redesign changed after the retest cycle began; start a new cycle for the new fingerprint")
 
+    criterion_results, derived_status = _evaluate_criteria(
+        [deepcopy(row) for row in cycle.get("test_criteria") or []],
+        list(request.measurements),
+    )
+    if derived_status is not None and request.status != derived_status:
+        raise ValueError(
+            f"Declared retest status {request.status!r} contradicts criterion-derived status {derived_status!r}"
+        )
+
     evidence = verify_requirement(
         str(cycle["requirement_id"]),
         RequirementEvidenceRequest(
@@ -218,6 +362,8 @@ def complete_physical_retest_cycle(cycle_id: str, request: CompletePhysicalRetes
             "failed": "retest_failed",
             "inconclusive": "retest_inconclusive",
         }[request.status]
+        cycle["criterion_results"] = deepcopy(criterion_results)
+        cycle["derived_retest_status"] = derived_status
         cycle["retest_evidence_id"] = evidence["id"]
         cycle["retest_design_fingerprint"] = current_fingerprint
         cycle["physical_validation_claimed"] = request.status == "passed"
@@ -230,6 +376,11 @@ def complete_physical_retest_cycle(cycle_id: str, request: CompletePhysicalRetes
         else:
             passed_ids.discard(str(cycle["requirement_id"]))
         meta["physically_verified_requirement_ids"] = sorted(passed_ids)
+        for branch in {str(cycle.get("source_branch") or ""), str(cycle.get("redesign_branch") or "")}:
+            if not branch:
+                continue
+            branch_meta = core.DESIGNS.setdefault(branch, {})
+            branch_meta.setdefault("physical_retest_cycle_status", {})[cycle_id] = cycle["status"]
         core.push_history("v6 physical retest", "human", f"{cycle['requirement_id']}: {request.status}")
         core.persist()
 
@@ -237,6 +388,8 @@ def complete_physical_retest_cycle(cycle_id: str, request: CompletePhysicalRetes
         "ok": request.status == "passed",
         "cycle": deepcopy(_cycle(cycle_id)),
         "evidence": deepcopy(evidence),
+        "criterion_results": deepcopy(criterion_results),
+        "derived_retest_status": derived_status,
         "requirement_physically_verified_on_current_fingerprint": request.status == "passed",
         "entire_design_physically_verified": False,
     }
@@ -248,4 +401,29 @@ def physical_retest_cycles() -> dict[str, Any]:
         "count": len(core.PROJECT.get("physical_retest_cycles") or []),
         "active_branch": core.ACTIVE_DESIGN,
         "design_fingerprint": design_fingerprint(),
+    }
+
+
+def physical_retest_lineage() -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for branch, raw_meta in sorted(core.DESIGNS.items()):
+        meta = deepcopy(raw_meta or {})
+        cycle_ids = [str(row) for row in meta.get("physical_retest_cycle_ids") or []]
+        if not cycle_ids:
+            continue
+        rows.append({
+            "branch": branch,
+            "cycle_ids": cycle_ids,
+            "cycle_status": deepcopy(meta.get("physical_retest_cycle_status") or {}),
+            "source_branch": meta.get("physical_source_branch"),
+            "source_evidence_id": meta.get("physical_source_evidence_id"),
+            "redesign_branches": deepcopy(meta.get("physical_redesign_branches") or []),
+            "physical_status": meta.get("physical_status"),
+            "physical_verified": bool(meta.get("physical_verified", False)),
+        })
+    return {
+        "items": rows,
+        "count": len(rows),
+        "active_branch": core.ACTIVE_DESIGN,
+        "policy": "Branch lineage links physical observations to redesign experiments without copying evidence across design fingerprints.",
     }
