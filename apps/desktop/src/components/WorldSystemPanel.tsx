@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Box, Database, Link2, RefreshCw, ScanSearch, ShieldCheck, Wifi } from 'lucide-react';
 import {
   fetchWorldEntities,
@@ -58,6 +58,7 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  const hasHealth = useRef(false);
 
   const reload = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -72,15 +73,16 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
       setEntities(nextEntities.items);
       setRelations(nextRelations.items);
       setEvents(nextEvents.items);
+      hasHealth.current = true;
       setError(null);
       setStale(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
-      setStale(Boolean(health));
+      setStale(hasHealth.current);
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [health]);
+  }, []);
 
   useEffect(() => {
     void reload();
