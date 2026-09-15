@@ -10,7 +10,7 @@ ForgeCAD 6.0.1 is the correctness, UX, and interaction-hardening release on top 
 - Forge Engine milestone version: `6.0.1`
 - Product claim: software engineering release; **not** hardware certification
 
-The full desktop UX audit is recorded in [`UX_AUDIT_6_0_1.md`](UX_AUDIT_6_0_1.md).
+The full desktop UX audit is recorded in [`UX_AUDIT_6_0_1.md`](UX_AUDIT_6_0_1.md). This release record is itself included in both the UX and native workflow path gates so the final accepted revision includes its release documentation rather than changing it after validation.
 
 ## What changed
 
