@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, Focus, Move3d, Orbit, Rotate3d, Scaling, Scan, Square, View } from 'lucide-react';
 import { SceneController, type CameraPreset, type TransformMode } from '../scene/SceneController';
 
+const EMPTY_HIDDEN_IDS: ReadonlySet<string> = new Set();
+
 interface ViewportProps {
   explode: number;
   onExplode: (value: number) => void;
@@ -15,7 +17,7 @@ interface ViewportProps {
   optimisticHiddenIds?: ReadonlySet<string>;
 }
 
-export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoading, onError, sceneRevision, selectedId, empty, optimisticHiddenIds = new Set() }: ViewportProps) {
+export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoading, onError, sceneRevision, selectedId, empty, optimisticHiddenIds = EMPTY_HIDDEN_IDS }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controllerRef = useRef<SceneController | null>(null);
   const mountedRevision = useRef<string | null>(null);
