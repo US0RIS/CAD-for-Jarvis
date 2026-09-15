@@ -29,6 +29,19 @@ function relativeSource(entity: WorldEntityPayload) {
   return authoritative.source_id ? `${authoritative.source} · ${authoritative.source_id}` : authoritative.source;
 }
 
+function observationAge(value: string) {
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) return 'time unknown';
+  const seconds = Math.max(0, Math.floor((Date.now() - at) / 1000));
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 const cardStyle = {
   border: '1px solid var(--border-subtle, #22313b)',
   borderRadius: 7,
@@ -44,6 +57,7 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
 
   const reload = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -59,12 +73,14 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
       setRelations(nextRelations.items);
       setEvents(nextEvents.items);
       setError(null);
+      setStale(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      setStale(Boolean(health));
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, []);
+  }, [health]);
 
   useEffect(() => {
     void reload();
@@ -113,6 +129,10 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
     </div>;
   }
 
+  const projectSyncState = !health ? null : Boolean(health.project_sync.ok);
+  const adapterState = !health ? null : true;
+  const pendingState = !health ? null : (health.capability_runtime.awaiting_confirmation ?? 0) === 0;
+
   return <div
     data-testid="world-system-panel"
     style={{ display: 'grid', gridTemplateColumns: '230px minmax(220px, .85fr) minmax(320px, 1.5fr)', gap: 8, padding: 8, height: '100%', minHeight: 0, overflow: 'hidden' }}
@@ -122,34 +142,37 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
         <Database size={14}/><strong style={{ fontSize: 12 }}>PHYSICAL WORLD</strong>
         <button
           title="Refresh world model"
+          aria-label="Refresh world model"
           onClick={() => void reload()}
           disabled={loading}
-          style={{ marginLeft: 'auto', background: 'transparent', border: 0, color: 'inherit', padding: 2, cursor: 'pointer' }}
-        ><RefreshCw size={13}/></button>
+          style={{ marginLeft: 'auto', background: 'transparent', border: 0, color: 'inherit', padding: 2, cursor: loading ? 'default' : 'pointer' }}
+        ><RefreshCw size={13} className={loading ? 'agent-spin' : ''}/></button>
       </div>
+      {stale && error ? <div role="status" style={{ fontSize: 9.5, lineHeight: 1.35, color: 'var(--warning, #f1bf55)' }}>Showing last known world state. Latest refresh failed: {error}</div> : null}
+      {!health && !error ? <div style={{ fontSize: 9.5, opacity: .55 }}>Loading physical-world state…</div> : null}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-        <Metric label="ENTITIES" value={health?.world.entity_count ?? entities.length} testId="world-entity-count"/>
-        <Metric label="RELATIONS" value={health?.world.relation_count ?? relations.length}/>
+        <Metric label="ENTITIES" value={health?.world.entity_count ?? (loading ? '—' : entities.length)} testId="world-entity-count"/>
+        <Metric label="RELATIONS" value={health?.world.relation_count ?? (loading ? '—' : relations.length)}/>
         <Metric label="REVISION" value={health?.world.revision ?? '—'}/>
-        <Metric label="EVENTS" value={health?.world.event_count ?? events.length}/>
+        <Metric label="EVENTS" value={health?.world.event_count ?? (loading ? '—' : events.length)}/>
       </div>
-      <StatusLine icon={<ShieldCheck size={12}/>} label="Project sync" value={health?.project_sync.ok ? 'Current' : 'Needs attention'} good={Boolean(health?.project_sync.ok)}/>
-      <StatusLine icon={<Wifi size={12}/>} label="Adapters" value={String(health?.capability_runtime.registered_adapters.length ?? 0)} good/>
-      <StatusLine icon={<Activity size={12}/>} label="Pending actions" value={String(health?.capability_runtime.awaiting_confirmation ?? 0)} good={(health?.capability_runtime.awaiting_confirmation ?? 0) === 0}/>
+      <StatusLine icon={<ShieldCheck size={12}/>} label="Project sync" value={!health ? 'Loading…' : health.project_sync.ok ? 'Current' : 'Needs attention'} good={projectSyncState}/>
+      <StatusLine icon={<Wifi size={12}/>} label="Adapters" value={!health ? 'Loading…' : String(health.capability_runtime.registered_adapters.length)} good={adapterState}/>
+      <StatusLine icon={<Activity size={12}/>} label="Pending actions" value={!health ? 'Loading…' : String(health.capability_runtime.awaiting_confirmation ?? 0)} good={pendingState}/>
       <EngineeringGraphStatus selectedObjectId={selectedObjectId}/>
       <div style={{ borderTop: '1px solid var(--border-subtle, #22313b)', paddingTop: 8 }}>
         <div style={{ fontSize: 10, opacity: .55, marginBottom: 5 }}>RECENT WORLD CHANGES</div>
         {recentEvents.length ? recentEvents.map((event) => <div key={event.id} style={{ fontSize: 10.5, lineHeight: 1.35, marginBottom: 5 }}>
           <span style={{ opacity: .6 }}>{event.type}</span><br/>
           <span>{event.entity_id ?? event.relation_id ?? event.source}</span>
-        </div>) : <div style={{ fontSize: 11, opacity: .55 }}>No world events.</div>}
+        </div>) : <div style={{ fontSize: 11, opacity: .55 }}>{loading ? 'Loading world events…' : 'No world events.'}</div>}
       </div>
     </section>
 
     <section style={{ ...cardStyle, padding: 8, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 3px 7px' }}>
         <ScanSearch size={13}/><strong style={{ fontSize: 11 }}>ENTITIES</strong>
-        <span style={{ marginLeft: 'auto', fontSize: 10, opacity: .5 }}>{entityRows.length}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 10, opacity: .5 }}>{health ? entityRows.length : '—'}</span>
       </div>
       <div style={{ overflow: 'auto', minHeight: 0 }}>
         {entityRows.map((entity) => <button
@@ -166,6 +189,7 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
           <Box size={13} style={{ marginTop: 1, opacity: .7 }}/>
           <span style={{ minWidth: 0 }}><strong style={{ display: 'block', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{entity.name}</strong><small style={{ display: 'block', fontSize: 9.5, opacity: .55 }}>{entity.kind} · {entity.id}</small></span>
         </button>)}
+        {!entityRows.length && loading ? <div style={{ fontSize: 10, opacity: .5, padding: 6 }}>Loading entities…</div> : null}
       </div>
     </section>
 
@@ -195,7 +219,7 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
             {selected.capabilities.length ? selected.capabilities.map((capability) => <Tag key={capability.name}>{capability.name}</Tag>) : <Empty>None declared</Empty>}
           </MiniSection>
           <MiniSection title="LIVE / OBSERVED STATE">
-            {Object.keys(selected.live_state).length ? Object.entries(selected.live_state).map(([key, sample]) => <div key={key} style={{ marginBottom: 5 }}><div style={{ fontSize: 10.5 }}>{key}: <strong>{compactValue(sample.value)}{sample.unit ? ` ${sample.unit}` : ''}</strong></div><div style={{ fontSize: 9, opacity: .5 }}>{sample.source}{sample.source_id ? ` · ${sample.source_id}` : ''} · {Math.round(sample.confidence * 100)}%</div></div>) : <Empty>No live observations</Empty>}
+            {Object.keys(selected.live_state).length ? Object.entries(selected.live_state).map(([key, sample]) => <div key={key} style={{ marginBottom: 5 }}><div style={{ fontSize: 10.5 }}>{key}: <strong>{compactValue(sample.value)}{sample.unit ? ` ${sample.unit}` : ''}</strong></div><div title={sample.observed_at} style={{ fontSize: 9, opacity: .5 }}>{sample.source}{sample.source_id ? ` · ${sample.source_id}` : ''} · {Math.round(sample.confidence * 100)}% · observed {observationAge(sample.observed_at)}</div></div>) : <Empty>No live observations</Empty>}
           </MiniSection>
           <MiniSection title="INTERFACES / RELATIONS">
             {selected.interfaces.slice(0, 5).map((iface) => <div key={iface.id} style={{ fontSize: 10, marginBottom: 4 }}><Link2 size={10} style={{ marginRight: 4, verticalAlign: -1 }}/>{iface.id} <span style={{ opacity: .5 }}>{iface.kind}</span></div>)}
@@ -203,7 +227,7 @@ export function WorldSystemPanel({ selectedObjectId = null }: { selectedObjectId
             {!selected.interfaces.length && !selectedRelations.length ? <Empty>No interfaces or relations</Empty> : null}
           </MiniSection>
         </div>
-      </> : <div className="dock-empty"><Box size={18}/><span>Select a world entity.</span></div>}
+      </> : <div className="dock-empty"><Box size={18}/><span>{loading ? 'Loading world entities…' : 'Select a world entity.'}</span></div>}
     </section>
   </div>;
 }
@@ -212,8 +236,9 @@ function Metric({ label, value, testId }: { label: string; value: string | numbe
   return <div style={{ padding: 6, border: '1px solid var(--border-subtle, #22313b)', borderRadius: 5 }}><div style={{ fontSize: 9, opacity: .5 }}>{label}</div><strong data-testid={testId} style={{ fontSize: 13 }}>{value}</strong></div>;
 }
 
-function StatusLine({ icon, label, value, good }: { icon: React.ReactNode; label: string; value: string; good: boolean }) {
-  return <div style={{ display: 'grid', gridTemplateColumns: '14px 1fr auto', gap: 5, alignItems: 'center', fontSize: 10.5 }}><span style={{ opacity: .65 }}>{icon}</span><span style={{ opacity: .65 }}>{label}</span><strong style={{ fontWeight: 600, color: good ? 'var(--accent, #55f59a)' : 'var(--warning, #f1bf55)' }}>{value}</strong></div>;
+function StatusLine({ icon, label, value, good }: { icon: React.ReactNode; label: string; value: string; good: boolean | null }) {
+  const color = good == null ? 'inherit' : good ? 'var(--accent, #55f59a)' : 'var(--warning, #f1bf55)';
+  return <div style={{ display: 'grid', gridTemplateColumns: '14px 1fr auto', gap: 5, alignItems: 'center', fontSize: 10.5 }}><span style={{ opacity: .65 }}>{icon}</span><span style={{ opacity: .65 }}>{label}</span><strong style={{ fontWeight: 600, color, opacity: good == null ? .65 : 1 }}>{value}</strong></div>;
 }
 
 function MiniSection({ title, children }: { title: string; children: React.ReactNode }) {
