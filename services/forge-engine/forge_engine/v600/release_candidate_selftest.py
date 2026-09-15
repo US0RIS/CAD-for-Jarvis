@@ -137,7 +137,7 @@ def run() -> dict[str, object]:
 
         # Safety state is canonical. Severity 6 deliberately remains an open warning,
         # not a falsely self-certified pass; it has explicit controls and test method.
-        safety_added = _operation(client, "add_failure_mode", {
+        _operation(client, "add_failure_mode", {
             "name": "Unexpected solenoid energization",
             "category": "control",
             "cause": "stale software command or driver fault",
@@ -149,7 +149,9 @@ def run() -> dict[str, object]:
             "controls": ["hardware enable interlock", "software maximum-on timer", "bench exclusion zone"],
             "verification_method": "fault-injection and interlock bench test",
         }, "Record release-candidate actuator hazard")
-        assert safety_added["failure_mode"]["severity"] == 6
+        hazard = next(row for row in core.PROJECT.get("failure_modes") or [] if row.get("name") == "Unexpected solenoid energization")
+        assert hazard["severity"] == 6
+        assert len(hazard["controls"]) == 3
 
         thermal_before = solve_thermal_network(core.PROJECT)
         fluid_before = solve_fluid_network(core.PROJECT)
