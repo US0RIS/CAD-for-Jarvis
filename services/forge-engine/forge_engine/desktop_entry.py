@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 import uvicorn
+from fastapi.middleware.cors import CORSMiddleware
 
 from forge_engine import main_v31
 from forge_engine.v300.planner_world_context import install_world_aware_planner
@@ -83,6 +84,27 @@ install_v600_milestone6_api(
 # capability substrate. Existing /v2 route shapes stay compatible while job/branch
 # execution gains exact revision provenance and truthful cancellation semantics.
 install_v601_runtime(main_v31.app, main_v31.v3.legacy)
+
+# The legacy v2 CORS policy predates the v3.1 parametric feature editor and omits
+# PATCH. The desktop renderer is cross-origin in browser acceptance and may also use
+# a null/file origin when packaged, so feature parameter edits need an outer policy
+# that covers the complete mutable desktop method set. Keep the inner legacy policy
+# intact for compatibility and make the desktop entrypoint explicitly complete.
+main_v31.app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=[
+        "Content-Disposition",
+        "X-ForgeCAD-Package-SHA256",
+        "X-ForgeCAD-Branch",
+        "X-ForgeCAD-3MF-Stage",
+        "X-ForgeCAD-Manufacturing-Resource",
+        "X-ForgeCAD-Thumbnail-Source",
+    ],
+)
 app = main_v31.app
 
 
