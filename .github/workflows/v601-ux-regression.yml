@@ -39,6 +39,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e services/forge-engine
 
+      - name: Verify canonical 6.0.1 branch persistence
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v601-selftest-state
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v601_selftest
+
       - name: Install desktop dependencies
         run: pnpm install --prod=false --frozen-lockfile=false
 
