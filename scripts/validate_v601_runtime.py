@@ -42,7 +42,15 @@ def validate(base_url: str, token: str, expected_release_complete: bool, timeout
 
         runtime = _request(client, "GET", "/v2/runtime", token=token)
         assert runtime["engine"] == "ready", runtime
+        assert runtime["scene"] == "ready", runtime
         assert runtime["api_version"] == "2", runtime
+        assert runtime["ollama"] in {"ready", "offline", "failed"}, runtime
+        assert str(runtime.get("configured_model") or ""), runtime
+        # Native CI does not require a local Ollama daemon. The release requirement is
+        # that the packaged engine can execute its 6.0.1 discovery/status contract
+        # cleanly; endpoint fallback/model-alias behavior is covered by v601_selftest.
+        if runtime["ollama"] == "ready":
+            assert str(runtime.get("resolved_model") or ""), runtime
 
         cantera = _request(client, "GET", "/v6/solvers/cantera", token=token)
         assert cantera["available"] is True, cantera
@@ -99,6 +107,9 @@ def validate(base_url: str, token: str, expected_release_complete: bool, timeout
             "api_version": health["api_version"],
             "engine_version": health["engine_version"],
             "release_complete": health["release_complete"],
+            "ollama_state": runtime["ollama"],
+            "configured_model": runtime["configured_model"],
+            "resolved_model": runtime.get("resolved_model"),
             "cantera_version": cantera["module_version"],
             "mechanism_sha256": mechanism_sha,
             "chemistry_solver_grade": run["solver"]["solver_grade"],
