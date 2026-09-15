@@ -106,6 +106,9 @@ def installed_routes_enforce_hardening() -> dict[str, object]:
     branch = str(source["active_branch"])
 
     with TestClient(app) as client:
+        if legacy.SESSION_TOKEN:
+            client.headers.update({"X-ForgeCAD-Session": legacy.SESSION_TOKEN})
+
         cross_branch = client.post(
             "/v2/jobs",
             json={"kind": "component-search", "branch": "not-the-active-branch", "text": "Raspberry Pi"},
