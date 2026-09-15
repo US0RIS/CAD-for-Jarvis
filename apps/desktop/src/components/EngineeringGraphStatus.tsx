@@ -29,6 +29,7 @@ export function EngineeringGraphStatus({ selectedObjectId = null }: { selectedOb
   const [detailError, setDetailError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
   const requestSerial = useRef(0);
+  const hasHealth = useRef(false);
 
   const reload = useCallback(async (quiet = false) => {
     const serial = ++requestSerial.current;
@@ -38,16 +39,17 @@ export function EngineeringGraphStatus({ selectedObjectId = null }: { selectedOb
       if (serial !== requestSerial.current) return;
       setHealth(nextHealth);
       setProfile(nextProfile);
+      hasHealth.current = true;
       setError(null);
       setStale(false);
     } catch (caught) {
       if (serial !== requestSerial.current) return;
       setError(caught instanceof Error ? caught.message : String(caught));
-      setStale(Boolean(health));
+      setStale(hasHealth.current);
     } finally {
       if (!quiet && serial === requestSerial.current) setBusy(false);
     }
-  }, [health]);
+  }, []);
 
   useEffect(() => {
     void reload();
