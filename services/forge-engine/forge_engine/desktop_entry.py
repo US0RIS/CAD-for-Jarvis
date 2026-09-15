@@ -67,6 +67,8 @@ install_v600_milestone4_api(
 install_v600_milestone5_api(
     main_v31.app,
     main_v31.v3.legacy.require_session,
+    main_v31.GRAPH,
+    main_v31._sync_graph,
 )
 app = main_v31.app
 
