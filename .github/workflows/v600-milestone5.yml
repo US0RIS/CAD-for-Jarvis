@@ -7,11 +7,13 @@ on:
       - 'services/forge-engine/forge_engine/v600/physical_retest.py'
       - 'services/forge-engine/forge_engine/v600/physical_artifacts.py'
       - 'services/forge-engine/forge_engine/v600/physical_metrology.py'
+      - 'services/forge-engine/forge_engine/v600/physical_test_execution.py'
       - 'services/forge-engine/forge_engine/v600/milestone5_api.py'
       - 'services/forge-engine/forge_engine/v600/milestone5_selftest.py'
       - 'services/forge-engine/forge_engine/v600/milestone5_artifact_selftest.py'
       - 'services/forge-engine/forge_engine/v600/milestone5_multicriterion_selftest.py'
       - 'services/forge-engine/forge_engine/v600/milestone5_metrology_selftest.py'
+      - 'services/forge-engine/forge_engine/v600/milestone5_repeatability_selftest.py'
       - 'services/forge-engine/forge_engine/v600/substitution_semantics.py'
       - 'services/forge-engine/forge_engine/v600/autonomous_repair.py'
       - 'services/forge-engine/forge_engine/desktop_entry.py'
@@ -64,6 +66,14 @@ jobs:
           CI: 'true'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v600.milestone5_metrology_selftest
+      - name: Run milestone 5 repeatable physical execution acceptance
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m5-repeatability
+          FORGECAD_SESSION_TOKEN: test-session
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v600.milestone5_repeatability_selftest
       - name: Preserve milestone 4 bounded autonomous repair
         env:
           PYTHONPATH: services/forge-engine
