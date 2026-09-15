@@ -20,6 +20,7 @@ from forge_engine.v601_ollama_runtime import install as install_v601_ollama_runt
 from forge_engine.v601_runtime import install as install_v601_runtime
 from forge_engine.v601_scene_runtime import install as install_v601_scene_runtime
 from forge_engine.v610.api import install as install_v610_api
+from forge_engine.v610.simulation_extensions import install as install_v610_simulation_extensions
 
 
 # ForgeCAD 6.x keeps 3.1 as the validated desktop substrate and installs semantic,
@@ -93,8 +94,8 @@ install_v601_scene_runtime(main_v31.v3.legacy.PROJECT)
 
 # 6.1 turns canonical mechanical connectivity and analysis inputs into one executable
 # simulation state. Viewport transforms propagate through the joint tree, joint
-# actuation moves complete downstream subassemblies, and thermal/aerodynamic/load-path
-# runs are fingerprinted and invalidated by subsequent canonical edits.
+# actuation moves complete downstream subassemblies, and every simulation result is
+# fingerprinted and invalidated by subsequent canonical edits.
 install_v610_api(
     main_v31.app,
     main_v31.v3.legacy.require_session,
@@ -102,6 +103,12 @@ install_v610_api(
     main_v31._sync_graph,
     main_v31.v3.legacy.PROJECT.snapshot,
     main_v31.v3.legacy.broadcast,
+)
+install_v610_simulation_extensions(
+    main_v31.app,
+    main_v31.v3.legacy.require_session,
+    snapshot=main_v31.v3.legacy.PROJECT.snapshot,
+    broadcast=main_v31.v3.legacy.broadcast,
 )
 
 # The legacy v2 CORS policy predates the v3.1 parametric feature editor and omits
