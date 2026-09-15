@@ -12,9 +12,10 @@ interface ViewportProps {
   sceneRevision: string;
   selectedId: string | null;
   empty: boolean;
+  optimisticHiddenIds?: ReadonlySet<string>;
 }
 
-export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoading, onError, sceneRevision, selectedId, empty }: ViewportProps) {
+export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoading, onError, sceneRevision, selectedId, empty, optimisticHiddenIds = new Set() }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controllerRef = useRef<SceneController | null>(null);
   const mountedRevision = useRef<string | null>(null);
@@ -34,6 +35,7 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
       const controller = new SceneController(canvas, { onSelectionChange, onReady, onError });
       controllerRef.current = controller;
       controller.setExplode(explode);
+      controller.setOptimisticHidden(optimisticHiddenIds);
       mountedRevision.current = sceneRevision;
       onLoading();
       void controller.reload().then(() => controller.selectPart(selectedIdRef.current));
@@ -55,6 +57,7 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
   }, [sceneRevision]);
 
   useEffect(() => controllerRef.current?.setExplode(explode), [explode]);
+  useEffect(() => controllerRef.current?.setOptimisticHidden(optimisticHiddenIds), [optimisticHiddenIds]);
 
   function transform(next: TransformMode) {
     setMode(next);
@@ -79,10 +82,10 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
       </div>
       <span className="toolbar-separator"/>
       <div className="viewport-tool-group compact-tools">
-        <button className={autoRotate ? 'active' : ''} onClick={() => { const value = !autoRotate; setAutoRotate(value); controllerRef.current?.setAutoRotate(value); }} title="Auto rotate"><Orbit size={14}/></button>
-        <button onClick={() => controllerRef.current?.isolateSelected()} disabled={!selectedId} title="Isolate"><Focus size={14}/></button>
-        <button onClick={() => controllerRef.current?.hideSelected()} disabled={!selectedId} title="Hide"><EyeOff size={14}/></button>
-        <button onClick={() => controllerRef.current?.showAll()} title="Show all"><Eye size={14}/></button>
+        <button className={autoRotate ? 'active' : ''} onClick={() => { const value = !autoRotate; setAutoRotate(value); controllerRef.current?.setAutoRotate(value); }} title="Auto rotate" aria-label="Auto rotate"><Orbit size={14}/></button>
+        <button onClick={() => controllerRef.current?.isolateSelected()} disabled={!selectedId} title="Isolate" aria-label="Isolate selected object"><Focus size={14}/></button>
+        <button onClick={() => controllerRef.current?.hideSelected()} disabled={!selectedId} title="Hide" aria-label="Hide selected object"><EyeOff size={14}/></button>
+        <button onClick={() => controllerRef.current?.showAll()} title="Show all" aria-label="Show all objects"><Eye size={14}/></button>
       </div>
     </div>
     <div className="scene-host">
