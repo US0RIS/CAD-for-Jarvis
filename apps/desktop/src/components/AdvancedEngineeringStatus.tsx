@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Beaker, Boxes, FlaskConical, RefreshCw, ShieldCheck, TestTube2, Wrench } from 'lucide-react';
+import { Activity, Boxes, FlaskConical, RefreshCw, ShieldCheck, TestTube2, Wrench } from 'lucide-react';
 import { engineFetch } from '../api/engine';
+import '../styles/advanced-engineering-status.css';
 
 type LooseRecord = Record<string, unknown>;
 type Snapshot = {
@@ -92,7 +93,7 @@ export function AdvancedEngineeringStatus({ revision }: { revision?: string | nu
   const lineageCount = count(snapshot.retestLineage);
 
   return <div className="campaign-card advanced-engineering-status" data-testid="advanced-engineering-status">
-    <div className="campaign-title">
+    <div className="campaign-title advanced-engineering-heading">
       <Boxes size={18}/>
       <div><strong>Assembly, evidence & solver state</strong><span>Release-level v6 engineering state that is easy to miss when working only from the 3D canvas.</span></div>
       <button className="editor-action" aria-label="Refresh advanced engineering state" onClick={() => void reload()} disabled={busy}><RefreshCw size={11} className={busy ? 'agent-spin' : ''}/></button>
