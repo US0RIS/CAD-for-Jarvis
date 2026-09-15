@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """HTTP surface for ForgeCAD 6.0 milestone 5 physical feedback lineage."""
 
+from copy import deepcopy
 from typing import Any, Callable
 
 from fastapi import Depends, HTTPException, Response
@@ -274,8 +275,6 @@ def install(
             cycle = next((row for row in cycle_rows if str(row.get("id")) == cycle_id), None)
             if cycle is None:
                 raise KeyError(cycle_id)
-            # All M5 evidence-quality contracts are opt-in and additive. A cycle that
-            # never locked one follows the previously validated completion behavior.
             if cycle.get("artifact_requirements"):
                 artifacts = assert_artifact_contract_satisfied(cycle_id)
             else:
