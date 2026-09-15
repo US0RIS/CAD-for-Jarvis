@@ -26,6 +26,7 @@ from ..v200.physical_evidence import design_fingerprint
 from ..v200.safety_analysis import analyze_safety
 from ..v200.thermal_network import solve_thermal_network
 from ..v200.tolerance_analysis import project_stacks
+from . import MILESTONE_VERSION
 from . import selftest as milestone1
 
 
@@ -303,7 +304,7 @@ def run() -> dict[str, object]:
 
         v6 = _ok(client.get("/v6/health"), "read RC v6 health").json()
         assert v6["api_version"] == "6.0", v6
-        assert v6["engine_version"] == "6.0.0", v6
+        assert v6["engine_version"] == MILESTONE_VERSION, v6
         assert isinstance(v6["release_complete"], bool), v6
         assert v6["validation_truth"]["real_hardware_validation_complete"] is False, v6
 
