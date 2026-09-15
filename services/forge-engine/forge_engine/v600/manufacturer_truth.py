@@ -36,10 +36,15 @@ MANUFACTURER_MOUNT_TRUTH: dict[str, dict[str, Any]] = {
         "pattern_mm": [58.0, 49.0],
         "hole_diameter_mm": 2.7,
         "fastener": "M2.5",
+        # Preserve the existing nominal 1.6 mm board-centered ForgeCAD frame.
+        # External STEP registration is translated so its physical PCB underside
+        # lands on this same canonical mounting plane.
+        "canonical_mount_plane_z_mm": -0.8,
         "coordinate_datum": "85x56_mm_board_outline_center",
         "source_dimensions": {
             "board_x_mm": 85.0,
             "board_y_mm": 56.0,
+            "nominal_board_thickness_mm": 1.6,
             "left_edge_to_left_hole_center_mm": 3.5,
             "hole_spacing_x_mm": 58.0,
             "hole_spacing_y_mm": 49.0,
@@ -61,11 +66,17 @@ MANUFACTURER_MOUNT_TRUTH: dict[str, dict[str, Any]] = {
         "pattern_mm": [13.5, 16.0],
         "hole_diameter_mm": 2.18,
         "fastener": "M2",
+        # Official Pololu STEP exposes the PCB from z=0 to z=1.5748 mm. The
+        # canonical component frame remains board-centered, so the actual PCB
+        # mounting surface is -1.5748/2 rather than the old, incorrect -4.4 mm
+        # overall-envelope bottom.
+        "canonical_mount_plane_z_mm": -0.7874,
         "coordinate_datum": "17.8x20.3_mm_board_outline_center",
         "drill_location_tolerance_mm": 0.1,
         "source_dimensions": {
             "board_x_mm": 17.8,
             "board_y_mm": 20.3,
+            "board_thickness_mm": 1.5748,
             "hole_spacing_x_mm": 13.5,
             "hole_spacing_y_mm": 16.0,
         },
@@ -82,6 +93,7 @@ MANUFACTURER_MOUNT_TRUTH: dict[str, dict[str, Any]] = {
 
 _ORIGINAL_PI5_REALISTIC_BUILDER = realistic_components.PARAMETRIC_BUILDERS.get(PI5_ID)
 _ORIGINAL_PI5_LEGACY_BUILDER = getattr(physical_components, "_pi5_parts", None)
+_ORIGINAL_POLOLU_REALISTIC_BUILDER = realistic_components.PARAMETRIC_BUILDERS.get(POLOLU_D24V50F5_ID)
 _INSTALLED = False
 
 
@@ -93,6 +105,7 @@ def _metadata_from_truth(truth: dict[str, Any]) -> dict[str, Any]:
         "fastener": truth.get("fastener"),
         "count": len(truth["hole_centers_mm"]),
         "coordinate_datum": truth["coordinate_datum"],
+        "canonical_mount_plane_z_mm": float(truth["canonical_mount_plane_z_mm"]),
         "source_dimensions": deepcopy(truth.get("source_dimensions") or {}),
         "manufacturer_mount_source": deepcopy(truth["source"]),
         **(
@@ -112,6 +125,11 @@ def _patch_interface(interfaces: list[dict[str, Any]], component_id: str) -> Non
     metadata = dict(interface.get("metadata") or {})
     metadata.update(_metadata_from_truth(truth))
     interface["metadata"] = metadata
+    position = [float(value) for value in (interface.get("position_mm") or [0.0, 0.0, 0.0])]
+    while len(position) < 3:
+        position.append(0.0)
+    position[2] = float(truth["canonical_mount_plane_z_mm"])
+    interface["position_mm"] = position
 
 
 def _install_source_registry_truth() -> None:
@@ -125,8 +143,6 @@ def _install_source_registry_truth() -> None:
         raise RuntimeError("Pololu D24V50F5 missing from curated component catalog")
     _patch_interface(pololu.get("interfaces") or [], POLOLU_D24V50F5_ID)
 
-    # Rebuild from the corrected source structures so snapshots, compatibility
-    # registry rows and any later reload agree on the same truth.
     registry.reload_registry()
     registry._refresh_compat_registry()
 
@@ -168,11 +184,31 @@ def _corrected_pi5_legacy_parts():
     return parts
 
 
+def _corrected_pololu_realistic_parts():
+    if _ORIGINAL_POLOLU_REALISTIC_BUILDER is None:
+        raise RuntimeError("Pololu D24V50F5 deterministic geometry builder is unavailable")
+    parts = list(_ORIGINAL_POLOLU_REALISTIC_BUILDER())
+    if not parts:
+        raise RuntimeError("Pololu D24V50F5 deterministic geometry builder returned no solids")
+    truth = MANUFACTURER_MOUNT_TRUTH[POLOLU_D24V50F5_ID]
+    thickness = float(truth["source_dimensions"]["board_thickness_mm"])
+    board, _ = realistic_components._box(17.8, 20.3, thickness, "#1766a6", radius=0.8)
+    board = realistic_components._cut_round_holes(
+        board,
+        [(float(x), float(y)) for x, y, _ in truth["hole_centers_mm"]],
+        float(truth["hole_diameter_mm"]),
+        5.0,
+    )
+    parts[0] = (board, "#1766a6")
+    return parts
+
+
 def install_manufacturer_truth() -> dict[str, Any]:
     global _INSTALLED
     if not _INSTALLED:
         _install_source_registry_truth()
         realistic_components.PARAMETRIC_BUILDERS[PI5_ID] = _corrected_pi5_realistic_parts
+        realistic_components.PARAMETRIC_BUILDERS[POLOLU_D24V50F5_ID] = _corrected_pololu_realistic_parts
         physical_components._pi5_parts = _corrected_pi5_legacy_parts
         _INSTALLED = True
     return summary()
@@ -214,6 +250,8 @@ def audit_manufacturer_mount_truth(component_id: str) -> dict[str, Any]:
         findings.append({"severity": "error", "code": "manufacturer_hole_diameter_drift"})
     if str(metadata.get("coordinate_datum") or "") != str(truth["coordinate_datum"]):
         findings.append({"severity": "error", "code": "manufacturer_coordinate_datum_missing"})
+    if abs(float(interface.get("position_mm", [0.0, 0.0, 0.0])[2]) - float(truth["canonical_mount_plane_z_mm"])) > 1e-9:
+        findings.append({"severity": "error", "code": "manufacturer_mount_plane_drift"})
     source = metadata.get("manufacturer_mount_source") or {}
     if source.get("kind") != "manufacturer" or int(source.get("trust", 0) or 0) < 100 or not source.get("url"):
         findings.append({"severity": "error", "code": "manufacturer_mount_provenance_missing"})
@@ -240,6 +278,7 @@ def audit_manufacturer_mount_truth(component_id: str) -> dict[str, Any]:
         "hole_count": len(expected),
         "hole_centers_mm": expected,
         "hole_diameter_mm": float(truth["hole_diameter_mm"]),
+        "canonical_mount_plane_z_mm": float(truth["canonical_mount_plane_z_mm"]),
         "coordinate_datum": truth["coordinate_datum"],
         "source": deepcopy(truth["source"]),
         "parametric_brep_checked": geometry_checked,
@@ -261,5 +300,5 @@ def summary() -> dict[str, Any]:
         "installed": _INSTALLED,
         "component_count": len(MANUFACTURER_MOUNT_TRUTH),
         "components": sorted(MANUFACTURER_MOUNT_TRUTH),
-        "truth_model": "explicit manufacturer coordinates + datum + provenance",
+        "truth_model": "explicit manufacturer coordinates + canonical mount plane + datum + provenance",
     }
