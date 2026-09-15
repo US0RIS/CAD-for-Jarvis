@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""HTTP surface for ForgeCAD 6.0 dependency-critical assembly milestones."""
+"""HTTP surface for ForgeCAD 6.0 dependency-critical engineering milestones."""
 
 from copy import deepcopy
 from typing import Any, Callable
@@ -52,14 +52,28 @@ def install(
             "api_version": "6.0-dev",
             "milestone_version": MILESTONE_VERSION,
             "release_complete": False,
-            "current_milestone": "geometry_backed_assembly_truth",
-            "completed_milestones": ["interface_constrained_electromechanical_assembly"],
+            "current_milestone": "revision_bound_physical_feedback",
+            "completed_milestones": [
+                "interface_constrained_electromechanical_assembly",
+                "geometry_backed_assembly_truth",
+                "evidence_preserving_analysis_refresh_repair",
+                "bounded_multi_strategy_autonomous_repair",
+            ],
             "assembly_constraints": constraints,
             "assembly_constraint_rank_summary": rank["summary"],
             "geometry_backed_mount_count": geometry_backed_mounts,
             "mount_hardware_realization_count": hardware_realizations,
+            "physical_retest_cycle_count": len(core.PROJECT.get("physical_retest_cycles") or []),
             "manufacturer_mount_truth": manufacturer_truth.summary(),
             "manufacturer_cad_registration": manufacturer_cad_registration.summary(),
+            "maturity": {
+                "milestone_1": 2,
+                "milestone_2": 2,
+                "milestone_3": 2,
+                "milestone_4": 2,
+                "milestone_5": 2,
+                "physical_hardware_validation": False,
+            },
             "invariants": [
                 "designed truth != observed state != inference",
                 "autonomous placement derives from declared engineering interfaces",
@@ -72,6 +86,10 @@ def install(
                 "a realized mount is not assembly-ready if neighboring B-reps occupy its standoff or straight-driver access envelopes",
                 "standard mount hardware may be specified before supplier selection, but unresolved manufacturer/MPN remains explicitly unresolved",
                 "ambiguous component mounting topology fails closed rather than being guessed",
+                "a repair candidate cannot reuse solver evidence made stale by its own geometry mutation",
+                "autonomous repair may select only among explicitly authorized strategies that survive canonical requirement re-verification",
+                "physical evidence applies only to the exact engineering fingerprint that was actually tested",
+                "passing one physical retest verifies only its scoped requirement and never silently marks the entire design physically verified",
             ],
         }
 
