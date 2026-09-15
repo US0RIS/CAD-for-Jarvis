@@ -319,6 +319,7 @@ export async function createBranch(name: string, reason = '') {
 }
 export const compareBranch = (name: string) => engineFetch<{ source: string; target: string; changes: Array<Record<string, unknown>>; count: number }>(`/v2/branches/${encodeURIComponent(name)}/compare`);
 export async function setBranchStatus(name: string, status: BranchPayload['status'], note = '', physicalVerified = false) {
+  await flushProjectMutationGuards();
   let verified = physicalVerified;
   if (!verified) {
     try {
@@ -333,37 +334,40 @@ export async function setBranchStatus(name: string, status: BranchPayload['statu
   return result;
 }
 export async function addComponent(id: string) {
+  await flushProjectMutationGuards();
   const result = await engineFetch<{ component: ComponentPayload; project: ProjectPayload }>(`/v2/components/${encodeURIComponent(id)}/add`, { method: 'POST' });
   invalidateProjectRequests();
   return result;
 }
 export async function executeOperation(op: string, args: Record<string, unknown>, reason = '') {
+  await flushProjectMutationGuards();
   const result = await engineFetch<{ operation: Record<string, unknown>; project: ProjectPayload }>('/v2/operations', { method: 'POST', body: JSON.stringify({ op, args, reason }) });
   invalidateProjectRequests();
   publishLocalEngineEvent({ type: 'project.updated', project: result.project });
   return result;
 }
 export async function deleteObject(id: string, reason = 'Delete selected object') {
-  await flushProjectMutationGuards();
   return executeOperation('delete', { id }, reason);
 }
 export async function newProject() {
-  await flushProjectMutationGuards();
   const result = await executeOperation('new_project', {}, 'Create blank design');
   return result.project;
 }
 export async function undoHistory() {
+  await flushProjectMutationGuards();
   const result = await engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/undo', { method: 'POST' });
   invalidateProjectRequests();
   return result;
 }
 export async function redoHistory() {
+  await flushProjectMutationGuards();
   const result = await engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/redo', { method: 'POST' });
   invalidateProjectRequests();
   return result;
 }
 
 export async function importStepFile(file: File) {
+  await flushProjectMutationGuards();
   const body = new FormData();
   body.set('file', file);
   const result = await engineFetch<{ object: Record<string, unknown>; project: ProjectPayload }>('/v2/import/step', { method: 'POST', body });
@@ -381,11 +385,13 @@ export async function importProjectBundle(file: File) {
 }
 
 export async function downloadProjectBundle(): Promise<Blob> {
+  await flushProjectMutationGuards();
   const response = await engineRawFetch('/v2/project/export');
   return response.blob();
 }
 
 export async function createJob(input: { kind: 'agent' | 'simulation' | 'campaign' | 'component-search' | 'deploy'; text?: string; branch?: string; selected_object_id?: string | null; apply_edits?: boolean; payload?: Record<string, unknown> }) {
+  await flushProjectMutationGuards();
   const job = await engineFetch<JobPayload>('/v2/jobs', { method: 'POST', body: JSON.stringify(input) });
   publishLocalEngineEvent({ type: 'job.updated', job });
   return job;
