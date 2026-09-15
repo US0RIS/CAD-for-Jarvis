@@ -40,6 +40,7 @@ function managedPython(serviceRoot: string): string | null {
 export class EngineSupervisor {
   private process: ChildProcess | null = null;
   private connection: EngineConnection | null = null;
+  private startPromise: Promise<EngineConnection> | null = null;
   private readonly logs: string[] = [];
 
   constructor(private readonly options: EngineSupervisorOptions) {}
@@ -48,12 +49,25 @@ export class EngineSupervisor {
   get logTail(): string[] { return this.logs.slice(-120); }
 
   async start(): Promise<EngineConnection> {
-    // ChildProcess.killed only means kill() was called; it remains false when a child
-    // crashes on its own. Use exitCode to decide whether the existing engine is alive.
     if (this.connection && this.process && this.process.exitCode === null && !this.process.killed) return this.connection;
+    if (this.startPromise) return this.startPromise;
 
+    const pending = this.startFresh();
+    this.startPromise = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.startPromise === pending) this.startPromise = null;
+    }
+  }
+
+  private async startFresh(): Promise<EngineConnection> {
+    // A startup can be requested by both the native window bootstrap and the renderer.
+    // start() serializes those callers so this path owns exactly one child process.
     this.connection = null;
+    const previous = this.process;
     this.process = null;
+    if (previous && previous.exitCode === null && !previous.killed) previous.kill();
 
     const port = await freePort();
     const sessionToken = randomBytes(32).toString('hex');
@@ -99,8 +113,6 @@ export class EngineSupervisor {
     child.stdout?.on('data', (chunk: Buffer) => record('', chunk));
     child.stderr?.on('data', (chunk: Buffer) => record('[stderr] ', chunk));
 
-    // If the native engine exits after startup, invalidate the connection immediately.
-    // The renderer can then ask for a fresh connection and this supervisor will restart it.
     child.once('exit', (code, signal) => {
       if (this.process !== child) return;
       this.logs.push(`[supervisor] Forge Engine exited code=${String(code)} signal=${String(signal)}`);
@@ -121,20 +133,25 @@ export class EngineSupervisor {
     while (Date.now() < deadline) {
       const launchError = launchState.error;
       if (launchError) {
-        this.stop();
+        this.stopChild(child);
         throw new Error(`Forge Engine could not launch: ${launchError.message}\nExecutable: ${command}\n${this.logTail.join('\n')}`);
       }
       if (child.exitCode !== null) {
-        this.stop();
+        this.stopChild(child);
         throw new Error(`Forge Engine exited with status ${child.exitCode}.\nExecutable: ${command}\n${this.logTail.join('\n')}`);
+      }
+      if (this.process !== child) {
+        this.stopChild(child);
+        throw new Error('Forge Engine startup was superseded before it became healthy.');
       }
       try {
         const response = await fetch(`${baseUrl}/v2/health`, { signal: AbortSignal.timeout(1_000) });
         if (response.ok) {
           const payload = await response.json() as { api_version?: string };
           if (payload.api_version !== '2') throw new Error(`Unsupported Forge Engine API ${payload.api_version ?? 'unknown'}`);
-          this.connection = { baseUrl, sessionToken, configuredModel: this.options.configuredModel };
-          return this.connection;
+          const connection = { baseUrl, sessionToken, configuredModel: this.options.configuredModel };
+          this.connection = connection;
+          return connection;
         }
         lastError = new Error(`Health returned HTTP ${response.status}`);
       } catch (error) {
@@ -143,7 +160,7 @@ export class EngineSupervisor {
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
 
-    this.stop();
+    this.stopChild(child);
     const bootstrapHint = packagedEngine
       ? 'Reinstall ForgeCAD; its bundled Forge Engine did not start correctly.'
       : process.platform === 'win32'
@@ -151,6 +168,14 @@ export class EngineSupervisor {
         : 'Run scripts/bootstrap-macos.sh to create the managed Forge Engine runtime.';
     const timeoutSeconds = Math.round(startupTimeoutMs / 1000);
     throw new Error(`Forge Engine did not become healthy within ${timeoutSeconds} seconds. ${String(lastError ?? '')}\nExecutable: ${command}\n${bootstrapHint}\n${this.logTail.join('\n')}`);
+  }
+
+  private stopChild(child: ChildProcess): void {
+    if (this.process === child) {
+      this.connection = null;
+      this.process = null;
+    }
+    if (child.exitCode === null && !child.killed) child.kill();
   }
 
   stop(): void {
