@@ -3,11 +3,15 @@ from __future__ import annotations
 """Focused ForgeCAD 6.0.1 release-hardening checks.
 
 These checks intentionally exercise canonical branch state directly. They are not UI
-mocks: a code write must survive the same sibling-branch round trip used by the desktop.
+mocks: code must survive a branch round trip, job provenance must fail stale, and a
+human branch label must not rewrite evidence-owned physical verification.
 """
 
+from . import main as legacy
 from .engineering_state import PROJECT
+from .models import EngineeringJob
 from .v110 import core
+from .v601_runtime import assert_job_source, set_design_label_preserving_evidence
 
 
 def _code_for(project: dict, object_id: str, path: str) -> str:
@@ -51,8 +55,50 @@ def code_write_survives_branch_round_trip() -> dict[str, object]:
     }
 
 
+def stale_job_is_rejected() -> dict[str, object]:
+    source = PROJECT.snapshot()
+    job = EngineeringJob(
+        kind="agent",
+        branch=source["active_branch"],
+        revision=source["revision"],
+        selected_object_id=source["parts"][0]["id"],
+    )
+    assert_job_source(legacy, job)
+
+    core.execute(
+        "add_note",
+        {"text": "Change the source revision after the job was queued."},
+        actor="human",
+        reason="6.0.1 stale-job selftest",
+    )
+    rejected = False
+    try:
+        assert_job_source(legacy, job)
+    except RuntimeError as exc:
+        rejected = "stale" in str(exc).lower()
+    assert rejected, "a job queued against an older project revision was not rejected"
+    return {"ok": True, "source_revision": job.revision, "current_revision": PROJECT.snapshot()["revision"]}
+
+
+def branch_label_preserves_physical_evidence() -> dict[str, object]:
+    branch = PROJECT.snapshot()["active_branch"]
+    with core.LOCK:
+        core.DESIGNS[branch]["physical_verified"] = True
+        core.persist()
+
+    updated = set_design_label_preserving_evidence(branch, "not_working", "Label-only 6.0.1 selftest")
+    assert updated["status"] == "not_working"
+    assert updated["physical_verified"] is True, "branch label erased evidence-owned physical verification"
+    assert core.DESIGNS[branch]["physical_verified"] is True
+    return {"ok": True, "branch": branch, "status": updated["status"], "physical_verified": True}
+
+
 def main() -> None:
-    result = code_write_survives_branch_round_trip()
+    result = {
+        "branch_persistence": code_write_survives_branch_round_trip(),
+        "stale_job": stale_job_is_rejected(),
+        "evidence_preservation": branch_label_preserves_physical_evidence(),
+    }
     print({"forgecad_v601_selftest": result})
 
 
