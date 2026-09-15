@@ -90,7 +90,7 @@ jobs:
       - name: Run focused UX regressions
         # These tests intentionally mutate one canonical Forge Engine project. Running
         # them in parallel would make independent resets/branch switches race each other.
-        run: pnpm --filter @forgecad/desktop exec playwright test e2e/ux-regression.spec.ts e2e/design-lineage-ux.spec.ts e2e/feature-history-ux.spec.ts e2e/desktop-minimum-layout.spec.ts e2e/keyboard-shortcuts.spec.ts --workers=1
+        run: pnpm --filter @forgecad/desktop exec playwright test e2e/ux-regression.spec.ts e2e/design-lineage-ux.spec.ts e2e/feature-history-ux.spec.ts e2e/advanced-engineering-ux.spec.ts e2e/desktop-minimum-layout.spec.ts e2e/keyboard-shortcuts.spec.ts --workers=1
 
       - name: Preserve 3.1 browser integration
         run: pnpm --filter @forgecad/desktop exec playwright test e2e/v310-integration.spec.ts --workers=1
