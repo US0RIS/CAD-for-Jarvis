@@ -53,14 +53,16 @@ def run() -> dict[str, object]:
         requirement_id = "m5-bench-fit"
         _ok(client.post("/v3.1/requirements", json={
             "id": requirement_id,
-            "name": "Bench-fit verification",
-            "metric": "mass_kg",
-            "op": "<=",
-            "target": 1.0,
+            "name": "Bench-fit clearance verification",
+            "metric": "physical_clearance_mm",
+            "op": ">=",
+            "target": 0.2,
+            "unit": "mm",
             "criticality": "important",
             "scope_object_ids": [object_id],
             "source": "v600-milestone5-acceptance",
             "confidence": 1.0,
+            "rationale": "The fabricated coupon must clear the mating fixture by at least 0.2 mm when physically tested.",
         }), "create milestone 5 requirement")
 
         source_branch = core.ACTIVE_DESIGN
@@ -69,7 +71,7 @@ def run() -> dict[str, object]:
             "status": "failed",
             "method": "bench caliper + fixture inspection",
             "note": "Prototype interfered with the mating fixture at the tested revision.",
-            "measurements": [{"name": "interference", "value": 0.8, "unit": "mm", "tolerance": 0.2}],
+            "measurements": [{"name": "clearance", "value": -0.8, "unit": "mm", "tolerance": 0.2}],
         }), "record failed physical requirement evidence").json()["evidence"]
         assert failed["status"] == "failed", failed
         assert failed["design_fingerprint"] == source_fingerprint, failed
@@ -83,9 +85,10 @@ def run() -> dict[str, object]:
             "requirement_id": requirement_id,
             "failed_evidence_id": failed_id,
             "mutations": [{"object_id": object_id, "parameter": "z", "value": 8.0}],
+            "criteria": [{"measurement": "clearance", "unit": "mm", "op": ">=", "target": 0.2, "required": True}],
             "branch_prefix": "m5-retest",
             "actor": "jarvis",
-            "diagnosis": "Bench interference indicates the authorized coupon thickness should be reduced before another prototype is tested.",
+            "diagnosis": "Bench interference is consistent with excessive coupon thickness; reducing the authorized thickness is a hypothesis to test, not a proven cause.",
         }), "begin milestone 5 physical redesign cycle").json()
         assert begun["ok"] is True, begun
         cycle = begun["cycle"]
@@ -100,13 +103,27 @@ def run() -> dict[str, object]:
         assert abs(float(core.object_by_id(object_id)["params"]["z"]) - 8.0) < 1e-12
         assert begun["source_failure_stale_on_redesign"] is True, begun
         assert int(cycle["semantic_diff_count"]) >= 1, cycle
+        assert cycle["schema"] == "forgecad-physical-retest-cycle/2", cycle
+        assert cycle["failure_assessment"]["causality_status"] == "unproven_hypothesis", cycle
+        assert cycle["failure_assessment"]["observation_evidence_id"] == failed_id, cycle
+        assert cycle["test_criteria"][0]["measurement"] == "clearance", cycle
         assert core.DESIGNS[redesign_branch]["physical_verified"] is False
         assert core.DESIGNS[redesign_branch]["physical_status"] == "pending_retest"
+
+        lineage = _ok(client.get("/v6/physical/retest-lineage"), "read physical redesign lineage").json()
+        assert lineage["count"] >= 2, lineage
+        source_lineage = next(row for row in lineage["items"] if row["branch"] == source_branch)
+        redesign_lineage = next(row for row in lineage["items"] if row["branch"] == redesign_branch)
+        assert cycle_id in source_lineage["cycle_ids"], source_lineage
+        assert redesign_branch in source_lineage["redesign_branches"], source_lineage
+        assert redesign_lineage["source_branch"] == source_branch, redesign_lineage
+        assert redesign_lineage["source_evidence_id"] == failed_id, redesign_lineage
 
         redesign_evidence = _ok(client.get("/v2/evidence"), "read redesign evidence before retest").json()
         stale_failed = next(row for row in redesign_evidence["items"] if row["id"] == failed_id)
         assert stale_failed["applies_to_current_design"] is False, stale_failed
         assert stale_failed["evidence_binding"] == "stale", stale_failed
+        evidence_count_before_rejected_results = redesign_evidence["count"]
 
         # Drift the redesign after planning. A physical result must not be accepted
         # against a fingerprint other than the one the retest cycle was prepared for.
@@ -119,6 +136,7 @@ def run() -> dict[str, object]:
             "status": "passed",
             "method": "bench caliper + fixture inspection",
             "note": "This result must be rejected because CAD changed after the retest plan was bound.",
+            "measurements": [{"name": "clearance", "value": 0.5, "unit": "mm", "tolerance": 0.2}],
         })
         assert wrong_revision.status_code == 409, wrong_revision.text
         assert "changed after the retest cycle began" in wrong_revision.text, wrong_revision.text
@@ -131,6 +149,36 @@ def run() -> dict[str, object]:
         core.persist()
         assert design_fingerprint() == redesign_fingerprint, (design_fingerprint(), redesign_fingerprint)
 
+        # The retest plan is an acceptance contract. Missing required measurements,
+        # wrong units, or a human-entered status that contradicts the measurement
+        # all fail closed before physical evidence is written.
+        missing_measurement = client.post(f"/v6/physical/retest-cycles/{cycle_id}/complete", json={
+            "status": "passed",
+            "method": "bench caliper + fixture inspection",
+            "note": "Missing required clearance measurement must be rejected.",
+        })
+        assert missing_measurement.status_code == 409, missing_measurement.text
+        assert "missing required measurements" in missing_measurement.text, missing_measurement.text
+
+        wrong_unit = client.post(f"/v6/physical/retest-cycles/{cycle_id}/complete", json={
+            "status": "passed",
+            "method": "bench caliper + fixture inspection",
+            "measurements": [{"name": "clearance", "value": 0.5, "unit": "cm"}],
+        })
+        assert wrong_unit.status_code == 409, wrong_unit.text
+        assert "criterion requires 'mm'" in wrong_unit.text, wrong_unit.text
+
+        contradictory_pass = client.post(f"/v6/physical/retest-cycles/{cycle_id}/complete", json={
+            "status": "passed",
+            "method": "bench caliper + fixture inspection",
+            "note": "0.1 mm is below the planned 0.2 mm minimum and cannot be labeled passed.",
+            "measurements": [{"name": "clearance", "value": 0.1, "unit": "mm", "tolerance": 0.05}],
+        })
+        assert contradictory_pass.status_code == 409, contradictory_pass.text
+        assert "contradicts criterion-derived status 'failed'" in contradictory_pass.text, contradictory_pass.text
+        after_rejections = _ok(client.get("/v2/evidence"), "verify rejected results wrote no evidence").json()
+        assert after_rejections["count"] == evidence_count_before_rejected_results, after_rejections
+
         completed = _ok(client.post(f"/v6/physical/retest-cycles/{cycle_id}/complete", json={
             "status": "passed",
             "method": "bench caliper + fixture inspection",
@@ -139,6 +187,9 @@ def run() -> dict[str, object]:
         }), "complete milestone 5 retest").json()
         assert completed["ok"] is True, completed
         assert completed["cycle"]["status"] == "retest_passed", completed
+        assert completed["cycle"]["derived_retest_status"] == "passed", completed
+        assert completed["derived_retest_status"] == "passed", completed
+        assert completed["criterion_results"][0]["passed"] is True, completed
         assert completed["evidence"]["design_fingerprint"] == redesign_fingerprint, completed
         assert completed["requirement_physically_verified_on_current_fingerprint"] is True, completed
         assert completed["entire_design_physically_verified"] is False, completed
@@ -152,6 +203,10 @@ def run() -> dict[str, object]:
         assert old_row["applies_to_current_design"] is False, old_row
         assert new_row["applies_to_current_design"] is True, new_row
 
+        completed_lineage = _ok(client.get("/v6/physical/retest-lineage"), "read completed lineage").json()
+        assert next(row for row in completed_lineage["items"] if row["branch"] == source_branch)["cycle_status"][cycle_id] == "retest_passed"
+        assert next(row for row in completed_lineage["items"] if row["branch"] == redesign_branch)["cycle_status"][cycle_id] == "retest_passed"
+
         # The source branch still retains the exact failed prototype evidence and
         # does not inherit the redesign's passing retest.
         core.switch_branch(source_branch)
@@ -161,6 +216,10 @@ def run() -> dict[str, object]:
         assert failed_again["applies_to_current_design"] is True, failed_again
         assert all(row["id"] != passed_id for row in source_again["items"]), source_again
         assert abs(float(core.object_by_id(object_id)["params"]["z"]) - 10.0) < 1e-12
+        source_lineage_again = _ok(client.get("/v6/physical/retest-lineage"), "revisit source branch lineage").json()
+        source_link = next(row for row in source_lineage_again["items"] if row["branch"] == source_branch)
+        assert cycle_id in source_link["cycle_ids"], source_link
+        assert source_link["cycle_status"][cycle_id] == "retest_passed", source_link
 
         core.switch_branch(redesign_branch)
         listed = _ok(client.get("/v6/physical/retest-cycles"), "list redesign retest cycles").json()
@@ -171,11 +230,17 @@ def run() -> dict[str, object]:
         return {
             "ok": True,
             "milestone": 5,
-            "slice": "revision_bound_physical_failure_redesign_retest",
+            "slice": "revision_bound_physical_failure_redesign_objective_retest",
             "failed_evidence_bound_to_source_revision": True,
             "redesign_makes_source_failure_stale": True,
             "wrong_revision_retest_rejected": True,
-            "passing_retest_bound_to_redesign_revision": True,
+            "missing_measurement_rejected": True,
+            "wrong_unit_rejected": True,
+            "contradictory_pass_rejected": True,
+            "rejected_results_write_no_evidence": True,
+            "criterion_derived_pass_bound_to_redesign_revision": True,
+            "causal_hypothesis_not_overclaimed": True,
+            "cross_branch_retest_lineage_preserved": True,
             "source_branch_failure_preserved": True,
             "entire_design_physical_verification_not_overclaimed": True,
         }
