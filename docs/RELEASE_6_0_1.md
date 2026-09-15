@@ -140,6 +140,12 @@ The native workflow validates source, installed package, and desktop launch on a
 
 Installed-runtime validation confirms the bundled Forge Engine through its public HTTP surface, 6.0.1 runtime identity/truth contract, packaged Cantera data, validated chemistry smoke study, and desktop startup of the bundled engine.
 
+### Release provenance gate
+
+The native build publishes the three platform installers and `SHA256SUMS.txt`. A separate post-native provenance workflow then runs only after a successful native workflow and requires the **Publish ForgeCAD 6.0.1** job itself to have succeeded. It verifies the expected release assets, requires `RELEASE_COMPLETE=True`, force-binds the `v6.0.1` tag to the exact native-tested workflow SHA, refreshes these release notes, and verifies the tag resolves to that SHA.
+
+This closes a release-integrity failure mode where refreshed binaries could otherwise remain attached to an older `v6.0.1` tag or stale release notes.
+
 ## Native artifacts
 
 The release is published only after the native gates succeed. Expected release files are:
@@ -149,7 +155,7 @@ The release is published only after the native gates succeed. Expected release f
 - `ForgeCAD-6.0.1-x64.dmg` — native Intel macOS image;
 - `SHA256SUMS.txt` — SHA-256 hashes generated from the exact published binaries.
 
-Do not treat a local or intermediate installer as a final 6.0.1 release artifact unless it is produced by the passing native release workflow for the accepted source revision.
+Do not treat a local or intermediate installer as a final 6.0.1 release artifact unless it is produced by the passing native release workflow for the accepted source revision and the post-native provenance gate succeeds.
 
 ## Compatibility
 
