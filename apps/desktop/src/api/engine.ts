@@ -306,7 +306,17 @@ export async function createBranch(name: string, reason = '') {
 }
 export const compareBranch = (name: string) => engineFetch<{ source: string; target: string; changes: Array<Record<string, unknown>>; count: number }>(`/v2/branches/${encodeURIComponent(name)}/compare`);
 export async function setBranchStatus(name: string, status: BranchPayload['status'], note = '', physicalVerified = false) {
-  const result = await engineFetch<{ branch: Record<string, unknown>; project: ProjectPayload }>(`/v2/branches/${encodeURIComponent(name)}/status`, { method: 'PUT', body: JSON.stringify({ status, note, physical_verified: physicalVerified }) });
+  let verified = physicalVerified;
+  if (!verified) {
+    try {
+      const current = await fetchProject();
+      verified = Boolean(current.branches.find((branch) => branch.name === name)?.physical_verified);
+    } catch {
+      // The status request can still proceed if the read fails. Never invent verification.
+      verified = false;
+    }
+  }
+  const result = await engineFetch<{ branch: Record<string, unknown>; project: ProjectPayload }>(`/v2/branches/${encodeURIComponent(name)}/status`, { method: 'PUT', body: JSON.stringify({ status, note, physical_verified: verified }) });
   invalidateProjectRequests();
   return result;
 }
