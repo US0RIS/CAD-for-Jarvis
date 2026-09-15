@@ -27,6 +27,12 @@ from .physical_metrology import (
     set_metrology_contract,
     submit_metrology,
 )
+from .physical_prediction_residuals import (
+    PredictionResidualContractRequest,
+    evaluate_prediction_residuals,
+    prediction_residual_contract,
+    set_prediction_residual_contract,
+)
 from .physical_specimen_contract import (
     PhysicalSpecimenContractRequest,
     attach_specimen_lineage_to_runs,
@@ -137,6 +143,22 @@ def install(
     @app.get("/v6/physical/retest-cycles/{cycle_id}/metrology", dependencies=[Depends(require_session)])
     async def list_retest_metrology(cycle_id: str) -> dict[str, Any]:
         return physical_metrology(cycle_id)
+
+    @app.post("/v6/physical/retest-cycles/{cycle_id}/prediction-contract", dependencies=[Depends(require_session)])
+    async def lock_prediction_contract(cycle_id: str, request: PredictionResidualContractRequest) -> dict[str, Any]:
+        try:
+            return set_prediction_residual_contract(cycle_id, request)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown retest/simulation identity: {exc.args[0]}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/v6/physical/retest-cycles/{cycle_id}/prediction-residuals", dependencies=[Depends(require_session)])
+    async def list_prediction_residuals(cycle_id: str) -> dict[str, Any]:
+        try:
+            return prediction_residual_contract(cycle_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown retest identity: {exc.args[0]}") from exc
 
     @app.post("/v6/physical/retest-cycles/{cycle_id}/fabrication-package", dependencies=[Depends(require_session)])
     async def create_retest_fabrication_package(cycle_id: str, request: PhysicalFabricationPackageRequest) -> Response:
@@ -289,6 +311,19 @@ def install(
                     "record_ids": [],
                 }
 
+            prediction_contract = deepcopy(cycle.get("prediction_residual_contract") or {})
+            if prediction_contract:
+                available_measurements = {row.name.strip().casefold() for row in completion_measurements}
+                missing_predictions = sorted(
+                    str(row.get("measurement") or "")
+                    for row in prediction_contract.get("bindings") or []
+                    if str(row.get("measurement") or "").strip().casefold() not in available_measurements
+                )
+                if missing_predictions:
+                    raise ValueError(
+                        "Prediction residual contract is missing completion observations for: " + ", ".join(missing_predictions)
+                    )
+
             extra_evidence = [
                 *artifact_evidence_ids(cycle_id),
                 *[str(row) for row in execution.get("evidence_ids") or []],
@@ -322,6 +357,10 @@ def install(
                 result["metrology_records"] = link_metrology_to_inspections(cycle_id, inspection_ids, graph)
             else:
                 result["metrology_records"] = physical_metrology(cycle_id)["items"]
+            if prediction_contract and graph is not None:
+                result["prediction_residuals"] = evaluate_prediction_residuals(cycle_id, result.get("criterion_results") or [], graph)
+            else:
+                result["prediction_residuals"] = {"required": False, "items": [], "count": 0, "discrepancy_count": 0}
             result["test_execution_evaluation"] = execution
             result["metrology_evaluation"] = metrology
             result["specimen_lineage"] = physical_specimens(cycle_id)
