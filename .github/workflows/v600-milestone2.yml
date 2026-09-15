@@ -62,6 +62,12 @@ jobs:
           CI: 'true'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: python -m forge_engine.v600.mount_access_selftest
+      - name: Run deterministic manufacturer CAD frame-registration acceptance
+        env:
+          PYTHONPATH: services/forge-engine
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v600-m2-registration
+          CI: 'true'
+        run: python -m forge_engine.v600.manufacturer_cad_registration_selftest
       - name: Preserve ForgeCAD 6.0 milestone 1 acceptance
         env:
           PYTHONPATH: services/forge-engine
