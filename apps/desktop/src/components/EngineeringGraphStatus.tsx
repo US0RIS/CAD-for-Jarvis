@@ -10,7 +10,6 @@ import {
   type EngineeringNodeDetailPayload,
   type ProductProfilePayload,
 } from '../api/engineering';
-import { FeatureHistoryPanel } from './FeatureHistoryPanel';
 
 const divider = '1px solid var(--border-subtle, #22313b)';
 
@@ -164,8 +163,6 @@ export function EngineeringGraphStatus({ selectedObjectId = null }: { selectedOb
       {detail.node.dirty_reasons.slice(0, 2).map((reason) => <div key={reason} style={{ fontSize: 8.8, opacity: .65, marginTop: 4 }}>{reason}</div>)}
     </div> : selectedObjectId && !detailError ? <div style={{ borderTop: divider, paddingTop: 7, marginTop: 7, fontSize: 9, opacity: .55 }}>Loading selected engineering context…</div> : null}
     {detailError ? <div style={{ borderTop: divider, paddingTop: 7, marginTop: 7, fontSize: 9, color: 'var(--warning, #f1bf55)' }}>Selected engineering context unavailable: {detailError}</div> : null}
-
-    <FeatureHistoryPanel objectId={selectedObjectId}/>
   </div>;
 }
 
