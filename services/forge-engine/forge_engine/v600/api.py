@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException
 
 from ..v110 import core
 from . import MILESTONE_VERSION
+from . import manufacturer_truth
 from .assembly_frame_constraints import MateRequest, apply_mate, solve_mate_transform, validate_constraint_set
 from .constraint_rank import analyze_constraint_rank
 from .geometry_mounts import MountGeometryRequest, audit_mount_geometry, materialize_mount_geometry, plan_mount_geometry
@@ -27,6 +28,12 @@ def install(
     global _INSTALLED
     if _INSTALLED:
         return
+
+    # Correct manufacturer-sourced mounting truth before any v6 component is
+    # instantiated. The overlay patches source registry structures and rebuilds
+    # the registry, so later immutable component snapshots inherit the same
+    # coordinates, datum and provenance used by the deterministic B-rep builders.
+    manufacturer_truth.install_manufacturer_truth()
 
     @app.get("/v6/health")
     async def v6_health() -> dict[str, Any]:
@@ -49,6 +56,7 @@ def install(
             "assembly_constraint_rank_summary": rank["summary"],
             "geometry_backed_mount_count": geometry_backed_mounts,
             "mount_hardware_realization_count": hardware_realizations,
+            "manufacturer_mount_truth": manufacturer_truth.summary(),
             "invariants": [
                 "designed truth != observed state != inference",
                 "autonomous placement derives from declared engineering interfaces",
@@ -56,6 +64,7 @@ def install(
                 "fixed/prismatic placement resolves a complete right-handed interface frame rather than an arbitrary point-plus-axis rotation",
                 "assembly mobility and redundant constraints are derived from the spatial constraint Jacobian rather than guessed from mate count",
                 "a mechanical mount is not verified until declared mounting geometry is present in the fabricated B-rep",
+                "manufacturer mounting patterns use explicit coordinates, coordinate datums and source provenance when spacing alone cannot define physical location",
                 "standard mount hardware may be specified before supplier selection, but unresolved manufacturer/MPN remains explicitly unresolved",
                 "ambiguous component mounting topology fails closed rather than being guessed",
             ],
