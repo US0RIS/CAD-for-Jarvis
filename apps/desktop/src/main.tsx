@@ -6,6 +6,7 @@ import './styles/tokens.css';
 import './styles/app.css';
 import './styles/copilot-ux.css';
 import './styles/keyboard-shortcuts.css';
+import './styles/interaction.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {
