@@ -46,7 +46,9 @@ jobs:
           FORGECAD_BACKGROUND_GEOMETRY: '0'
           CI: 'true'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
-        run: python -m forge_engine.v620.selftest
+        run: |
+          python -m forge_engine.v620.selftest
+          python -m forge_engine.v620.hardening_selftest
 
       - name: Preserve 6.1 simulation acceptance
         env:
@@ -91,6 +93,7 @@ jobs:
           body = health.json()
           assert body['version'] == '6.2.0'
           assert body['schema_version'] == 2
+          assert isinstance(body['asset_generation'], int) and body['asset_generation'] >= 0
           audit = client.get('/v6/component-fidelity/audit', headers=headers)
           assert audit.status_code == 200, audit.text
           assert audit.json()['specific_purchased_components'] > 0
@@ -131,7 +134,7 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: |
-          python -m forge_engine.v620.component_fidelity prefetch --required-only --strict --root "${RUNNER_TEMP}/forgecad-v620-package-assets"
+          python -m forge_engine.v620.component_fidelity_hardening prefetch --required-only --strict --root "${RUNNER_TEMP}/forgecad-v620-package-assets"
       - name: Inspect resolved CAD manifest
         run: |
           python - <<'PY'
@@ -144,7 +147,10 @@ jobs:
               data=json.loads(path.read_text())
               assert data['sha256'] and data['bytes'] > 800
               assert data['geometry_fidelity'] in {'official_step','verified_step'}
-              print(path.parent.name, data['geometry_fidelity'], data['bytes'], data['sha256'])
+              identity=data.get('identity_verification') or {}
+              assert identity.get('component_id') == path.parent.name, (path, identity)
+              assert identity.get('source_bound') or identity.get('source_token'), identity
+              print(path.parent.name, data['geometry_fidelity'], data['bytes'], data['sha256'], identity['method'])
           PY
       - name: Upload authoritative CAD diagnostics
         if: always()
