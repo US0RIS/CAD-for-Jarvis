@@ -1,24 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { hasNewResolvedGeometry, type ComponentFidelityHealthPayload } from './componentFidelity';
+import { hasNewResolvedGeometry, type ComponentAssetRevision } from './componentFidelity';
 
-function health(assetGeneration: number): ComponentFidelityHealthPayload {
-  return {
-    ok: true,
-    version: '6.2.0',
-    schema_version: 2,
-    asset_generation: assetGeneration,
-    project_components: 1,
-    authoritative_cad_components: assetGeneration > 0 ? 1 : 0,
-    fallback_components: assetGeneration > 0 ? 0 : 1,
-    components: [],
-  };
+function revision(epoch: string, generation: number): ComponentAssetRevision {
+  return { epoch, generation };
 }
 
-describe('component fidelity scene refresh generation', () => {
-  it('refreshes only after a new exact CAD asset is resolved', () => {
-    expect(hasNewResolvedGeometry(0, health(0))).toBe(false);
-    expect(hasNewResolvedGeometry(0, health(1))).toBe(true);
-    expect(hasNewResolvedGeometry(1, health(1))).toBe(false);
-    expect(hasNewResolvedGeometry(1, health(2))).toBe(true);
+describe('component fidelity scene refresh revision', () => {
+  it('establishes an initial baseline without a redundant scene reload', () => {
+    expect(hasNewResolvedGeometry(null, revision('engine-a', 0))).toBe(false);
+  });
+
+  it('refreshes only after a new exact CAD asset is resolved in the same engine process', () => {
+    expect(hasNewResolvedGeometry(revision('engine-a', 0), revision('engine-a', 0))).toBe(false);
+    expect(hasNewResolvedGeometry(revision('engine-a', 0), revision('engine-a', 1))).toBe(true);
+    expect(hasNewResolvedGeometry(revision('engine-a', 1), revision('engine-a', 1))).toBe(false);
+    expect(hasNewResolvedGeometry(revision('engine-a', 1), revision('engine-a', 2))).toBe(true);
+  });
+
+  it('refreshes when the engine process epoch changes even if generation resets', () => {
+    expect(hasNewResolvedGeometry(revision('engine-a', 7), revision('engine-b', 0))).toBe(true);
   });
 });
