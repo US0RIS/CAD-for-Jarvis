@@ -18,14 +18,29 @@ export interface BranchPayload {
   active: boolean;
 }
 
+export interface PartPayload {
+  id: string;
+  name: string;
+  role: string;
+  mass_g: number;
+  material: string;
+  programmable_workspace_id?: string | null;
+  component_ref?: string | null;
+  geometry_fidelity?: string;
+}
+
 export interface ProjectPayload {
   name: string;
   revision: string;
   active_branch: string;
   branches: BranchPayload[];
-  parts: Array<{ id: string; name: string; role: string; mass_g: number; material: string; programmable_workspace_id?: string | null }>;
+  parts: PartPayload[];
   history: Array<{ time: string; actor: string; message: string; branch: string }>;
   selected_part_id?: string | null;
+  bom?: Array<Record<string, unknown>>;
+  connections?: Array<Record<string, unknown>>;
+  requirements?: Array<Record<string, unknown>>;
+  metrics?: Record<string, unknown>;
 }
 
 export interface ComponentPayload {
@@ -35,12 +50,56 @@ export interface ComponentPayload {
   category: string;
   image?: { kind: string; uri: string; source?: string };
   key_specs: Array<{ label: string; value: string }>;
-  price?: { amount: number; currency: string; supplier: string };
+  price?: { amount: number; currency: string; supplier: string } | null;
   fit_score?: number;
   fit_reason?: string;
   unknown_required_fields: string[];
   geometry_fidelity: string;
+  trust_score?: number;
   added?: boolean;
+  instance_id?: string | null;
+}
+
+export interface RegistryStatsPayload {
+  schema_version: number;
+  total: number;
+  builtin: number;
+  custom: number;
+  categories: string[];
+  geometry_fidelity: Record<string, number>;
+  provenance: Record<string, number>;
+}
+
+export interface ValidationPayload {
+  ok: boolean;
+  counts: { error: number; warning: number; info: number };
+  risks: Array<{ severity: 'error' | 'warning' | 'info'; code?: string; message: string; [key: string]: unknown }>;
+  requirements?: Array<Record<string, unknown>>;
+  metrics?: Record<string, unknown>;
+  assembly?: Record<string, unknown>;
+}
+
+export interface SceneMeshPayload {
+  id: string;
+  positions: number[][];
+  triangles: number[][];
+  triangle_colors?: string[];
+  color?: string;
+}
+
+export interface ScenePayload {
+  revision: string;
+  branch: string;
+  authoritative: boolean;
+  parts: Array<{
+    id: string;
+    name: string;
+    semantic_role: string;
+    explode_vector: number[];
+    base_transform: { position: number[]; rotation_deg: number[]; scale: number[] };
+    programmable_workspace_id?: string | null;
+    mesh: SceneMeshPayload;
+  }>;
 }
 
 export interface WorkspacePayload {
@@ -70,7 +129,43 @@ export type EngineEvent =
   | { type: 'job.token'; job_id: string; token: string }
   | { type: 'project.updated'; project: ProjectPayload };
 
+type ComponentSearchResult = { items: ComponentPayload[]; stats?: RegistryStatsPayload };
+type ProjectMutationGuard = () => Promise<void>;
+
 let cachedConnection: ForgeEngineConnection | null = null;
+let runtimeRequest: Promise<RuntimePayload> | null = null;
+let projectRequest: Promise<ProjectPayload> | null = null;
+let sceneRequest: Promise<ScenePayload> | null = null;
+let componentRequestSerial = 0;
+let latestComponentRequest: Promise<ComponentSearchResult> | null = null;
+const localEngineEventSubscribers = new Set<(event: EngineEvent) => void>();
+const projectMutationGuards = new Set<ProjectMutationGuard>();
+
+function invalidateProjectRequests() {
+  projectRequest = null;
+  sceneRequest = null;
+}
+
+function publishLocalEngineEvent(event: EngineEvent) {
+  if (event.type === 'project.updated') invalidateProjectRequests();
+  for (const subscriber of localEngineEventSubscribers) subscriber(event);
+}
+
+function invalidateConnection() {
+  cachedConnection = null;
+  runtimeRequest = null;
+  projectRequest = null;
+  sceneRequest = null;
+}
+
+export function registerProjectMutationGuard(guard: ProjectMutationGuard): () => void {
+  projectMutationGuards.add(guard);
+  return () => projectMutationGuards.delete(guard);
+}
+
+async function flushProjectMutationGuards(): Promise<void> {
+  for (const guard of [...projectMutationGuards]) await guard();
+}
 
 export async function engineConnection(): Promise<ForgeEngineConnection> {
   if (cachedConnection) return cachedConnection;
@@ -88,45 +183,301 @@ export async function engineConnection(): Promise<ForgeEngineConnection> {
   return cachedConnection;
 }
 
-export async function engineFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const connection = await engineConnection();
+function detailMessage(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (Array.isArray(value)) {
+    const rows = value.map((row) => {
+      if (typeof row === 'string') return row;
+      if (row && typeof row === 'object' && 'msg' in row) return String((row as { msg?: unknown }).msg ?? '');
+      return '';
+    }).filter(Boolean);
+    return rows.length ? rows.join('; ') : null;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return detailMessage(record.detail) ?? detailMessage(record.message) ?? detailMessage(record.error);
+  }
+  return null;
+}
+
+async function responseError(response: Response): Promise<Error> {
+  const fallback = `Forge Engine request failed (HTTP ${response.status})`;
+  const text = await response.text();
+  if (!text.trim()) return new Error(fallback);
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const detail = detailMessage(parsed);
+    return new Error(detail ? `${detail} (HTTP ${response.status})` : fallback);
+  } catch {
+    const compact = text.replace(/\s+/g, ' ').trim();
+    return new Error(compact ? `${compact} (HTTP ${response.status})` : fallback);
+  }
+}
+
+async function rawFetchWithConnection(connection: ForgeEngineConnection, path: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('X-ForgeCAD-Session', connection.sessionToken);
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(`${connection.baseUrl}${path}`, { ...init, headers });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Forge Engine ${response.status}: ${detail}`);
+  if (!response.ok) throw await responseError(response);
+  return response;
+}
+
+function isConnectionFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
+    return error.name === 'AbortError' || error.name === 'TimeoutError' || error.name === 'NetworkError';
   }
+  return false;
+}
+
+export async function engineRawFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const connection = await engineConnection();
+  try {
+    return await rawFetchWithConnection(connection, path, init);
+  } catch (error) {
+    if (!window.forgeDesktop?.getEngineConnection || !isConnectionFailure(error)) throw error;
+    invalidateConnection();
+    const replacement = await engineConnection();
+    return rawFetchWithConnection(replacement, path, init);
+  }
+}
+
+export async function engineFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await engineRawFetch(path, init);
   return response.json() as Promise<T>;
 }
 
-export const fetchRuntime = () => engineFetch<RuntimePayload>('/v2/runtime');
-export const fetchProject = () => engineFetch<ProjectPayload>('/v2/project');
-export const fetchComponents = (query = '') => engineFetch<{ items: ComponentPayload[] }>(`/v2/components?q=${encodeURIComponent(query)}`);
+export function fetchRuntime(): Promise<RuntimePayload> {
+  if (runtimeRequest) return runtimeRequest;
+  const request = engineFetch<RuntimePayload>('/v2/runtime');
+  runtimeRequest = request;
+  request.then(
+    () => { if (runtimeRequest === request) runtimeRequest = null; },
+    () => { if (runtimeRequest === request) runtimeRequest = null; },
+  );
+  return request;
+}
+
+export function fetchProject(): Promise<ProjectPayload> {
+  if (projectRequest) return projectRequest;
+  const request = engineFetch<ProjectPayload>('/v2/project');
+  projectRequest = request;
+  request.then(
+    () => { if (projectRequest === request) projectRequest = null; },
+    () => { if (projectRequest === request) projectRequest = null; },
+  );
+  return request;
+}
+
+export function fetchScene(): Promise<ScenePayload> {
+  if (sceneRequest) return sceneRequest;
+  const request = engineFetch<ScenePayload>('/v2/scene', { signal: AbortSignal.timeout(90_000) });
+  sceneRequest = request;
+  request.then(
+    () => { if (sceneRequest === request) sceneRequest = null; },
+    () => { if (sceneRequest === request) sceneRequest = null; },
+  );
+  return request;
+}
+
+export const fetchRegistryStats = () => engineFetch<RegistryStatsPayload>('/v2/component-registry/stats');
+export const fetchValidation = () => engineFetch<ValidationPayload>('/v2/validation');
+
+export function fetchComponents(query = '', category?: string, voltage?: number): Promise<ComponentSearchResult> {
+  const params = new URLSearchParams({ q: query });
+  if (category) params.set('category', category);
+  if (voltage != null) params.set('voltage_v', String(voltage));
+
+  const serial = ++componentRequestSerial;
+  const request = engineFetch<ComponentSearchResult>(`/v2/components?${params.toString()}`, { signal: AbortSignal.timeout(20_000) });
+  latestComponentRequest = request;
+  return request.then(async (result) => {
+    if (serial === componentRequestSerial) return result;
+    const latest = latestComponentRequest;
+    if (latest && latest !== request) return latest;
+    return result;
+  });
+}
+
 export const fetchWorkspace = (id: string) => engineFetch<WorkspacePayload>(`/v2/code/workspaces/${encodeURIComponent(id)}`);
 export const fetchCodeFile = (workspaceId: string, path: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`);
 export const saveCodeFile = (workspaceId: string, path: string, content: string) => engineFetch<{ path: string; content: string }>(`/v2/code/workspaces/${encodeURIComponent(workspaceId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`, { method: 'PUT', body: JSON.stringify({ content }) });
 export const fetchJob = (id: string) => engineFetch<JobPayload>(`/v2/jobs/${encodeURIComponent(id)}`);
-export const activateBranch = (name: string) => engineFetch<ProjectPayload>(`/v2/branches/${encodeURIComponent(name)}/activate`, { method: 'POST' });
-export const addComponent = (id: string) => engineFetch<{ component: ComponentPayload; project: ProjectPayload }>(`/v2/components/${encodeURIComponent(id)}/add`, { method: 'POST' });
 
-export function createJob(input: { kind: 'agent' | 'simulation' | 'campaign' | 'component-search' | 'deploy'; text?: string; branch?: string; selected_object_id?: string | null; apply_edits?: boolean; payload?: Record<string, unknown> }) {
-  return engineFetch<JobPayload>('/v2/jobs', { method: 'POST', body: JSON.stringify(input) });
+export async function activateBranch(name: string) {
+  await flushProjectMutationGuards();
+  const result = await engineFetch<ProjectPayload>(`/v2/branches/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+  invalidateProjectRequests();
+  return result;
+}
+export async function createBranch(name: string, reason = '') {
+  await flushProjectMutationGuards();
+  const result = await engineFetch<ProjectPayload>('/v2/branches', { method: 'POST', body: JSON.stringify({ name, reason }) });
+  invalidateProjectRequests();
+  return result;
+}
+export const compareBranch = (name: string) => engineFetch<{ source: string; target: string; changes: Array<Record<string, unknown>>; count: number }>(`/v2/branches/${encodeURIComponent(name)}/compare`);
+export async function setBranchStatus(name: string, status: BranchPayload['status'], note = '', physicalVerified = false) {
+  await flushProjectMutationGuards();
+  let verified = physicalVerified;
+  if (!verified) {
+    try {
+      const current = await fetchProject();
+      verified = Boolean(current.branches.find((branch) => branch.name === name)?.physical_verified);
+    } catch {
+      verified = false;
+    }
+  }
+  const result = await engineFetch<{ branch: Record<string, unknown>; project: ProjectPayload }>(`/v2/branches/${encodeURIComponent(name)}/status`, { method: 'PUT', body: JSON.stringify({ status, note, physical_verified: verified }) });
+  invalidateProjectRequests();
+  return result;
+}
+export async function addComponent(id: string) {
+  await flushProjectMutationGuards();
+  const result = await engineFetch<{ component: ComponentPayload; project: ProjectPayload }>(`/v2/components/${encodeURIComponent(id)}/add`, { method: 'POST' });
+  invalidateProjectRequests();
+  return result;
+}
+export async function executeOperation(op: string, args: Record<string, unknown>, reason = '') {
+  await flushProjectMutationGuards();
+  const result = await engineFetch<{ operation: Record<string, unknown>; project: ProjectPayload }>('/v2/operations', { method: 'POST', body: JSON.stringify({ op, args, reason }) });
+  invalidateProjectRequests();
+  publishLocalEngineEvent({ type: 'project.updated', project: result.project });
+  return result;
+}
+export async function deleteObject(id: string, reason = 'Delete selected object') {
+  return executeOperation('delete', { id }, reason);
+}
+export async function newProject() {
+  const result = await executeOperation('new_project', {}, 'Create blank design');
+  return result.project;
+}
+export async function undoHistory() {
+  await flushProjectMutationGuards();
+  const result = await engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/undo', { method: 'POST' });
+  invalidateProjectRequests();
+  return result;
+}
+export async function redoHistory() {
+  await flushProjectMutationGuards();
+  const result = await engineFetch<{ ok: boolean; project: ProjectPayload }>('/v2/history/redo', { method: 'POST' });
+  invalidateProjectRequests();
+  return result;
+}
+
+export async function importStepFile(file: File) {
+  await flushProjectMutationGuards();
+  const body = new FormData();
+  body.set('file', file);
+  const result = await engineFetch<{ object: Record<string, unknown>; project: ProjectPayload }>('/v2/import/step', { method: 'POST', body });
+  invalidateProjectRequests();
+  return result;
+}
+
+export async function importProjectBundle(file: File) {
+  await flushProjectMutationGuards();
+  const body = new FormData();
+  body.set('file', file);
+  const result = await engineFetch<{ project: ProjectPayload }>('/v2/project/import', { method: 'POST', body });
+  invalidateProjectRequests();
+  return result;
+}
+
+export async function downloadProjectBundle(): Promise<Blob> {
+  await flushProjectMutationGuards();
+  const response = await engineRawFetch('/v2/project/export');
+  return response.blob();
+}
+
+export async function createJob(input: { kind: 'agent' | 'simulation' | 'campaign' | 'component-search' | 'deploy'; text?: string; branch?: string; selected_object_id?: string | null; apply_edits?: boolean; payload?: Record<string, unknown> }) {
+  await flushProjectMutationGuards();
+  const job = await engineFetch<JobPayload>('/v2/jobs', { method: 'POST', body: JSON.stringify(input) });
+  publishLocalEngineEvent({ type: 'job.updated', job });
+  return job;
 }
 
 export async function subscribeEngineEvents(onEvent: (event: EngineEvent) => void): Promise<() => void> {
-  const connection = await engineConnection();
-  const wsBase = connection.baseUrl.replace(/^http/, 'ws');
-  const socket = new WebSocket(`${wsBase}/v2/events?token=${encodeURIComponent(connection.sessionToken)}`);
-  socket.addEventListener('message', (event) => {
-    try { onEvent(JSON.parse(String(event.data)) as EngineEvent); } catch { /* ignore malformed local event */ }
-  });
-  const heartbeat = window.setInterval(() => {
-    if (socket.readyState === WebSocket.OPEN) socket.send('ping');
-  }, 15_000);
+  let disposed = false;
+  let socket: WebSocket | null = null;
+  let heartbeat: number | null = null;
+  let reconnectTimer: number | null = null;
+  let reconnectAttempt = 0;
+  localEngineEventSubscribers.add(onEvent);
+
+  const clearHeartbeat = () => {
+    if (heartbeat != null) window.clearInterval(heartbeat);
+    heartbeat = null;
+  };
+
+  const clearReconnect = () => {
+    if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  };
+
+  const scheduleReconnect = () => {
+    if (disposed || reconnectTimer != null) return;
+    const delay = Math.min(500 * 2 ** Math.min(reconnectAttempt, 4), 8_000);
+    reconnectAttempt += 1;
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      void connect();
+    }, delay);
+  };
+
+  const connect = async () => {
+    if (disposed) return;
+    try {
+      if (reconnectAttempt > 0) invalidateConnection();
+      const connection = await engineConnection();
+      if (disposed) return;
+      const wsBase = connection.baseUrl.replace(/^http/, 'ws');
+      const next = new WebSocket(`${wsBase}/v2/events?token=${encodeURIComponent(connection.sessionToken)}`);
+      socket = next;
+
+      next.addEventListener('open', () => {
+        if (disposed || socket !== next) return;
+        reconnectAttempt = 0;
+        clearHeartbeat();
+        heartbeat = window.setInterval(() => {
+          if (socket === next && next.readyState === WebSocket.OPEN) next.send('ping');
+        }, 15_000);
+      });
+
+      next.addEventListener('message', (event) => {
+        if (disposed || socket !== next) return;
+        try {
+          const parsed = JSON.parse(String(event.data)) as EngineEvent;
+          if (parsed.type === 'project.updated') invalidateProjectRequests();
+          onEvent(parsed);
+        } catch { /* ignore malformed local event */ }
+      });
+
+      next.addEventListener('close', () => {
+        if (disposed || socket !== next) return;
+        clearHeartbeat();
+        socket = null;
+        invalidateConnection();
+        scheduleReconnect();
+      });
+
+      next.addEventListener('error', () => {
+        if (!disposed && socket === next && next.readyState !== WebSocket.CLOSED) next.close();
+      });
+    } catch {
+      invalidateConnection();
+      scheduleReconnect();
+    }
+  };
+
+  await connect();
   return () => {
-    window.clearInterval(heartbeat);
-    socket.close();
+    disposed = true;
+    localEngineEventSubscribers.delete(onEvent);
+    clearHeartbeat();
+    clearReconnect();
+    const current = socket;
+    socket = null;
+    if (current && current.readyState < WebSocket.CLOSING) current.close();
   };
 }

@@ -1,7 +1,7 @@
 {
   "name": "@forgecad/desktop",
   "private": true,
-  "version": "2.0.2",
+  "version": "6.1.0",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -10,10 +10,10 @@
     "dist:win": "pnpm build && electron-builder --win nsis --x64",
     "dist:mac": "pnpm build && electron-builder --mac dmg",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run src --passWithNoTests",
     "lint": "eslint .",
     "e2e": "playwright test",
-    "test:web": "cross-env FORGECAD_WEB_ONLY=1 VITE_FORGECAD_ENGINE_URL=http://127.0.0.1:8765 VITE_FORGECAD_ENGINE_TOKEN=test-session VITE_FORGECAD_MODEL=qwen3.8:27b vite --host 127.0.0.1 --port 4173"
+    "test:web": "cross-env FORGECAD_WEB_ONLY=1 VITE_FORGECAD_ENGINE_URL=http://127.0.0.1:8765 VITE_FORGECAD_ENGINE_TOKEN=test-session VITE_FORGECAD_MODEL=qwen3:8b vite --host 127.0.0.1 --port 4173"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.87.1",
@@ -61,6 +61,15 @@
         "filter": ["**/*"]
       }
     ],
+    "fileAssociations": [
+      {
+        "ext": "focad",
+        "name": "ForgeCAD Design",
+        "description": "Portable ForgeCAD design",
+        "role": "Editor",
+        "mimeType": "application/vnd.forgecad.project+zip"
+      }
+    ],
     "win": {
       "target": [
         {
@@ -81,7 +90,8 @@
     "mac": {
       "target": ["dmg"],
       "category": "public.app-category.developer-tools",
-      "identity": null,
+      "identity": "-",
+      "hardenedRuntime": false,
       "artifactName": "ForgeCAD-${version}-${arch}.${ext}"
     }
   }

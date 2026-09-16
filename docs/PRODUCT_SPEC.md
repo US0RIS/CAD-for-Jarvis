@@ -8,17 +8,18 @@ This document defines what ForgeCAD v2 must be. The reference image is not mood-
 
 ## 1. Product thesis
 
-ForgeCAD is an AI-native physical engineering environment. The user should experience a product as a real assembly with geometry, mass, materials, heat, power, code, procurement, tolerances, dynamics, simulation results, and history attached to it.
+ForgeCAD is an AI-native physical engineering environment. The user should experience a product as a real assembly with geometry, mass, materials, heat, power, code, procurement, tolerances, dynamics, simulation results, manufacturing resources, and history attached to it.
 
 The core loop is:
 
 1. describe an engineering intent;
 2. inspect/manipulate the physical design directly;
-3. let the local engineering agent create or modify CAD, code, components, requirements, and analyses through typed tools;
+3. let the local engineering agent create or modify CAD, code, components, requirements, analyses, and manufacturing plans through typed tools;
 4. branch alternatives rather than destroying a known-good design;
 5. simulate and compare those alternatives;
 6. mark physical outcomes as working, not working, or unverified;
-7. use the difference between physical outcomes to guide the next design iteration.
+7. manufacture/prototype the design and attach real-world evidence to the branch;
+8. use the difference between physical outcomes to guide the next design iteration.
 
 ForgeCAD is local-first. Design data, code, model context, and engineering history remain on the machine by default.
 
@@ -103,13 +104,13 @@ The model selector may only show models actually available through the configure
 
 ### 4.2 Conversation
 
-Messages are presented as compact engineering conversation blocks, not oversized chat bubbles. Agent responses may contain structured result rows for branch creation, selected components, completed analyses, stale simulations, and requirement status.
+Messages are presented as compact engineering conversation blocks, not oversized chat bubbles. Agent responses may contain structured result rows for branch creation, selected components, completed analyses, stale simulations, manufacturing checks, and requirement status.
 
-The conversation supports streamed tokens and streamed engineering progress independently. A long solver job must not make the chat appear frozen.
+The conversation supports streamed tokens and streamed engineering progress independently. A long solver or slicer job must not make the chat appear frozen.
 
 ### 4.3 Suggested actions
 
-Contextual pills such as `Explain selected part`, `Review design`, and `Next test` appear immediately above the composer when relevant.
+Contextual pills such as `Explain selected part`, `Review design`, `Next test`, and `Prepare print` appear immediately above the composer when relevant.
 
 ### 4.4 Composer
 
@@ -121,7 +122,7 @@ Bottom composer contains:
 - high-contrast send button;
 - cancel/stop button while a job is active.
 
-Submitting must acknowledge within 100 ms with a local pending state. The UI must immediately show whether the request is queued, warming the model, reasoning, applying commands, running analysis, or awaiting confirmation.
+Submitting must acknowledge within 100 ms with a local pending state. The UI must immediately show whether the request is queued, warming the model, reasoning, applying commands, running analysis, preparing manufacturing output, or awaiting confirmation.
 
 ## 5. Project toolbar
 
@@ -222,7 +223,8 @@ Selecting a part updates:
 - right inspection context;
 - AI context;
 - optional floating part card;
-- code workspace availability if programmable.
+- code workspace availability if programmable;
+- manufacturing context if fabricated.
 
 Selection must remain stable while camera and explode presentation state change.
 
@@ -237,6 +239,7 @@ When appropriate, selected components show a compact floating card in the viewpo
 - power draw where relevant;
 - source/provenance indicator;
 - software workspace link for programmable components;
+- manufacturing intent for fabricated components;
 - close control.
 
 The card must not obstruct the selected geometry by default.
@@ -277,7 +280,7 @@ Provides selected-part structure, properties, materials, semantic role, geometry
 
 ### 9.3 Analysis tab
 
-Provides analysis setup, job status, convergence, confidence/provenance, result overlays, stale-result status, and comparison against requirements.
+Provides analysis setup, job status, convergence, confidence/provenance, result overlays, stale-result status, manufacturing validation, and comparison against requirements.
 
 ## 10. Autonomous engineering campaign panel
 
@@ -285,7 +288,7 @@ The lower right rail exposes autonomous campaign capability as a first-class fea
 
 The campaign panel communicates that the system can:
 
-- explore parameters/components/software choices;
+- explore parameters/components/software/manufacturing choices;
 - generate multiple branches;
 - run appropriate analyses;
 - reject failing variants;
@@ -305,7 +308,7 @@ Tabs exactly follow the reference concept:
 - CODE;
 - SYSTEM.
 
-The dock may collapse to a thin tab strip when not in use.
+The dock may collapse to a thin tab strip when not in use. Manufacturing status may appear in SYSTEM initially; a dedicated MANUFACTURE workspace may be added when the workflow becomes rich enough to justify a permanent tab.
 
 ### 11.1 Code workspace
 
@@ -327,15 +330,15 @@ Code is part of the design branch. Hardware and software branch together.
 
 ### 11.2 History
 
-History displays content-addressed engineering commits and events with actor, time, branch, reason, physical status changes, analysis/deployment evidence, and code changes.
+History displays content-addressed engineering commits and events with actor, time, branch, reason, physical status changes, analysis/deployment evidence, manufacturing evidence, and code changes.
 
 ## 12. AI behavior and responsiveness
 
-The renderer never waits synchronously for Ollama or an engineering solver.
+The renderer never waits synchronously for Ollama, an engineering solver, or a slicer.
 
-All agent/solver operations use jobs with explicit state:
+All agent/solver/manufacturing operations use jobs with explicit state:
 
-`queued → warming → planning → applying → analyzing → verifying → completed | failed | cancelled`
+`queued → warming → planning → applying → analyzing → manufacturing → verifying → completed | failed | cancelled`
 
 The UI receives job updates over WebSocket. HTTP requests create jobs and return immediately.
 
@@ -375,6 +378,7 @@ Examples:
 - Ollama unavailable: show offline state and remediation; other CAD controls remain active;
 - model warming: chat remains interactive and displays warming progress;
 - solver unavailable: analysis card explains which external dependency is missing;
+- slicer unavailable: manufacturing export remains available but headless slicing clearly reports the missing dependency;
 - catalog image unavailable: show generated/local fallback thumbnail;
 - backend disconnected: global banner and reconnect state; no edits presented as saved.
 
@@ -398,3 +402,185 @@ A v2 vertical slice is accepted only when an automated desktop test can:
 14. quit and relaunch with state preserved.
 
 A build that fails any of these tests is not a release candidate.
+
+## 16. ForgeCAD 2.0 design-intelligence contract
+
+ForgeCAD 2.0 must reason from **required system behavior**, not from the handful of components returned by a lexical search.
+
+The required planning pipeline is:
+
+`goal → requirements → functional architecture → capability resolution → implementation plan → CAD/electrical/software/manufacturing operations → deterministic validation → repair → verification`
+
+The architecture layer must consider, when relevant:
+
+- mechanical structure and load paths;
+- sensing;
+- actuation;
+- power generation/conversion/storage;
+- compute and networking;
+- embedded/application software;
+- electrical interfaces and signal levels;
+- thermal management;
+- fluid systems;
+- safety and failure modes;
+- mounting, packaging, cable/tube routing;
+- fabrication/manufacturing process.
+
+A missing catalog part is not itself a blocker. For every required capability ForgeCAD must attempt, in order where appropriate:
+
+1. reuse a compatible asset already in the design;
+2. select a trusted real-world catalog component;
+3. retrieve/import a real component not yet cached locally;
+4. synthesize an editable custom fabricated part/subsystem;
+5. implement the capability in software when it is fundamentally software;
+6. ask the user only when a genuinely blocking requirement cannot be safely inferred.
+
+External services such as Discord are software integrations, not fictitious physical components. Purchased component geometry and engineering metadata remain immutable unless explicitly replaced/synchronized from a trusted source.
+
+Requirements must become canonical project data and must carry a verification method. The agent may never declare success merely because a plan executed without an exception.
+
+## 17. Intended physical design envelope
+
+ForgeCAD is optimized for products that can realistically be prototyped in a serious workshop or small lab.
+
+The primary target is approximately **100 mm to 3 m overall product scale**, with the strongest initial zone at roughly **300 mm to 1 m**. The long-term envelope is approximately watch-sized through small-vehicle-sized products.
+
+Priority examples include:
+
+- robots and robotic mechanisms;
+- drones and rovers;
+- lab/test equipment;
+- desktop manufacturing machines;
+- smart furniture and appliances;
+- camera rigs;
+- custom electronics enclosures;
+- embedded/IoT products;
+- fixtures and tooling;
+- small vehicles and vehicle-scale subsystems.
+
+Sub-millimeter MEMS/microfluidic design and building/bridge/plant-scale BIM are not primary v2 targets. ForgeCAD may design subsystems for those domains, but it must not pretend its present solvers/tooling cover specialized disciplines that they do not.
+
+## 18. Manufacturing resources
+
+Manufacturing is part of the engineering loop, not a final `Export STL` button. A manufacturing resource has a real process envelope, software interface, material/process constraints, and availability state.
+
+ForgeCAD must distinguish:
+
+- purchased components, which are not printed/fabricated by default;
+- custom fabricated parts;
+- reference/construction geometry;
+- assemblies whose fabrication requires decomposition into multiple processes.
+
+The agent should be able to redesign a part specifically for an available manufacturing resource: split oversized bodies, create alignment features, add fasteners, change wall/rib thickness, enforce clearances, select printable materials, and generate multiple plates/setups.
+
+### 18.1 Bambu Lab P2S manufacturing resource
+
+The initial first-class manufacturing resource is the Bambu Lab P2S owned by the project user.
+
+Authoritative baseline resource data:
+
+- process: FFF/FDM;
+- build volume: **256 × 256 × 256 mm**;
+- default nozzle: **0.4 mm**;
+- supported nozzles: **0.2 / 0.4 / 0.6 / 0.8 mm**;
+- maximum nozzle temperature: **300 °C**;
+- maximum bed temperature: **110 °C**.
+
+Reference: Bambu Lab P2S product announcement/specification: https://blog.bambulab.com/the-icon-redefined-meet-the-p2s-a-completely-reengineered-version-of-the-ultra-productive-p1-series/
+
+ForgeCAD must not assume a part is printable merely because its bounding box fits. Validation evolves through these stages:
+
+1. CAD solid validity and non-zero volume;
+2. build-volume/orientation screening;
+3. material/process compatibility;
+4. wall/feature/tolerance rules;
+5. overhang/bridge/support analysis;
+6. plate packing;
+7. slicer validation;
+8. print-time/material estimate;
+9. optional physical print outcome attached to design history.
+
+### 18.2 3MF as the manufacturing interchange
+
+ForgeCAD's primary additive-manufacturing export is **3MF** rather than STL.
+
+The first implementation may emit standards-based geometry 3MF and delegate machine/process/filament specialization to Bambu Studio. ForgeCAD must never silently invent P2S process settings that materially affect strength or fit.
+
+Longer term, the manufacturing package should preserve:
+
+- printable bodies and names;
+- plate assignments;
+- chosen orientation;
+- printer/nozzle/process identity;
+- filament/material mapping;
+- supports/brims where explicitly selected;
+- per-object process overrides;
+- ForgeCAD branch/revision provenance;
+- manufacturing requirements and verification evidence.
+
+### 18.3 Bambu Studio integration
+
+ForgeCAD may invoke a locally installed Bambu Studio command-line interface for deterministic print preparation. The current Bambu Studio CLI supports 3MF/STL input, machine/process/filament settings, orientation, arrangement, slicing, and 3MF export.
+
+Reference: https://github.com/bambulab/BambuStudio/wiki/Command-Line-Usage
+
+The integration contract is:
+
+1. ForgeCAD exports fabricated bodies as valid 3MF;
+2. ForgeCAD selects explicit P2S machine/process/filament profiles;
+3. Bambu Studio performs orientation/arrangement/slicing;
+4. ForgeCAD verifies an output file was actually produced and captures slicer diagnostics;
+5. ForgeCAD reads resulting estimates/validation where available;
+6. any geometry/process failure becomes feedback to the design agent rather than an opaque export failure.
+
+Headless slicing must fail closed if complete print profiles are unavailable. It is preferable to require profile selection than to generate a plausible-looking but mechanically unverified print.
+
+### 18.4 Direct P2S LAN integration
+
+Direct printer communication is a separate phase from file/slicer integration.
+
+Bambu Lab has described optional Developer Mode exposing MQTT/live-stream/file-transfer interfaces, while explicitly noting those protocols are not officially supported. ForgeCAD therefore treats LAN control as an **optional, explicit opt-in integration**, not a stable public API dependency.
+
+Initial LAN scope, when implemented:
+
+- discover/configure a specific printer;
+- read printer state, temperatures, progress, errors and filament state;
+- upload a prepared print package;
+- require an explicit user confirmation before starting a physical print;
+- expose pause/cancel controls clearly as physical-device actions;
+- never place access codes, account credentials, or network secrets into `.focad`.
+
+Cloud-account automation is not required for v2.0.0 and should not be preferred over local operation.
+
+### 18.5 Manufacturing feedback loop
+
+A physical prototype is evidence. ForgeCAD must be able to attach to a branch:
+
+- exact manufacturing package hash;
+- printer/resource identity;
+- material and process profile;
+- slicer version/settings;
+- actual/estimated print duration and material use;
+- user-marked success/failure;
+- measurements, photos, notes, or failure observations.
+
+That evidence feeds branch comparison and autonomous redesign. The intended loop is:
+
+`design → validate → manufacture → observe → branch → redesign`
+
+## 19. P2S manufacturing acceptance criteria
+
+The P2S integration is not considered complete merely because ForgeCAD can write an STL/3MF file. At minimum automated tests must verify that ForgeCAD can:
+
+1. expose the P2S as a manufacturing resource with the correct 256 mm cubic build volume;
+2. distinguish purchased components from fabricated bodies;
+3. detect a fabricated part that cannot fit the P2S by orthogonal orientation;
+4. export fabricated bodies as a structurally valid 3MF package;
+5. preserve stable part names in the exported model;
+6. discover Bambu Studio when installed or clearly report it unavailable;
+7. construct a documented Bambu Studio CLI slice invocation using explicit machine/process/filament profiles;
+8. refuse headless slicing when required profiles are absent rather than guessing settings;
+9. verify that the slicer actually produced the requested output file;
+10. keep all direct printer-control operations disabled until an explicit LAN-control implementation and permission model exist.
+
+A later physical-device acceptance stage must additionally prove upload/status/start/pause/cancel behavior against a real P2S without making cloud connectivity a requirement.
