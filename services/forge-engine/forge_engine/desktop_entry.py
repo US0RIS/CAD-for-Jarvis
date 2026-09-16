@@ -22,6 +22,7 @@ from forge_engine.v601_scene_runtime import install as install_v601_scene_runtim
 from forge_engine.v610.api import install as install_v610_api
 from forge_engine.v610.simulation_extensions import install as install_v610_simulation_extensions
 from forge_engine.v610.thermal_field_api import install as install_v610_thermal_field_api
+from forge_engine.v620.api import install as install_v620_api
 from forge_engine.v620.scene_runtime import install as install_v620_scene_runtime
 
 
@@ -119,6 +120,7 @@ install_v610_thermal_field_api(main_v31.app, main_v31.v3.legacy.require_session)
 # remain grouped with per-subpart PBR materials and the persistent scene cache tracks
 # the exact resolved asset revision.
 install_v620_scene_runtime()
+install_v620_api(main_v31.app, main_v31.v3.legacy.require_session)
 
 # The legacy v2 CORS policy predates the v3.1 parametric feature editor and omits
 # PATCH. Keep the outer desktop policy complete for all current mutable methods.
