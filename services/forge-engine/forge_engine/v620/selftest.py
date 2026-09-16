@@ -97,8 +97,6 @@ def run() -> dict:
             assert fallback_render_status.get("authoritative_cad") is False
             fallback_key = v601_scene_runtime.geometry_cache_key(obj)
 
-            # Link ranking must prefer an actual STEP associated with this part over a
-            # dimension PDF or generic CAD landing page.
             step_score = component_fidelity._link_score(component, "/files/EXACT-42.step", "3D STEP model")
             zip_score = component_fidelity._link_score(component, "/downloads/EXACT-42-3d.zip", "CAD files")
             pdf_score = component_fidelity._link_score(component, "/drawing/EXACT-42.pdf", "Dimension drawing")
@@ -118,6 +116,7 @@ def run() -> dict:
                     "geometry_fidelity": "official_step",
                     "verification": verification,
                 },
+                root=component_fidelity.CACHE_ASSET_DIR,
             )
             assert exact_path.is_file()
             assert metadata["sha256"] == verification["sha256"]
@@ -148,13 +147,10 @@ def run() -> dict:
             assert all("metalness" in group["material"] and "roughness" in group["material"] for group in groups)
             assert len(mesh["triangles"]) > 100, "Exact fixture should not collapse to toy-level triangle count"
 
-            # Geometry/render enrichment must not rewrite the canonical purchased-part
-            # identity, BOM identity, interfaces, or engineering transform.
             assert obj["component_ref"] == component["id"]
             assert obj["component_snapshot"]["manufacturer_part_number"] == "EXACT-42"
             assert obj["transform"]["position"] == [10.0, 20.0, 30.0]
 
-            # Persistent cache round-trip must preserve render groups/materials.
             local_obj = deepcopy(obj)
             local_obj["transform"] = {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]}
             first = v601_scene_runtime._local_mesh(local_obj)
