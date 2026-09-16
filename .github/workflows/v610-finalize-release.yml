@@ -1,0 +1,95 @@
+name: ForgeCAD 6.1.0 Release Finalizer
+
+on:
+  push:
+    branches: [forgecad/6.1.0]
+    paths:
+      - '.github/workflows/v610-finalize-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: forgecad-6.1.0-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: Publish and verify exact ForgeCAD 6.1.0 release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RELEASE_SHA: 68be69003a2962033e4223ca32fff4abd193c9b0
+      SOURCE_RUN_ID: '35037514052'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+
+      - name: Download validated native installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ForgeCAD-6.1.0-*
+          merge-multiple: true
+          path: dist-release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+
+      - name: Generate SHA-256 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist-release
+          sha256sum ForgeCAD-Setup-6.1.0.exe ForgeCAD-6.1.0-arm64.dmg ForgeCAD-6.1.0-x64.dmg > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish release without Git transport tag push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v6.1.0 >/dev/null 2>&1; then
+            gh release upload v6.1.0 \
+              dist-release/ForgeCAD-Setup-6.1.0.exe \
+              dist-release/ForgeCAD-6.1.0-arm64.dmg \
+              dist-release/ForgeCAD-6.1.0-x64.dmg \
+              dist-release/SHA256SUMS.txt --clobber
+            gh release edit v6.1.0 --target "$RELEASE_SHA" --title 'ForgeCAD 6.1.0' --notes-file docs/RELEASE_6_1_0.md
+          else
+            gh release create v6.1.0 \
+              dist-release/ForgeCAD-Setup-6.1.0.exe \
+              dist-release/ForgeCAD-6.1.0-arm64.dmg \
+              dist-release/ForgeCAD-6.1.0-x64.dmg \
+              dist-release/SHA256SUMS.txt \
+              --target "$RELEASE_SHA" \
+              --title 'ForgeCAD 6.1.0' \
+              --notes-file docs/RELEASE_6_1_0.md
+          fi
+
+      - name: Verify final binding and assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v6.1.0" --jq '.object.sha')
+          test "$TAG_SHA" = "$RELEASE_SHA"
+          TARGET=$(gh release view v6.1.0 --json targetCommitish --jq '.targetCommitish')
+          test "$TARGET" = "$RELEASE_SHA"
+          mapfile -t ASSETS < <(gh release view v6.1.0 --json assets --jq '.assets[].name' | sort)
+          EXPECTED=(
+            'ForgeCAD-6.1.0-arm64.dmg'
+            'ForgeCAD-6.1.0-x64.dmg'
+            'ForgeCAD-Setup-6.1.0.exe'
+            'SHA256SUMS.txt'
+          )
+          mapfile -t EXPECTED_SORTED < <(printf '%s\n' "${EXPECTED[@]}" | sort)
+          test "${#ASSETS[@]}" -eq "${#EXPECTED_SORTED[@]}"
+          for i in "${!EXPECTED_SORTED[@]}"; do
+            test "${ASSETS[$i]}" = "${EXPECTED_SORTED[$i]}"
+          done
+          gh release view v6.1.0 --json url,targetCommitish,assets
