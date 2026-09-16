@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, Focus, Move3d, Orbit, Rotate3d, Scaling, Scan, Square, View } from 'lucide-react';
+import { fetchComponentFidelityHealth, hasNewResolvedGeometry } from '../api/componentFidelity';
 import { SceneController, type CameraPreset, type TransformMode } from '../scene/SceneController';
 import '../styles/scene-startup.css';
 
 const EMPTY_HIDDEN_IDS: ReadonlySet<string> = new Set();
 const SLOW_SCENE_MS = 8_000;
 const AUTO_RETRY_MS = 900;
+const COMPONENT_FIDELITY_POLL_MS = 1_500;
 
 interface ViewportProps {
   explode: number;
@@ -29,6 +31,7 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
   const slowTimerRef = useRef<number | null>(null);
   const retryTimerRef = useRef<number | null>(null);
   const automaticRetriesRef = useRef(0);
+  const exactCadGenerationRef = useRef(0);
   const [mode, setMode] = useState<TransformMode>('move');
   const [autoRotate, setAutoRotate] = useState(false);
   const [sceneSlow, setSceneSlow] = useState(false);
@@ -131,6 +134,42 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
     automaticRetriesRef.current = 0;
     reloadScene(controller);
   }, [sceneRevision]);
+
+  // Exact vendor CAD resolves in the engine background so the first viewport never
+  // blocks on a manufacturer website. The engine increments asset_generation only
+  // after a requested SKU has passed identity/geometry verification and entered the
+  // local authoritative cache. A generation advance is therefore the precise signal
+  // to replace the temporary fallback mesh without inventing a project revision.
+  useEffect(() => {
+    if (!sceneEnabled || empty) return;
+    let cancelled = false;
+    let inFlight = false;
+    const poll = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const health = await fetchComponentFidelityHealth();
+        if (cancelled) return;
+        if (!hasNewResolvedGeometry(exactCadGenerationRef.current, health)) return;
+        const controller = controllerRef.current;
+        if (!controller) return;
+        exactCadGenerationRef.current = health.asset_generation;
+        reloadScene(controller);
+      } catch {
+        // Fidelity polling is opportunistic. Normal scene/project errors remain visible
+        // through the existing viewport/runtime error paths; a transient poll failure
+        // must not degrade CAD editing.
+      } finally {
+        inFlight = false;
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => { void poll(); }, COMPONENT_FIDELITY_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sceneEnabled, empty]);
 
   useEffect(() => controllerRef.current?.setExplode(explode), [explode]);
   useEffect(() => controllerRef.current?.setOptimisticHidden(optimisticHiddenIds), [optimisticHiddenIds]);
