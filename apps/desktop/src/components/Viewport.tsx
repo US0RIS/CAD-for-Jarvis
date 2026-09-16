@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, Focus, Move3d, Orbit, Rotate3d, Scaling, Scan, Square, View } from 'lucide-react';
-import { fetchComponentFidelityHealth, hasNewResolvedGeometry } from '../api/componentFidelity';
+import { fetchComponentAssetRevision, hasNewResolvedGeometry, type ComponentAssetRevision } from '../api/componentFidelity';
 import { SceneController, type CameraPreset, type TransformMode } from '../scene/SceneController';
 import '../styles/scene-startup.css';
 
@@ -31,7 +31,7 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
   const slowTimerRef = useRef<number | null>(null);
   const retryTimerRef = useRef<number | null>(null);
   const automaticRetriesRef = useRef(0);
-  const exactCadGenerationRef = useRef(0);
+  const exactCadRevisionRef = useRef<ComponentAssetRevision | null>(null);
   const [mode, setMode] = useState<TransformMode>('move');
   const [autoRotate, setAutoRotate] = useState(false);
   const [sceneSlow, setSceneSlow] = useState(false);
@@ -136,10 +136,10 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
   }, [sceneRevision]);
 
   // Exact vendor CAD resolves in the engine background so the first viewport never
-  // blocks on a manufacturer website. The engine increments asset_generation only
-  // after a requested SKU has passed identity/geometry verification and entered the
-  // local authoritative cache. A generation advance is therefore the precise signal
-  // to replace the temporary fallback mesh without inventing a project revision.
+  // blocks on a manufacturer website. This polls an O(1) process revision endpoint;
+  // it does not re-import large STEP assemblies. A generation advance means a new
+  // exact asset passed verification. An epoch change means the engine restarted, so a
+  // scene built against the previous process is refreshed even if generation reset.
   useEffect(() => {
     if (!sceneEnabled || empty) return;
     let cancelled = false;
@@ -148,13 +148,14 @@ export function Viewport({ explode, onExplode, onSelectionChange, onReady, onLoa
       if (cancelled || inFlight) return;
       inFlight = true;
       try {
-        const health = await fetchComponentFidelityHealth();
+        const payload = await fetchComponentAssetRevision();
         if (cancelled) return;
-        if (!hasNewResolvedGeometry(exactCadGenerationRef.current, health)) return;
+        const next: ComponentAssetRevision = { epoch: payload.epoch, generation: payload.generation };
+        const shouldReload = hasNewResolvedGeometry(exactCadRevisionRef.current, next);
+        exactCadRevisionRef.current = next;
+        if (!shouldReload) return;
         const controller = controllerRef.current;
-        if (!controller) return;
-        exactCadGenerationRef.current = health.asset_generation;
-        reloadScene(controller);
+        if (controller) reloadScene(controller);
       } catch {
         // Fidelity polling is opportunistic. Normal scene/project errors remain visible
         // through the existing viewport/runtime error paths; a transient poll failure
