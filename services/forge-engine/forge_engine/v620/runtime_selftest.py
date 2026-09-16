@@ -52,9 +52,10 @@ def run() -> dict:
       <a href="/cad/STRICT-42-3d.zip">3D CAD</a>
       <a href="/locale/strict-42">3D printer product page</a>
     </body></html>'''
-    links = runtime._strict_cad_links('https://vendor.example/product/strict-42', payload, fixture)
-    assert 'https://vendor.example/cad/STRICT-42.step' in links
-    assert 'https://vendor.example/cad/STRICT-42-3d.zip' in links
+    # A literal public test address keeps this acceptance completely offline.
+    links = runtime._strict_cad_links('https://93.184.216.34/product/strict-42', payload, fixture)
+    assert 'https://93.184.216.34/cad/STRICT-42.step' in links
+    assert 'https://93.184.216.34/cad/STRICT-42-3d.zip' in links
     assert not any('#downloads' in url for url in links)
     assert not any(url.endswith('.pdf') for url in links)
     assert not any('/locale/' in url for url in links)
