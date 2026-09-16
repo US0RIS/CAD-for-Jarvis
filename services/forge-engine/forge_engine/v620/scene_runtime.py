@@ -15,6 +15,7 @@ from typing import Any
 from ..v110 import core
 from .. import v601_scene_runtime
 from . import component_fidelity
+from . import component_fidelity_hardening
 
 
 _INSTALLED = False
@@ -96,6 +97,7 @@ def install() -> None:
     if _INSTALLED:
         return
 
+    component_fidelity_hardening.install()
     component_fidelity.install()
     _ORIGINAL_TESSELLATE = core.tessellate
     _ORIGINAL_GEOMETRY_IDENTITY = v601_scene_runtime._geometry_identity
