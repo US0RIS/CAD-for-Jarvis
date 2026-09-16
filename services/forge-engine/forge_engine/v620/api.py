@@ -11,7 +11,7 @@ from ..v110 import component_registry as registry
 from ..v110 import core
 from . import MILESTONE_VERSION, RELEASE_COMPLETE, COMPONENT_GEOMETRY_SCHEMA_VERSION
 from . import component_fidelity
-from . import component_fidelity_hardening
+from . import component_fidelity_runtime
 
 
 _INSTALLED = False
@@ -37,17 +37,29 @@ def install(app: Any, require_session: Any) -> None:
     if _INSTALLED:
         return
 
-    component_fidelity_hardening.install()
+    component_fidelity_runtime.install()
+
+    @app.get("/v6/component-fidelity/revision", dependencies=[Depends(require_session)])
+    async def component_fidelity_revision() -> dict[str, Any]:
+        # Deliberately O(1). The desktop polls this while an authoritative asset may be
+        # resolving in the background. Do not inspect or re-import STEP geometry here.
+        return {
+            "ok": True,
+            "version": MILESTONE_VERSION,
+            **component_fidelity_runtime.asset_revision(),
+        }
 
     @app.get("/v6/component-fidelity/health", dependencies=[Depends(require_session)])
     async def component_fidelity_health() -> dict[str, Any]:
         rows = _project_component_statuses()
+        revision = component_fidelity_runtime.asset_revision()
         return {
             "ok": True,
             "version": MILESTONE_VERSION,
             "release_complete": RELEASE_COMPLETE,
             "schema_version": COMPONENT_GEOMETRY_SCHEMA_VERSION,
-            "asset_generation": component_fidelity_hardening.asset_generation(),
+            "asset_epoch": revision["epoch"],
+            "asset_generation": revision["generation"],
             "project_components": len(rows),
             "authoritative_cad_components": sum(bool(row.get("authoritative_cad")) for row in rows),
             "fallback_components": sum(not bool(row.get("authoritative_cad")) for row in rows),
