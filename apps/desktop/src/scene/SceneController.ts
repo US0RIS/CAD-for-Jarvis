@@ -34,6 +34,35 @@ interface SimulationPreviewEventDetail {
   duration_s?: number;
 }
 
+interface RichMaterialDescriptor {
+  color?: string | number;
+  metalness?: number;
+  roughness?: number;
+  clearcoat?: number;
+  clearcoatRoughness?: number;
+  opacity?: number;
+  transmission?: number;
+  emissive?: string | number;
+}
+
+interface RichMeshGroup {
+  name?: string;
+  triangle_start: number;
+  triangle_count: number;
+  material_class?: string;
+  material?: RichMaterialDescriptor;
+}
+
+type RichSceneMesh = ScenePayload['parts'][number]['mesh'] & {
+  groups?: RichMeshGroup[];
+  geometry_fidelity?: string;
+  geometry_source?: string;
+  authoritative_cad?: boolean;
+  asset_sha256?: string | null;
+  subpart_count?: number;
+  triangle_count?: number;
+};
+
 export interface SceneControllerEvents {
   onSelectionChange?: (id: string | null) => void;
   onReady?: () => void;
@@ -74,6 +103,10 @@ function transformVectors(part: ScenePayload['parts'][number]) {
 function finiteNumber(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clamp01(value: unknown, fallback: number): number {
+  return Math.max(0, Math.min(1, finiteNumber(value, fallback)));
 }
 
 export class SceneController {
@@ -199,22 +232,34 @@ export class SceneController {
     this.scene.add(grid);
   }
 
-  private material(role: string, vertexColors: boolean) {
+  private material(role: string, vertexColors: boolean, descriptor?: RichMaterialDescriptor) {
+    const opacity = clamp01(descriptor?.opacity, 1);
+    const transmission = clamp01(descriptor?.transmission, 0);
     return new THREE.MeshPhysicalMaterial({
-      color: vertexColors ? 0xffffff : colorForRole(role),
-      metalness: role.includes('structure') || role.includes('mount') ? 0.64 : 0.22,
-      roughness: 0.42,
-      clearcoat: 0.04,
+      color: descriptor?.color ?? (vertexColors ? 0xffffff : colorForRole(role)),
+      metalness: clamp01(descriptor?.metalness, role.includes('structure') || role.includes('mount') ? 0.64 : 0.22),
+      roughness: clamp01(descriptor?.roughness, 0.42),
+      clearcoat: clamp01(descriptor?.clearcoat, 0.04),
+      clearcoatRoughness: clamp01(descriptor?.clearcoatRoughness, 0.25),
+      opacity,
+      transparent: opacity < 0.999 || transmission > 0.001,
+      transmission,
+      emissive: descriptor?.emissive ?? 0x000000,
       vertexColors,
       side: THREE.DoubleSide,
     });
   }
 
   private geometryFromPart(part: ScenePayload['parts'][number]): THREE.BufferGeometry | null {
-    const mesh = part.mesh;
+    const mesh = part.mesh as RichSceneMesh;
     if (!mesh.positions?.length || !mesh.triangles?.length) return null;
     const geometry = new THREE.BufferGeometry();
-    const hasFaceColors = Array.isArray(mesh.triangle_colors) && mesh.triangle_colors.length === mesh.triangles.length;
+    const groups = Array.isArray(mesh.groups)
+      ? mesh.groups.filter((group) => Number.isFinite(Number(group.triangle_start)) && Number(group.triangle_count) > 0)
+      : [];
+    const hasGroups = groups.length > 0;
+    const hasFaceColors = !hasGroups && Array.isArray(mesh.triangle_colors) && mesh.triangle_colors.length === mesh.triangles.length;
+
     if (hasFaceColors) {
       const positions: number[] = [];
       const colors: number[] = [];
@@ -232,6 +277,12 @@ export class SceneController {
     } else {
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(mesh.positions.flat().map(Number), 3));
       geometry.setIndex(mesh.triangles.flat().map(Number));
+      if (hasGroups) {
+        geometry.clearGroups();
+        groups.forEach((group, materialIndex) => {
+          geometry.addGroup(Number(group.triangle_start) * 3, Number(group.triangle_count) * 3, materialIndex);
+        });
+      }
     }
 
     const { position, rotation, scale } = transformVectors(part);
@@ -242,6 +293,22 @@ export class SceneController {
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
     return geometry;
+  }
+
+  private materialsFromPart(part: ScenePayload['parts'][number]): THREE.Material | THREE.Material[] {
+    const mesh = part.mesh as RichSceneMesh;
+    const groups = Array.isArray(mesh.groups)
+      ? mesh.groups.filter((group) => Number.isFinite(Number(group.triangle_start)) && Number(group.triangle_count) > 0)
+      : [];
+    if (groups.length) {
+      return groups.map((group) => {
+        const material = this.material(part.semantic_role, false, group.material);
+        material.name = group.material_class || group.name || 'ForgeCAD component material';
+        return material;
+      });
+    }
+    const vertexColors = Boolean(mesh.triangle_colors?.length);
+    return this.material(part.semantic_role, vertexColors);
   }
 
   private applyVisibility() {
@@ -352,8 +419,7 @@ export class SceneController {
       for (const part of payload.parts) {
         const geometry = this.geometryFromPart(part);
         if (!geometry) continue;
-        const vertexColors = Boolean(part.mesh.triangle_colors?.length);
-        const object = new THREE.Mesh(geometry, this.material(part.semantic_role, vertexColors));
+        const object = new THREE.Mesh(geometry, this.materialsFromPart(part));
         const { position, rotation, scale } = transformVectors(part);
         object.position.copy(position);
         object.rotation.copy(rotation);
@@ -361,6 +427,11 @@ export class SceneController {
         object.castShadow = true;
         object.receiveShadow = true;
         object.userData.partId = part.id;
+        const richMesh = part.mesh as RichSceneMesh;
+        object.userData.componentSubpartCount = richMesh.groups?.length ?? 0;
+        object.userData.authoritativeCad = Boolean(richMesh.authoritative_cad);
+        object.userData.geometryFidelity = richMesh.geometry_fidelity ?? null;
+        object.userData.componentAssetSha256 = richMesh.asset_sha256 ?? null;
         this.assemblyRoot.add(object);
         const explodeVector = new THREE.Vector3(
           Number(part.explode_vector?.[0] ?? 0),
