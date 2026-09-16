@@ -33,12 +33,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
       - name: Install Forge Engine
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e services/forge-engine
-
       - name: Verify 6.2 authoritative component geometry
         env:
           FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v620-fidelity
@@ -49,7 +47,7 @@ jobs:
         run: |
           python -m forge_engine.v620.selftest
           python -m forge_engine.v620.hardening_selftest
-
+          python -m forge_engine.v620.runtime_selftest
       - name: Preserve 6.1 simulation acceptance
         env:
           FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v620-v610
@@ -61,7 +59,6 @@ jobs:
         run: |
           python -m forge_engine.v610.selftest
           python -m forge_engine.v610.thermal_field_selftest
-
       - name: Preserve 6.0.1 startup and Ollama hardening
         env:
           FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v620-v601
@@ -73,7 +70,6 @@ jobs:
           python -m forge_engine.v601_selftest
           python -m forge_engine.v601_scene_selftest
           python -m forge_engine.v601_ollama_selftest
-
       - name: Smoke 6.2 fidelity API and scene payload
         env:
           FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v620-api
@@ -93,7 +89,8 @@ jobs:
           body = health.json()
           assert body['version'] == '6.2.0'
           assert body['schema_version'] == 2
-          assert isinstance(body['asset_generation'], int) and body['asset_generation'] >= 0
+          revision = body.get('asset_revision') or {}
+          assert revision.get('epoch') and isinstance(revision.get('generation'), int), revision
           audit = client.get('/v6/component-fidelity/audit', headers=headers)
           assert audit.status_code == 200, audit.text
           assert audit.json()['specific_purchased_components'] > 0
@@ -103,10 +100,8 @@ jobs:
           assert len(pi['mesh'].get('groups') or []) >= 4
           assert all('material' in group for group in pi['mesh']['groups'])
           PY
-
       - name: Install desktop dependencies
         run: pnpm install --prod=false --frozen-lockfile=false
-
       - name: Typecheck, test, and build desktop
         run: |
           pnpm --filter @forgecad/desktop typecheck
