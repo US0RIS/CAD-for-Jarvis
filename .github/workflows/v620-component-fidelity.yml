@@ -1,0 +1,155 @@
+name: ForgeCAD 6.2 Component Fidelity
+
+on:
+  push:
+    branches: [forgecad/6.2.0]
+    paths:
+      - 'services/forge-engine/**'
+      - 'apps/desktop/**'
+      - '.github/workflows/v620-component-fidelity.yml'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+  workflow_dispatch:
+
+concurrency:
+  group: forgecad-6.2-component-fidelity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic:
+    name: Exact CAD and renderer acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Forge Engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine
+
+      - name: Verify 6.2 authoritative component geometry
+        env:
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v620-fidelity
+          FORGECAD_ALLOW_CAD_DOWNLOADS: '0'
+          FORGECAD_BACKGROUND_GEOMETRY: '0'
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: python -m forge_engine.v620.selftest
+
+      - name: Preserve 6.1 simulation acceptance
+        env:
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v620-v610
+          FORGECAD_SESSION_TOKEN: test-session
+          FORGECAD_ALLOW_CAD_DOWNLOADS: '0'
+          FORGECAD_BACKGROUND_GEOMETRY: '0'
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python -m forge_engine.v610.selftest
+          python -m forge_engine.v610.thermal_field_selftest
+
+      - name: Preserve 6.0.1 startup and Ollama hardening
+        env:
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v620-v601
+          FORGECAD_ALLOW_CAD_DOWNLOADS: '0'
+          FORGECAD_BACKGROUND_GEOMETRY: '0'
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python -m forge_engine.v601_selftest
+          python -m forge_engine.v601_scene_selftest
+          python -m forge_engine.v601_ollama_selftest
+
+      - name: Smoke 6.2 fidelity API and scene payload
+        env:
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v620-api
+          FORGECAD_SESSION_TOKEN: test-session
+          FORGECAD_ALLOW_CAD_DOWNLOADS: '0'
+          FORGECAD_BACKGROUND_GEOMETRY: '0'
+          CI: 'true'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from forge_engine.desktop_entry import app
+          client = TestClient(app)
+          headers = {'X-ForgeCAD-Session': 'test-session'}
+          health = client.get('/v6/component-fidelity/health', headers=headers)
+          assert health.status_code == 200, health.text
+          body = health.json()
+          assert body['version'] == '6.2.0'
+          assert body['schema_version'] == 2
+          audit = client.get('/v6/component-fidelity/audit', headers=headers)
+          assert audit.status_code == 200, audit.text
+          assert audit.json()['specific_purchased_components'] > 0
+          scene = client.get('/v2/scene', headers=headers)
+          assert scene.status_code == 200, scene.text
+          pi = next(row for row in scene.json()['parts'] if row['name'] == 'Raspberry Pi 5 8GB')
+          assert len(pi['mesh'].get('groups') or []) >= 4
+          assert all('material' in group for group in pi['mesh']['groups'])
+          PY
+
+      - name: Install desktop dependencies
+        run: pnpm install --prod=false --frozen-lockfile=false
+
+      - name: Typecheck, test, and build desktop
+        run: |
+          pnpm --filter @forgecad/desktop typecheck
+          pnpm --filter @forgecad/desktop test
+          pnpm --filter @forgecad/desktop build
+
+  manufacturer-cad:
+    name: Real manufacturer CAD resolution
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Forge Engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine
+      - name: Resolve release-required authoritative CAD
+        env:
+          FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v620-manufacturer
+          FORGECAD_BACKGROUND_GEOMETRY: '0'
+          CI: 'false'
+          FORGECAD_ACCEPTANCE_WORKSPACE: '0'
+        run: |
+          python -m forge_engine.v620.component_fidelity prefetch --required-only --strict --root "${RUNNER_TEMP}/forgecad-v620-package-assets"
+      - name: Inspect resolved CAD manifest
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'forgecad-v620-package-assets'
+          manifests=list(root.glob('*/asset.json'))
+          assert len(manifests) >= 6, f'Expected at least 6 exact release assets, got {len(manifests)}'
+          for path in manifests:
+              data=json.loads(path.read_text())
+              assert data['sha256'] and data['bytes'] > 800
+              assert data['geometry_fidelity'] in {'official_step','verified_step'}
+              print(path.parent.name, data['geometry_fidelity'], data['bytes'], data['sha256'])
+          PY
+      - name: Upload authoritative CAD diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forgecad-v620-authoritative-cad
+          path: ${{ runner.temp }}/forgecad-v620-package-assets/**
+          if-no-files-found: ignore
