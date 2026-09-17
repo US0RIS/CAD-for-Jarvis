@@ -89,8 +89,10 @@ jobs:
           body = health.json()
           assert body['version'] == '6.2.0'
           assert body['schema_version'] == 2
-          revision = body.get('asset_revision') or {}
-          assert revision.get('epoch') and isinstance(revision.get('generation'), int), revision
+          revision = client.get('/v6/component-fidelity/revision', headers=headers)
+          assert revision.status_code == 200, revision.text
+          revision_body = revision.json()
+          assert revision_body.get('epoch') and isinstance(revision_body.get('generation'), int), revision_body
           audit = client.get('/v6/component-fidelity/audit', headers=headers)
           assert audit.status_code == 200, audit.text
           assert audit.json()['specific_purchased_components'] > 0
@@ -129,7 +131,7 @@ jobs:
           CI: 'false'
           FORGECAD_ACCEPTANCE_WORKSPACE: '0'
         run: |
-          python -m forge_engine.v620.component_fidelity_hardening prefetch --required-only --strict --root "${RUNNER_TEMP}/forgecad-v620-package-assets"
+          python -m forge_engine.v620.component_fidelity_runtime prefetch --required-only --strict --root "${RUNNER_TEMP}/forgecad-v620-package-assets"
       - name: Inspect resolved CAD manifest
         run: |
           python - <<'PY'
