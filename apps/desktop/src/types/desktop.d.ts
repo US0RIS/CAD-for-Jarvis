@@ -11,6 +11,7 @@ interface ForgeDesktopBridge {
     chrome: string;
   };
   getEngineConnection(): Promise<ForgeEngineConnection>;
+  reportComponentCatalogState(state: 'ready' | 'failed', detail?: string): void;
 }
 
 declare interface Window {

@@ -1,0 +1,53 @@
+.scene-startup-overlay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 8;
+  width: min(360px, calc(100% - 48px));
+  transform: translate(-50%, -50%);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, #7d8b99 22%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.28);
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+  color: var(--text);
+  backdrop-filter: blur(12px);
+}
+
+.scene-startup-overlay strong {
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+.scene-startup-overlay span {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.scene-startup-overlay.slow {
+  pointer-events: none;
+}
+
+.scene-startup-overlay.error {
+  border-color: color-mix(in srgb, var(--danger, #d46a6a) 58%, var(--border));
+}
+
+.scene-startup-overlay button {
+  justify-self: start;
+  margin-top: 4px;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-raised, #252a30);
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.scene-startup-overlay button:hover {
+  background: color-mix(in srgb, var(--panel-raised, #252a30) 78%, white 8%);
+}

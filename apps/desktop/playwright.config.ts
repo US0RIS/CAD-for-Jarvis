@@ -2,7 +2,12 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  timeout: 120_000,
+  // This is intentionally a full release vertical slice: catalog browsing, multiple
+  // CAD mutations and scene rebuilds, manufacturing/evidence, tolerance analysis and
+  // an autonomous campaign all run in one scenario. Keep the individual assertions'
+  // strict 10–90 second limits, but do not let their cumulative legitimate runtime hit
+  // a two-minute suite ceiling before the later release gates are exercised.
+  timeout: 300_000,
   expect: { timeout: 12_000 },
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
