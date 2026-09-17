@@ -1,0 +1,21 @@
+name: ForgeCAD 6.2 Native Run Cleanup
+
+on:
+  push:
+    branches: [forgecad/6.2.0]
+    paths:
+      - '.github/workflows/v620-cancel-stale-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forgecad-6.2.0-native
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Superseding stale native validation run; validated artifacts are retained.'
