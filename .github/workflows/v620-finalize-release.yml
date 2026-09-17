@@ -1,0 +1,156 @@
+name: ForgeCAD 6.2.0 Release Finalizer
+
+on:
+  push:
+    branches: [forgecad/6.2.0]
+    paths:
+      - '.github/workflows/v620-finalize-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: forgecad-6.2.0-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: Publish and verify ForgeCAD 6.2.0
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RELEASE_SHA: 1afa0a6393fa6505890d1040668e759832b2dce6
+      ACCEPTED_SOURCE_SHA: cb66ff4698fff76dad0db5b7af9602337e139252
+      PRIMARY_RUN_ID: '35246711414'
+      X64_RUN_ID: '35251708839'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify publication source preserves accepted product tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch --no-tags origin "$ACCEPTED_SOURCE_SHA"
+          for path in .gitignore README.md apps docs package.json packages pnpm-workspace.yaml scripts services tsconfig.base.json; do
+            test "$(git rev-parse "$RELEASE_SHA:$path")" = "$(git rev-parse "$ACCEPTED_SOURCE_SHA:$path")"
+          done
+          echo 'Publication source product tree matches accepted 6.2.0 source; only workflow provenance differs.'
+
+      - name: Wait for bounded Intel native validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 120); do
+            STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${X64_RUN_ID}" --jq '.status')
+            if [ "$STATUS" = completed ]; then
+              CONCLUSION=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${X64_RUN_ID}" --jq '.conclusion')
+              test "$CONCLUSION" = success
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'Timed out waiting for Intel native validation.' >&2
+          exit 1
+
+      - name: Verify retained Windows and Apple Silicon artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAMES=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PRIMARY_RUN_ID}/artifacts" --jq '.artifacts[].name')
+          grep -qx 'ForgeCAD-6.2.0-Windows-x64-Installer' <<<"$NAMES"
+          grep -qx 'ForgeCAD-6.2.0-macOS-arm64-Installer' <<<"$NAMES"
+
+      - name: Download validated Windows and Apple Silicon installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ForgeCAD-6.2.0-*
+          merge-multiple: true
+          path: dist-release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PRIMARY_RUN_ID }}
+
+      - name: Download validated Intel macOS installer
+        uses: actions/download-artifact@v4
+        with:
+          name: ForgeCAD-6.2.0-macOS-x64-Installer
+          path: dist-release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.X64_RUN_ID }}
+
+      - name: Generate SHA-256 manifest and release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist-release
+          test -f ForgeCAD-Setup-6.2.0.exe
+          test -f ForgeCAD-6.2.0-arm64.dmg
+          test -f ForgeCAD-6.2.0-x64.dmg
+          sha256sum ForgeCAD-Setup-6.2.0.exe ForgeCAD-6.2.0-arm64.dmg ForgeCAD-6.2.0-x64.dmg > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cat > RELEASE_NOTES.md <<'EOF'
+          # ForgeCAD 6.2.0
+
+          ForgeCAD 6.2.0 is the component-fidelity release.
+
+          Purchased components now prefer exact authoritative CAD when available, preserve multi-solid structure and per-group render materials into the viewport, invalidate stale fallback geometry when authoritative assets arrive, and automatically replace fallback geometry without changing canonical component identity or transforms.
+
+          The release gates include deterministic exact-CAD precedence and cache tests, wrong-SKU rejection, grouped PBR rendering checks, preserved ForgeCAD 6.1 simulation and 6.0.1 runtime regressions, live release-required manufacturer/authorized CAD resolution, desktop typecheck/test/build, and installed-copy validation on Windows x64, macOS Apple Silicon, and macOS Intel.
+
+          Geometry provenance remains explicit. Exact supplier/manufacturer geometry is preferred; lower-fidelity fallback geometry is not represented as authoritative physical truth.
+
+          Accepted product source: `cb66ff4698fff76dad0db5b7af9602337e139252`.
+          The published tag targets a publication-safe commit with the identical product tree outside `.github`, so GitHub release publication can use the repository's authorized workflow state.
+          EOF
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v6.2.0 >/dev/null 2>&1; then
+            gh release upload v6.2.0 \
+              dist-release/ForgeCAD-Setup-6.2.0.exe \
+              dist-release/ForgeCAD-6.2.0-arm64.dmg \
+              dist-release/ForgeCAD-6.2.0-x64.dmg \
+              dist-release/SHA256SUMS.txt --clobber
+            gh release edit v6.2.0 --target "$RELEASE_SHA" --title 'ForgeCAD 6.2.0' --notes-file dist-release/RELEASE_NOTES.md
+          else
+            gh release create v6.2.0 \
+              dist-release/ForgeCAD-Setup-6.2.0.exe \
+              dist-release/ForgeCAD-6.2.0-arm64.dmg \
+              dist-release/ForgeCAD-6.2.0-x64.dmg \
+              dist-release/SHA256SUMS.txt \
+              --target "$RELEASE_SHA" \
+              --title 'ForgeCAD 6.2.0' \
+              --notes-file dist-release/RELEASE_NOTES.md
+          fi
+
+      - name: Verify final tag binding and exact assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v6.2.0" --jq '.object.sha')
+          test "$TAG_SHA" = "$RELEASE_SHA"
+          TARGET=$(gh release view v6.2.0 --json targetCommitish --jq '.targetCommitish')
+          test "$TARGET" = "$RELEASE_SHA"
+          mapfile -t ASSETS < <(gh release view v6.2.0 --json assets --jq '.assets[].name' | sort)
+          EXPECTED=('ForgeCAD-6.2.0-arm64.dmg' 'ForgeCAD-6.2.0-x64.dmg' 'ForgeCAD-Setup-6.2.0.exe' 'SHA256SUMS.txt')
+          mapfile -t EXPECTED_SORTED < <(printf '%s\n' "${EXPECTED[@]}" | sort)
+          test "${#ASSETS[@]}" -eq 4
+          for i in "${!EXPECTED_SORTED[@]}"; do test "${ASSETS[$i]}" = "${EXPECTED_SORTED[$i]}"; done
+          gh release view v6.2.0 --json url,targetCommitish,assets
