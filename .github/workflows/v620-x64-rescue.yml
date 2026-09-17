@@ -1,0 +1,159 @@
+name: ForgeCAD 6.2.0 Intel Release Validation
+
+on:
+  push:
+    branches: [forgecad/6.2.0]
+    paths:
+      - '.github/workflows/v620-x64-rescue.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forgecad-6.2.0-intel-release
+  cancel-in-progress: true
+
+env:
+  RELEASE_SHA: cb66ff4698fff76dad0db5b7af9602337e139252
+
+jobs:
+  macos-x64:
+    name: Build, install, and validate macOS x64
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+      - name: Verify accepted source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          grep -q '^RELEASE_COMPLETE = True$' services/forge-engine/forge_engine/v620/__init__.py
+          grep -q '"version": "6.2.0"' apps/desktop/package.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/forge-engine pyinstaller
+      - name: Build native standalone Forge Engine 6.2.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf services/forge-engine/dist services/forge-engine/build/pyinstaller
+          python -m PyInstaller --noconfirm --clean --onedir --name forge-engine \
+            --collect-all cadquery --collect-all OCP --collect-all vtkmodules --collect-all cantera \
+            --collect-submodules forge_engine.v110 --collect-submodules forge_engine.v200 \
+            --collect-submodules forge_engine.v300 --collect-submodules forge_engine.v310 \
+            --collect-submodules forge_engine.v600 --collect-submodules forge_engine.v610 \
+            --collect-submodules forge_engine.v620 \
+            --hidden-import forge_engine.v601_runtime --hidden-import forge_engine.v601_scene_runtime --hidden-import forge_engine.v601_ollama_runtime \
+            --distpath services/forge-engine/dist --workpath services/forge-engine/build/pyinstaller --specpath services/forge-engine/build \
+            services/forge-engine/forge_engine/desktop_entry.py
+          chmod +x services/forge-engine/dist/forge-engine/forge-engine
+          file services/forge-engine/dist/forge-engine/forge-engine | grep -q x86_64
+      - name: Validate standalone Forge Engine 6.2.0
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          export FORGECAD_PORT=8893 FORGECAD_SESSION_TOKEN=v620-native FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v620-native" FORGECAD_ALLOW_CAD_DOWNLOADS=0 FORGECAD_BACKGROUND_GEOMETRY=0 CI=false FORGECAD_ACCEPTANCE_WORKSPACE=0
+          ENGINE=services/forge-engine/dist/forge-engine/forge-engine
+          "$ENGINE" > "$RUNNER_TEMP/v620-engine.log" 2>&1 & PID=$!
+          cleanup() { kill "$PID" 2>/dev/null || true; sleep 1; kill -9 "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; }
+          trap cleanup EXIT
+          python - <<'PY'
+          import json,time,urllib.request
+          base='http://127.0.0.1:8893'; token='v620-native'
+          def get(p):
+              r=urllib.request.Request(base+p,headers={'X-ForgeCAD-Session':token})
+              with urllib.request.urlopen(r,timeout=10) as x:return json.load(x)
+          deadline=time.time()+90
+          while time.time()<deadline:
+              try:
+                  h=get('/v6/component-fidelity/health')
+                  if h.get('version')=='6.2.0': break
+              except Exception: time.sleep(.25)
+          else: raise SystemExit('6.2 runtime did not become ready')
+          assert h['release_complete'] is True and h['schema_version']==2,h
+          rev=get('/v6/component-fidelity/revision'); assert rev.get('epoch') and isinstance(rev.get('generation'),int),rev
+          scene=get('/v2/scene'); assert isinstance(scene.get('parts'),list),scene
+          print('standalone ForgeCAD 6.2.0 x64 runtime: PASS')
+          PY
+          cleanup
+          trap - EXIT
+      - name: Install desktop dependencies
+        run: pnpm install --prod=false --frozen-lockfile=false
+      - name: Build x64 DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @forgecad/desktop build
+          pnpm --filter @forgecad/desktop exec electron-builder --mac dmg --x64
+      - name: Validate DMG, installed engine, and desktop launch
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG='apps/desktop/release/ForgeCAD-6.2.0-x64.dmg'
+          test -f "$DMG"
+          MOUNT="$RUNNER_TEMP/forgecad-v620-mount"; INSTALLED="$RUNNER_TEMP/forgecad-v620-installed/ForgeCAD.app"
+          mkdir -p "$MOUNT" "$(dirname "$INSTALLED")"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
+          detach() { hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true; }
+          trap detach EXIT
+          /usr/bin/ditto "$MOUNT/ForgeCAD.app" "$INSTALLED"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INSTALLED/Contents/Info.plist")" = 6.2.0
+          codesign --verify --deep --strict --verbose=2 "$INSTALLED"
+          ENGINE="$INSTALLED/Contents/Resources/forge-engine/forge-engine/forge-engine"; APP="$INSTALLED/Contents/MacOS/ForgeCAD"
+          test -x "$ENGINE"; test -x "$APP"
+          file "$ENGINE" | grep -q x86_64
+          detach; trap - EXIT
+          export FORGECAD_PORT=8894 FORGECAD_SESSION_TOKEN=v620-installed FORGECAD_DATA_DIR="$RUNNER_TEMP/forgecad-v620-installed-state" FORGECAD_ALLOW_CAD_DOWNLOADS=0 FORGECAD_BACKGROUND_GEOMETRY=0 CI=false FORGECAD_ACCEPTANCE_WORKSPACE=0
+          "$ENGINE" > "$RUNNER_TEMP/v620-installed-engine.log" 2>&1 & EPID=$!
+          stop_engine() { kill "$EPID" 2>/dev/null || true; sleep 1; kill -9 "$EPID" 2>/dev/null || true; wait "$EPID" 2>/dev/null || true; }
+          trap stop_engine EXIT
+          python - <<'PY'
+          import json,time,urllib.request
+          base='http://127.0.0.1:8894'; token='v620-installed'
+          def get(p):
+              r=urllib.request.Request(base+p,headers={'X-ForgeCAD-Session':token})
+              with urllib.request.urlopen(r,timeout=10) as x:return json.load(x)
+          deadline=time.time()+90
+          while time.time()<deadline:
+              try:
+                  h=get('/v6/component-fidelity/health')
+                  if h.get('version')=='6.2.0': break
+              except Exception: time.sleep(.25)
+          else: raise SystemExit('installed 6.2 engine did not become ready')
+          assert h['release_complete'] is True,h
+          scene=get('/v2/scene'); assert isinstance(scene.get('parts'),list),scene
+          print('installed ForgeCAD 6.2.0 x64 engine: PASS')
+          PY
+          stop_engine; trap - EXIT
+          "$APP" --use-gl=swiftshader --enable-unsafe-swiftshader --disable-gpu-sandbox > "$RUNNER_TEMP/v620-desktop.log" 2>&1 & APID=$!
+          sleep 8
+          kill -0 "$APID"
+          kill "$APID" 2>/dev/null || true; sleep 1; kill -9 "$APID" 2>/dev/null || true; wait "$APID" 2>/dev/null || true
+          shasum -a 256 "$DMG"
+      - name: Upload macOS x64 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeCAD-6.2.0-macOS-x64-Installer
+          path: apps/desktop/release/ForgeCAD-6.2.0-x64.dmg
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
