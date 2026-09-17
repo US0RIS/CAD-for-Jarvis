@@ -64,6 +64,7 @@ _NOCTUA_CAD_URL = "https://cdn.noctua.at/media/46800471/NF-A4x10_Public-CAD.zip?
 
 _MEANWELL_COMPONENT_ID = "power.meanwell.lrs_75_12"
 _TRANSMOTEC_LRS75_URL = "https://transmotec.com/product/LRS-75-12/"
+_MEANWELL_DIRECT_URL = "https://www.mean-well.ru/uploads/docs/LRS-75-12-3D_model_LRS-75-12-16231.zip"
 
 _BROWSER_HEADERS = {
     "User-Agent": (
@@ -342,13 +343,21 @@ def _source_overrides() -> None:
         ),
     )
 
-    # Mouser visibly lists an STP ZIP but serves the document list through client-side
-    # behavior. Transmotec's exact LRS-75-12 product page exposes the same Mean Well
-    # series CAD as an authorized distributor and is usable by the resolver.
+    # Prefer the exact LRS-75-12 product page, then the product-specific downloadable
+    # model published by a Mean Well specialist distributor, with Mouser as a final
+    # product-page fallback. This is release plumbing for the existing required asset.
     base.AUTHORITATIVE_SOURCES[_MEANWELL_COMPONENT_ID] = (
         base.CadSource(
             _TRANSMOTEC_LRS75_URL,
             kind="authorized_distributor",
+            required_for_release=True,
+        ),
+        base.CadSource(
+            _MEANWELL_DIRECT_URL,
+            kind="authorized_distributor",
+            direct=True,
+            archive="zip",
+            filename="LRS-75-12.step",
             required_for_release=True,
         ),
         base.CadSource(
