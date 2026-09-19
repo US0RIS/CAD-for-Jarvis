@@ -36,7 +36,7 @@ jobs:
           from pathlib import Path
           engine = Path('services/forge-engine/forge_engine/v620/__init__.py').read_text()
           desktop = Path('apps/desktop/package.json').read_text()
-          assert re.search(r'^MILESTONE_VERSION\s*=\s*"6\.2\.0"$', engine, re.M), engine
+          assert re.search(r'^MILESTONE_VERSION\s*=\s*"6\.2\.1"$', engine, re.M), engine
           assert re.search(r'^RELEASE_COMPLETE\s*=\s*True$', engine, re.M), engine
           assert '"version": "6.2.1"' in desktop, desktop
           print('ForgeCAD 6.2.1 accepted source identity: PASS')
