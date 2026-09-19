@@ -43,6 +43,14 @@ export interface ProjectPayload {
   metrics?: Record<string, unknown>;
 }
 
+export interface FabricatedProfilePayload {
+  kind: string;
+  description: string;
+  params: Record<string, number>;
+  fabricated: true;
+  physical_verified: false;
+}
+
 export interface ComponentPayload {
   id: string;
   manufacturer: string;
@@ -333,6 +341,11 @@ export async function setBranchStatus(name: string, status: BranchPayload['statu
   invalidateProjectRequests();
   return result;
 }
+export async function fetchFabricatedProfiles(): Promise<FabricatedProfilePayload[]> {
+  const result = await engineFetch<{ ok: boolean; profiles: FabricatedProfilePayload[] }>('/v6/fabricated-profiles');
+  return result.profiles;
+}
+
 export async function addComponent(id: string) {
   await flushProjectMutationGuards();
   const result = await engineFetch<{ component: ComponentPayload; project: ProjectPayload }>(`/v2/components/${encodeURIComponent(id)}/add`, { method: 'POST' });
