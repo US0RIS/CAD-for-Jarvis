@@ -134,7 +134,7 @@ def run() -> dict:
 
         return {
             "ok": True,
-            "version": "6.2.0",
+            "version": "6.2.1",
             "checks": {
                 "valid_wrong_step_rejected": True,
                 "extended_assembly_with_matching_body_accepted": True,
