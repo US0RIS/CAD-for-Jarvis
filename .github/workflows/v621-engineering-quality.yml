@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     env:
-      FORGECAD_DATA_DIR: ${{ runner.temp }}/forgecad-v621-quality
+      FORGECAD_DATA_DIR: /tmp/forgecad-v621-quality
       FORGECAD_ALLOW_CAD_DOWNLOADS: '0'
       FORGECAD_BACKGROUND_GEOMETRY: '0'
       FORGECAD_ACCEPTANCE_WORKSPACE: '0'
