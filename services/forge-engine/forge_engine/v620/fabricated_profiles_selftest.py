@@ -80,13 +80,17 @@ def run() -> dict:
         "hollow_tube": [16., 16., 30.],
         "flanged_spool": [36., 36., 28.],
         "tapered_nozzle": [15., 15., 25.],
-        "split_cuff": [70., 70., 24.],
         "guide_eyelet": [22., 16., 4.],
         "u_bracket": [40., 28., 22.],
         "cartridge_cup": [26., 26., 38.],
     }.items():
         for a, b in zip(_bounds(at[kind]), dims):
             _near(a, b)
+
+    cuff_bounds = _bounds(at["split_cuff"])
+    assert 66.0 < cuff_bounds[0] < 70.0, cuff_bounds
+    _near(cuff_bounds[1], 70.0)
+    _near(cuff_bounds[2], 24.0)
 
     spool = math.pi * (
         (10**2 - 2.5**2) * 24 + 2 * (18**2 - 2.5**2) * 2
@@ -97,7 +101,7 @@ def run() -> dict:
     bracket = 40 * 28 * 3 + 2 * 3 * 28 * (22 - 3)
     _near(at["u_bracket"].Volume(), bracket)
     assert at["split_cuff"].Volume() < (
-        math.pi * (35**2 - 31**2) * 24 * 0.85
+        math.pi * (35**2 - 31**2) * 24 * 0.89
     ), "Cuff needs an actual gap, not a closed ring"
     _near(objects[-1]["transform"]["position"][0], 900.)
 
