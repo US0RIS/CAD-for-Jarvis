@@ -69,6 +69,10 @@ jobs:
           from forge_engine.v620.fabricated_profiles import PROFILE_LIBRARY
           client=TestClient(app)
           headers={'X-ForgeCAD-Session':'test-session'}
+          profiles=client.get('/v6/fabricated-profiles',headers=headers)
+          assert profiles.status_code==200,profiles.text
+          entries=profiles.json()['profiles']
+          assert len(entries)==7 and all(row['physical_verified'] is False for row in entries)
           old=list(core.PROJECT['objects'])
           try:
               profile=PROFILE_LIBRARY['flanged_spool']
@@ -77,6 +81,13 @@ jobs:
               assert response.status_code==200,response.text
               part=next(x for x in response.json()['parts'] if x['id']=='acceptance-spool')
               assert len(part['mesh']['triangles'])>48,part
+              operation=client.post('/v2/operations',headers=headers,json={
+                  'op':'add','args':{'kind':'hollow_tube','name':'Bench tube',
+                  'params':PROFILE_LIBRARY['hollow_tube']['params'], 'material':'petg',
+                  'semantic':{'role':'fabricated_reference_geometry','physical_verified':False}},
+                  'reason':'Fabricated profile HTTP acceptance'})
+              assert operation.status_code==200,operation.text
+              assert any(row['name']=='Bench tube' for row in operation.json()['project']['parts'])
               health=client.get('/v6/component-fidelity/health',headers=headers)
               assert health.status_code==200,health.text
           finally:
