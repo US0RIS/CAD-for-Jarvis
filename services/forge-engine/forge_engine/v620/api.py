@@ -12,6 +12,7 @@ from ..v110 import core
 from . import MILESTONE_VERSION, RELEASE_COMPLETE, COMPONENT_GEOMETRY_SCHEMA_VERSION
 from . import component_fidelity
 from . import component_fidelity_runtime
+from .fabricated_profiles import PROFILE_LIBRARY
 
 
 _INSTALLED = False
@@ -38,6 +39,20 @@ def install(app: Any, require_session: Any) -> None:
         return
 
     component_fidelity_runtime.install()
+
+    @app.get("/v6/fabricated-profiles", dependencies=[Depends(require_session)])
+    async def fabricated_profiles() -> dict[str, Any]:
+        return {
+            "ok": True,
+            "units": "mm",
+            "truth": "Editable, fabricated reference geometry; not purchased CAD, pressure-rated hardware or physical verification.",
+            "profiles": [
+                {"kind": kind, "description": profile["description"],
+                 "params": deepcopy(profile["params"]), "fabricated": True,
+                 "physical_verified": False}
+                for kind, profile in PROFILE_LIBRARY.items()
+            ],
+        }
 
     @app.get("/v6/component-fidelity/revision", dependencies=[Depends(require_session)])
     async def component_fidelity_revision() -> dict[str, Any]:
