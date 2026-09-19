@@ -7,9 +7,9 @@ import {
   Plus, Redo2, Search, Send, Settings, Trash2, Undo2, Upload, X,
 } from 'lucide-react';
 import {
-  activateBranch, addComponent, createJob, deleteObject, downloadProjectBundle, engineFetch, fetchComponents, fetchJob, fetchProject, fetchRegistryStats, fetchRuntime,
+  activateBranch, addComponent, createJob, deleteObject, downloadProjectBundle, engineFetch, executeOperation, fetchComponents, fetchFabricatedProfiles, fetchJob, fetchProject, fetchRegistryStats, fetchRuntime,
   importProjectBundle, importStepFile, newProject, redoHistory, subscribeEngineEvents, undoHistory,
-  type ComponentPayload, type JobPayload, type ProjectPayload, type RegistryStatsPayload, type RuntimePayload,
+  type ComponentPayload, type FabricatedProfilePayload, type JobPayload, type ProjectPayload, type RegistryStatsPayload, type RuntimePayload,
 } from './api/engine';
 import { CodeWorkspace } from './components/CodeWorkspace';
 import { DesignLineagePanel } from './components/DesignLineagePanel';
@@ -163,6 +163,8 @@ export default function App() {
   const [runtime, setRuntime] = useState<RuntimePayload | null>(null);
   const [project, setProject] = useState<ProjectPayload | null>(null);
   const [components, setComponents] = useState<ComponentPayload[]>([]);
+  const [fabricatedProfiles, setFabricatedProfiles] = useState<FabricatedProfilePayload[]>([]);
+  const [insertingFabricated, setInsertingFabricated] = useState<string | null>(null);
   const [componentQuery, setComponentQuery] = useState('');
   const [componentCategory, setComponentCategory] = useState('');
   const [componentVoltage, setComponentVoltage] = useState('');
@@ -213,6 +215,15 @@ export default function App() {
   const agentTone = agentSubmitError || statusJob?.state === 'failed' ? 'error' : statusJob?.state === 'completed' ? 'done' : statusWorking ? 'working' : 'idle';
   const agentTitle = agentSubmitError ? 'Could not start task' : submittingAgent ? 'Sending request' : statusJob ? ({ queued: 'Request queued', warming: 'Starting local AI', planning: 'Planning the design', applying: 'Applying design changes', analyzing: 'Analyzing the design', verifying: 'Verifying the result', completed: 'Task complete', failed: 'Task failed', cancelled: 'Task cancelled' } as Record<JobPayload['state'], string>)[statusJob.state] : aiUnavailable ? 'Local AI unavailable' : 'Ready for a task';
   const agentDetail = agentSubmitError ?? (submittingAgent ? 'Creating an engineering job and handing it to Forge Engine…' : statusJob?.message ?? (aiUnavailable ? `Forge Engine is ready, but ${runtime?.configured_model ?? 'the configured model'} is not currently available in Ollama. Start Ollama and install/start that model, then retry.` : 'Ready to inspect or modify the active design.'));
+
+  useEffect(() => {
+    if (runtime?.engine !== 'ready') return;
+    let cancelled = false;
+    void fetchFabricatedProfiles().then((profiles) => {
+      if (!cancelled) setFabricatedProfiles(profiles);
+    }).catch(() => { if (!cancelled) setFabricatedProfiles([]); });
+    return () => { cancelled = true; };
+  }, [runtime?.engine]);
 
   useEffect(() => {
     if (!actionError) return;
@@ -405,6 +416,29 @@ export default function App() {
     } catch (error) { setActionError(messageOf(error)); }
     finally { setInsertingComponentId(null); }
   }
+  async function insertFabricatedProfile(profile: FabricatedProfilePayload) {
+    if (insertingFabricated) return;
+    setInsertingFabricated(profile.kind);
+    try {
+      setSceneReady(false);
+      const result = await executeOperation('add', {
+        kind: profile.kind,
+        name: profile.kind.replaceAll('_', ' '),
+        params: { ...profile.params },
+        material: 'petg',
+        semantic: {
+          role: 'fabricated_reference_geometry', tags: ['parametric', 'fabricated', profile.kind],
+          description: profile.description, physical_verified: false,
+        },
+      }, `Insert editable ${profile.kind} reference geometry`);
+      setProject(result.project);
+      setSelectedId(result.project.parts.at(-1)?.id ?? null);
+      setRightTab('properties');
+      setActionError(null);
+    } catch (error) { setActionError(messageOf(error)); }
+    finally { setInsertingFabricated(null); }
+  }
+
   async function createBlankProject() {
     if (newBusy) return;
     if (project?.parts.length && !window.confirm('Create a new blank design? Export the current design as .focad first if you want a portable copy.')) return;
@@ -542,6 +576,14 @@ export default function App() {
         <div className="panel-tabs right-tabs"><button className={rightTab === 'properties' ? 'active' : ''} onClick={() => setRightTab('properties')}>Properties</button><button className={rightTab === 'components' ? 'active' : ''} onClick={() => setRightTab('components')}>Components</button><button className={rightTab === 'analysis' ? 'active' : ''} onClick={() => setRightTab('analysis')}>Analyze</button><button data-testid="tab-manufacture" className={rightTab === 'manufacture' ? 'active' : ''} onClick={() => setRightTab('manufacture')}>Manufacture</button></div>
         {rightTab === 'components' ? <div className="component-panel">
           <div className="panel-title"><div><strong>Component library</strong><small>{registryStats?.total ?? '…'} catalog parts</small></div></div>
+          {fabricatedProfiles.length > 0 && <details className="fabricated-profile-picker" data-testid="fabricated-profile-picker">
+            <summary>Fabricated parametric shapes · {fabricatedProfiles.length}</summary>
+            <p>Editable starting geometry — not purchased parts or physically verified hardware.</p>
+            <div className="fabricated-profile-list">{fabricatedProfiles.map((profile) => <div key={profile.kind} className="fabricated-profile-row">
+              <div><strong>{profile.kind.replaceAll('_', ' ')}</strong><small title={profile.description}>{profile.description}</small></div>
+              <button className="insert-button" data-testid={`insert-fabricated-${profile.kind}`} disabled={insertingFabricated !== null} onClick={() => void insertFabricatedProfile(profile)}><Plus size={13}/>{insertingFabricated === profile.kind ? 'Adding' : 'Insert'}</button>
+            </div>)}</div>
+          </details>}
           <div className="search-control"><Search size={14}/><input aria-label="Search component library" value={componentQuery} onChange={(event) => setComponentQuery(event.target.value)} placeholder="Search manufacturer, model, category…"/></div>
           <div className="component-filters"><select aria-label="Component category" value={componentCategory} onChange={(event) => setComponentCategory(event.target.value)}><option value="">All categories</option>{registryStats?.categories.map((category) => <option value={category} key={category}>{category}</option>)}</select><input aria-label="Component voltage" value={componentVoltage} onChange={(event) => setComponentVoltage(event.target.value)} placeholder="Voltage" inputMode="decimal"/></div>
           <div className="result-count">{components.length} results</div><div className="component-results">{visibleComponents.map((item) => <ComponentRow key={item.id} item={item} inserting={insertingComponentId === item.id} onInsert={(id) => void insertLibraryComponent(id)}/>)}{visibleComponents.length < components.length && <button className="wide-action" onClick={() => setVisibleComponentCount((count) => Math.min(components.length, count + 80))}>Load 80 more</button>}</div>
