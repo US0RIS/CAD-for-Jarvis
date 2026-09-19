@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 import json
 import tempfile
+from unittest.mock import patch
 
 import cadquery as cq
 
@@ -128,6 +129,16 @@ def run() -> dict:
             assert exact_status["solid_count"] >= 4
             assert exact_status["asset_sha256"] == verification["sha256"]
 
+            # Geometry status is queried for each repeated purchased component. Its
+            # solid count comes from validated metadata, never a fresh heavy STEP
+            # parse for every project instance or status poll.
+            with patch.object(component_fidelity.cq.importers, "importStep",
+                              side_effect=AssertionError("redundant STEP import")):
+                for _ in range(24):
+                    repeated_status = component_fidelity.geometry_status(obj)
+                    assert repeated_status["solid_count"] == verification["solid_count"]
+                    assert repeated_status["asset_sha256"] == verification["sha256"]
+
             exact_key = v601_scene_runtime.geometry_cache_key(obj)
             assert exact_key != fallback_key, "Exact vendor CAD must invalidate a cached fallback render mesh"
 
@@ -172,6 +183,7 @@ def run() -> dict:
                     "asset_sensitive_scene_cache": True,
                     "persistent_group_cache": True,
                     "canonical_component_identity_preserved": True,
+                    "status_uses_verified_solid_count_without_step_reimport": True,
                 },
                 "fixture": {
                     "solid_count": exact_status["solid_count"],
