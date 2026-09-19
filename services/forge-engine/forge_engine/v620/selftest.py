@@ -173,7 +173,7 @@ def run() -> dict:
 
             return {
                 "ok": True,
-                "version": "6.2.0",
+                "version": "6.2.1",
                 "checks": {
                     "fallback_is_explicit": True,
                     "step_link_precedence": True,
