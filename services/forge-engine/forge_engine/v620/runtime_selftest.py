@@ -74,7 +74,7 @@ def run() -> dict:
 
     return {
         'ok': True,
-        'version': '6.2.0',
+        'version': '6.2.1',
         'checks': {
             'dns_private_targets_rejected': True,
             'mixed_dns_targets_rejected': True,
