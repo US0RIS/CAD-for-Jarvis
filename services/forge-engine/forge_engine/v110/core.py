@@ -194,6 +194,10 @@ def _component_parts(obj: dict[str, Any]) -> list[tuple[Any,str]]|None:
 
 def _base_shape(obj: dict[str, Any]):
     p=obj.get("params") or {}; kind=obj.get("kind","box")
+    if kind in {"hollow_tube", "flanged_spool", "tapered_nozzle", "split_cuff",
+                "guide_eyelet", "u_bracket", "cartridge_cup"}:
+        from ..v620.fabricated_profiles import shape_for
+        return shape_for(obj)
     if kind=="mounting_plate": return _mounting_plate_shape(obj)
     if kind=="component":
         parts=_component_parts(obj)
