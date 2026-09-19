@@ -705,10 +705,17 @@ def geometry_status(obj: dict[str, Any]) -> dict[str, Any]:
     exact = resolve_authoritative_step(component, allow_download=False) if component else None
     if exact:
         path, metadata = exact
-        try:
-            solid_count = len(list(_center_shape(cq.importers.importStep(str(path)).val()).Solids())) or 1
-        except Exception:
-            solid_count = int((metadata.get("verification") or {}).get("solid_count") or 1)
+        # STEP import is expensive (a Pi 5 may contain thousands of solids). Geometry
+        # status is called for every scene object and on inspection endpoints, so use
+        # the count established while validating the exact asset instead of importing
+        # the same B-rep once per instance. Legacy assets without verification retain
+        # the previous, best-effort import path.
+        solid_count = int((metadata.get("verification") or {}).get("solid_count") or 0)
+        if solid_count < 1:
+            try:
+                solid_count = len(list(_center_shape(cq.importers.importStep(str(path)).val()).Solids())) or 1
+            except Exception:
+                solid_count = 1
         return {
             "component_id": component_id,
             "resolved": True,
